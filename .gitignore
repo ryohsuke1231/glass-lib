@@ -1,0 +1,19 @@
+# meson
+/build/
+/_build/
+/subprojects/*/
+!/subprojects/*.wrap
+
+# demo (TypeScript / npm)
+node_modules/
+/demo/dist/
+
+# editors
+.idea/
+.vscode/
+*.swp
+*~
+
+# tests / tools output
+/tests/golden/out/
+*.log
