@@ -1,0 +1,2 @@
+option('spikes', type: 'boolean', value: true,
+  description: 'Build the Phase 0 spike programs (spikes/)')

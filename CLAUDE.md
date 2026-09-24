@@ -11,17 +11,20 @@
 ## ディレクトリ
 - `lib/`: ライブラリ本体（C）。`render/` と `adaptive/` は非公開。
 - `shaders/`: シェーダ。`core/` が単一ソースで、`targets/` がターゲットごとのラッパ。
+  - `shaders/reference/glass.frag` は既存拡張の出荷版の**無改変コピー**。編集しない（更新手順は同じディレクトリの README）。
 - `spec/`: パラメータ定義（`params.json`）と Adaptive のテストベクタ。
 - `demo/`: Glass Gallery（TypeScript）。
 - `tests/`、`tools/`: 単体テスト、ゴールデン画像のハーネス、計測スクリプト。
-- `docs/`: 設計書・地雷の記録・過去の版（`archive/`）。
+- `spikes/`: Phase 0 の試作（`s1-full-renderer` など）。ライブラリ本体ではない。結果は各 README と `docs/memo.md` に残す。
+- `docs/`: 設計書・地雷の記録（`memo.md`）・過去の版（`archive/`）。
 
-（Phase 0 の時点では `docs/` しかない。上の構成は設計書 §15.1 の予定。）
+（まだ無いディレクトリもある。全体の予定は設計書 §15.1。）
 
 ## コマンド実行ルール
 - meson のコマンドはリポジトリのルートで実行する（例: `meson setup build`、`meson compile -C build`、`meson test -C build`）。
 - **C・GLSL・`meson.build`・`spec/` を変更したら、`meson compile -C build` を実行してビルドエラーが出ないか確認する。** テストがある部分を触ったら `meson test -C build` も実行する。
-- シェーダを変更したら、ビルドに含まれる `glslangValidator` の検査（GLES 3.0 / GL 3.3）が通ることを確認する。
+- シェーダを変更したら、`meson test -C build` で `glslangValidator` の検査（GLES 3.0 / GL 3.3）が通ることを確認する。
+- **シェーダ Core（`shaders/core/`）を変更したら、`glass-core-golden`（参照 `glass.frag` との比較）が通ることを確認する。** 意図して見た目を変えるときは、先にユーザーに相談する（参照との差が出るのは当然なので、その差を説明できること）。
 - `npm` のコマンドは `demo/` の中で実行する（例: `cd demo && npm run build`）。TS ファイルを修正・編集したら `npm run build` を実行してビルドエラーを確認する。
 - デモの起動は `meson devenv -C build gjs -m demo/dist/main.js`（ビルドしたライブラリの typelib を使うため）。
 

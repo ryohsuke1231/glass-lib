@@ -424,15 +424,22 @@ glass_view_snapshot (GtkWidget *widget, GtkSnapshot *snapshot)
 ### 8.2 取り込み（中身を 1 枚の画像にする）
 
 ```
-取り込み矩形 C = パネルの矩形 + ぼかしの余白（3σ）を、ビューの範囲で切り詰めたもの
+取り込み矩形 C = パネルの矩形 + ぼかしの余白（3σ）+ レンズの余白、をビューの範囲で切り詰めたもの
+レンズの余白 = max(0, EDGE_LENS_REACH − min(パネルの幅, 高さ))   （EDGE_LENS_REACH = 96 論理 px）
 縮小率 k   = 1 / blur-downscale（既定 1/2。既存拡張の glass-blur-downscale と同じ）
 node       = transform( scale(S·k) · translate(−C.x, −C.y) ) { clip(C) { backdrop } }
 tex        = gsk_renderer_render_texture (renderer, node, C を S·k 倍した矩形)
 ```
 
 - `S` は `gdk_surface_get_scale()`（分数スケールに対応）。
+- 🔒 **レンズの余白**: レンズは縁から内側へ最大 `EDGE_LENS_REACH` 先を読む。パネルがそれより薄いと反対側の縁の先に出るので、その分も取り込む。
+  足りないと、縁の帯が取り込みの縁で固定された色の筋になる（`docs/memo.md` 地雷10）。
 - `renderer` は窓のもの（`gtk_native_get_renderer`）を使う。
-  ⚠️ **snapshot の中で `render_texture` を呼んでよいか**は S1 で確かめる。問題があれば、背景の取り込み専用に `GskRenderer` をディスプレイごとに 1 つ作る（`gsk_renderer_realize_for_display`。窓と同じ種類のレンダラ）。代わりにグリフのキャッシュが二重になる。
+  ✅ **snapshot の中で `render_texture` を呼んでよい**（S1 で確認。Vulkan・GL の両レンダラ、Wayland・X11）。
+  背景の取り込み専用の `GskRenderer` は不要だった（試作では `--private-renderer` で比べたが、性能も結果も同じ）。
+- 🔒 **GTK の描画 API（`render_texture`・`GdkTextureDownloader`）を呼んだ後は、自前の GL を続ける前に自分のコンテキストを current にし直す。**
+  GTK の GL レンダラは自分のコンテキストを current にしたまま戻る。FBO と VAO はコンテキスト間で共有されないので、別の framebuffer に描いてしまう（`docs/memo.md` 地雷1）。
+- 🔒 `GdkGLTexture` の release コールバックでは GL を呼ばない（`docs/memo.md` 地雷2）。
 
 ### 8.3 読み出しとアップロード
 
@@ -453,12 +460,22 @@ tex        = gsk_renderer_render_texture (renderer, node, C を S·k 倍した�
 ### 8.5 ガラスパス（Glass Core）
 
 - 出力矩形 O = パネルの矩形 ＋ 影の余白（`shadow-radius`）。デバイス px の格子にそろえる（再サンプリングでぼやけないように）。
-- フルスクリーンの四角形を 1 枚描き、Core の `glass_main()` を呼ぶ（§10）。
+- フルスクリーンの四角形を 1 枚描き、Core の `glass_shade()` を呼ぶ（§10）。
 - 入力:
   - ぼかし済みテクスチャ（取り込み矩形 C の座標系）と、その実際のテクセル数（既存の `blur_tex_w/h` と同じく、拡大時の滑らかな補間に使う）
   - 形状（矩形・半径。デバイス px）
   - 材質と光学パラメータ（論理 px の値を `S` 倍）
   - 見た目（Adaptive の結果）
+- 🔒 **スーパーサンプリング（RGSS 4 サンプル、既定 ON）**: Core の `glass_shade(uv)` を 1 画素につき 4 回、1/4 画素ずつずらして呼び、平均する（出力は事前乗算なので単純平均でよい）。
+  リムのフレネル項（幅 1px ほど）とレンズの畳み込みは画素より細かく変化するので、1 サンプルだと小さなカプセルの丸い端で段差が出る（`docs/memo.md` 地雷4・追記2）。
+  各サンプルは Core の式そのものなので、見た目の設計は変わらない。コストは S1 で GPU busy% +1〜2 ポイント（スクロール中のみ）。
+  品質を上げる機能なので既定 ON。比較用に個別の設定で OFF にできる（方針 1 は「品質を落とす最適化」の話なので当たらない）。
+- 🔒 **測ったレンズのフットプリント（`lens_footprint_px`、既定 ON）**: スーパーサンプリングだけでは、縁の 1〜3px 内側の「崖」
+  （1 画素が元の約 50px を掃く所）と、縁ちょうどの屈折の不連続で、屈折した細かい模様がジャギーになる（ユーザーの指摘、`docs/memo.md` 地雷9・追記5）。
+  各サンプルが自分のフットプリントをレンズに通して追い、着地点の折れ線に沿って平均する。縁をまたぐ部分は屈折しない背景と割合で混ぜる。
+  渡す値はサンプル間隔の半分（4 サンプルなら 0.25、1 サンプルなら 0.5。デバイス px なので `S` 倍しない）。
+  256 サンプルの正解に対する最大誤差は 39〜63 → 14〜26（/255）。コストは GPU busy% +1 ポイント（スクロール中、パネル 2 枚）。
+  縁の帯のサンプル数を増やす方法（16〜32 サンプル）は、誤差が同程度以上で +3〜7 ポイントだったので採らない。
 
 ### 8.6 出力テクスチャのプール
 
@@ -508,66 +525,82 @@ glasspanel.glass-fallback {
 
 ## 10. シェーダ Core の切り出し
 
-### 10.1 分割
+✅ **S5 で実装・検証済み（2026-09-24）。** 参照シェーダと 200 ケースで**ビット単位で一致**（差 0/255）。経緯は `docs/memo.md` 追記3。
+
+### 10.1 構成（実装）
 
 ```
 shaders/
-├── core/
-│   ├── glass_sdf.glsl        角丸矩形の SDF と勾配（sdRoundRect / sdRoundRectDir）
-│   ├── glass_profile.glsl    高さプロファイル・法線（normalizedDepth / profileHeight / heightGradient）
-│   ├── glass_optics.glsl     屈折（getDisplacement）、edge lensing、フットプリントのタップ、色収差
-│   ├── glass_tone.glsl       SCB、base / custom ティント
-│   ├── glass_lighting.glsl   リム・スペキュラ・シーン・内側 AO
-│   ├── glass_shadow.glsl     umbra / penumbra のドロップシャドウ
-│   ├── glass_output.glsl     スクリーン合成・色相を保つクランプ・事前乗算・ディザ
-│   └── glass_main.glsl       glass_main(): 上をつなぐ本体（早期リターンを含む）
+├── reference/glass.frag          拡張の出荷版の無改変コピー（編集しない。README に出どころとハッシュ）
+├── core/                         単一ソース
+│   ├── glass_core.glsl           下の 5 つを順に #include する入口
+│   ├── glass_params.glsl         uniform と定数（EDGE_LENS_FALLOFF / EDGE_LENS_REACH、測ったフットプリントのタップ数）
+│   ├── glass_shape.glsl          角丸矩形の SDF・超楕円の高さ・法線
+│   ├── glass_surface.glsl        SCB・ディザ
+│   ├── glass_optics.glsl         屈折・端の減衰・ぼかし済み背景の読み出し（フットプリントのタップ、測ったフットプリントの折れ線）
+│   └── glass_shade.glsl          vec4 glass_shade(vec2 uv): 本体（早期リターン・影・レンズ・照明・合成）
 ├── targets/
-│   ├── gl/glass.frag         glass-lib 用（GLES 3.0 / GL 3.3 core）
-│   ├── gl/blur_gaussian.frag ぼかし（カーネルは C から生成して埋め込む）
-│   ├── gl/quad.vert
-│   └── compat/cogl_prelude.glsl   テスト用: 元の glass.frag を GL で動かすための定義
-└── tests/                    ゴールデン画像の入力と期待値
+│   ├── gl/glass.frag             glass-lib 用: GLASS_SAMPLE を定義し、Core ＋ スーパーサンプリングの main()
+│   │                             （比較用に、縁の帯だけ N サンプルにする u_rim_samples もある。既定 0 = 使わない）
+│   ├── gl/quad.vert              頂点バッファなしの全面の四角形（行 0 = 画像の上）
+│   └── compat/                   参照シェーダを GL で動かす包み（テストと S1 の --reference 用）
+│       ├── reference.frag        prelude ＋ reference/glass.frag ＋ postlude を #include
+│       ├── cogl_prelude.glsl     Cogl の名前の代わり、main() の改名
+│       └── cogl_postlude.glsl    改名した main() を呼ぶ main()（スーパーサンプリング付き）
+└── meson.build                   #include の展開（tools/glsl-include.py）と glslangValidator の検査
 ```
 
-- `#include` は小さな展開スクリプト（`tools/glsl-include.py`）で展開し、meson の `custom_target` で GResource に入れる。
-- **関数と定数は元の `glass.frag` から意味を変えずに移す。** コメントのうち、式の根拠（なぜこの式か）は Core に残す。拡張機能固有の経緯のコメントは残さない。
+- `#include` はビルド時に展開する。生成物は `build/shaders/glass-core.frag`・`glass-reference.frag`・`quad.vert` で、GResource に入れる。
+- **式とその順序は参照から変えていない。** コメントは式の根拠だけを残し、拡張固有の経緯は省いた。
+- Core の入口は `vec4 glass_shade(vec2 uv)`（事前乗算の色を返す）。背景の読み出しは、ターゲットが定義する `GLASS_SAMPLE(uv)` を通す。
+- 将来、拡張機能も Core を使えるように、Cogl 用のターゲット（`GLASS_SAMPLE` = `texture2D(cogl_sampler1, uv)`）を足せば済む形にしてある（v1 では作らない）。
 
 ### 10.2 隠れた「FBO の大きさ」への依存を明示する（重要）
 
-元の `glass.frag` では、次の 2 つの値が `resolution`（FBO の大きさ）から決まっている。
-既存拡張のドック・メニューなどはモニタ全面の FBO なので、実際には次の値で見た目が承認されている。
+参照では、次の 2 つの値が `resolution`（FBO の大きさ）から決まっていた。
+既存拡張のドック・メニューなどはモニタ全面の FBO なので、見た目は次の値で承認されている。
 
-| 元の式 | 全面 FBO（1920x1080）での値 | 小さなパネル（例 300x60）でそのまま使った場合 |
+| 参照の式 | 全面 FBO（1920x1080）での値 | 小さなパネル（例 300x60）でそのまま使った場合 |
 |---|---|---|
 | `gradientStep = clamp(min(res) / 560, 0.45, 1.20)` | **1.20** | 0.45 → 法線の平滑化が弱まり、縁の見た目が変わる |
 | `max_disp_px = 0.30 * min(res)` | **324px**（実質的に効かない） | 18px → 屈折が大きく弱まる |
 
-→ Core ではこの 2 つを**明示的な uniform**（`u_gradient_step`、`u_max_disp_px`）にする。
-glass-lib は `1.20 × S` と `324 × S` を渡す（承認済みの見た目と同じ）。
-拡張機能から Core を使う場合は、元の式で計算した値を渡せば今と完全に同じになる。
+→ Core では uniform にした。
 
-同様に、px 単位の定数（`EDGE_LENS_REACH 96.0`、フットプリントの上限 64px、RGSS のオフセット）は、Core の中では `× u_device_scale` して使う。HiDPI でも論理 px での見た目を保つため。
+| uniform | 意味 | glass-lib が渡す値 | 参照と同じにするには |
+|---|---|---|---|
+| `gradient_step` | 法線の有限差分の幅（px） | `1.2 × S` | 元の式で計算した値 |
+| `max_displacement_px` | 変位の上限（px） | `324 × S` | `0.30 × min(res)` |
+| `lens_px_scale` | `EDGE_LENS_REACH`（96px）とフットプリントの上限（64px）の倍率 | `S`（HiDPI で論理サイズを保つ） | `1` |
+| `edge_damping` | 面の端の 3% で屈折を弱める（参照の `stabilizedUV`） | `0`（出力はガラス＋余白だけ） | `1` |
+| `lens_footprint_px` | レンズのフットプリントを測る幅（±px）。0 = 参照の解析的な見積もりと 10 タップ | サンプル間隔の半分（§8.5） | `0` |
 
-### 10.3 Core に入れるもの・入れないもの
+- RGSS のタップの間隔（0.75〜2.5px）は画面の画素の話なので、スケールしない。
+- `S` は `gdk_surface_get_scale()`。glass-lib の px 単位の値（半径・変位・色収差など）もすべて `S` 倍して渡す。
 
-| 入れる | 入れない（ターゲット側またはテスト側で扱う） |
+### 10.3 Core に入れたもの・入れなかったもの
+
+| 入れた | 入れなかった |
 |---|---|
-| 形状・屈折・トーン・照明・影・AO・ディザ、2 つの早期リターン | `dock_*`・`isDock`・`padding`（形状は正確な矩形で渡す） |
+| 形状・屈折・トーン・照明・影・AO・ディザ、2 つの早期リターン | `dock_*`・`isDock`・`padding` → 正確な矩形の `glass_rect` で受ける |
 | `edge_taps_enabled`・`early_exit_enabled`（A/B 用。既定 1） | `panel_bg_*`・`panel_rect_*`（Quick Settings 専用の塗り） |
-| `debug_view`（1・2 に加えて 3 = 変位の可視化） | `multi_region_mode` の「最も近い 1 つを選ぶ」処理（v1 は 1 パス 1 形状。v2 で融合と一緒に作り直す） |
-| 形状は**配列で受ける**（v1 では要素 1 個。v2 の融合に備える） | 未使用の `pointer_x/y`・`mouse_radius`・`bg_glow_intensity` |
+| `debug_view`（1・2 は参照と同じ、3 = レンズの変位の可視化） | `multi_region_mode` と領域の配列（v2 で融合と一緒に作り直す） |
+|  | 未使用の `pointer_x/y`・`mouse_radius`・`bg_glow_intensity`・`intensity`・`blur_strength`・`cogl_sampler0` |
+
+形状を配列で受ける形（v2 の融合用）は、融合を作るときに入れる。v1 は 1 パス 1 形状。
 
 ### 10.4 GLES 3.0 と GL 3.3 の両対応
 
-- `texture2D` → `texture`、`cogl_color_out` → `out vec4 frag_color`、`cogl_tex_coord_in[0]` → `in vec2 v_uv` に置き換える（Core は `glass_sample(uv)` という関数を通して読む。ターゲットがその実装を持つ）。
-- 精度: GLES では `precision highp float;`（SDF と px の計算に mediump は足りない）。
-- `glslangValidator` で両方の版を CI で検査する（`-S frag`、`#version 300 es` と `#version 330`）。
+- Core は GLSL 1.30 以降の書き方（`texture`、`in`/`out`）を使わず、ターゲットに任せる。精度は GLES で `precision highp float;`（ローダが付ける）。
+- `meson test` で `glslangValidator` が Core・参照・quad を GLES 3.00 と GL 3.30 core の両方で検査する（6 件）。
 
-### 10.5 ゴールデン画像
+### 10.5 ゴールデンテスト（`tests/golden/glass-golden.c`）
 
-- `tools/glass-harness`（C）: `gdk_display_create_gl_context()` で窓なしの GL コンテキストを作り、固定の入力（背景画像・形状・パラメータ）から出力を作って PNG に保存する。
-- **元の `glass.frag` も同じハーネスで動かす**: `compat/cogl_prelude.glsl` で `cogl_sampler1`・`cogl_tex_coord_in`・`cogl_color_out` などを定義し、既存のシェーダをそのまま読み込む。
-- 受け入れ条件: 10 種類以上の場面（縞・市松・写真・グラデーション・文字、カプセル・角丸、小・大、影あり・なし）で、Core の出力と元の出力の差が**全画素で 1 LSB 以下**（ディザを固定した状態で。`resolution` 依存の 2 値は §10.2 のとおりそろえる）。
+- Mesa の surfaceless EGL で窓なしの GLES 3.0 コンテキストを作り、参照（`compat/reference.frag`）と Core（`gl/glass.frag`）を同じ入力で描いて、画素を比べる。使えない環境では skip（77）。
+- 場面: 10 通りの設定（拡張の値・アプリ内の値・色収差なし・早期リターンなし・デバッグ 1/2・スーパーサンプリング・2 倍スケール・小さい面・面の端）× 4 形状（カプセル・パネル・大・正方形）× 5 背景（縞・市松・グラデーション・同心円・ノイズ）= 200 ケース。
+- 受け入れ条件: 全画素で差が 1/255 以下。**結果は全ケースで 0/255。**
+- 失敗したケースは `--write DIR` で参照・Core・差（32 倍）の PNG を保存できる。
+- 空振りしていないことも確かめた。`EDGE_LENS_FALLOFF` を 2.4 → 2.5 に変えると 141 ケースが失敗する。
 
 ---
 
@@ -601,17 +634,23 @@ glass-lib は `1.20 × S` と `324 × S` を渡す（承認済みの見た目と
 | `blur-downscale` | 2 | 2 / 4 | `glass-blur-downscale` |
 
 - px の値は**論理 px**。描画時に `S`（サーフェスのスケール）倍する。
+- 影（`shadow-radius`・`shadow-intensity`）の表の値は拡張と同じだが、**アプリ内では材質ごとの値を使う**（§11.2）。拡張の値は壁紙の上に浮くドック・メニュー向けで、明るい窓の中の小さな部品には強すぎる（ユーザーの指摘、`docs/memo.md` 地雷5）。
 - 範囲（min/max）は拡張機能の設定画面（`prefs.js`）と同じにする（実装時に写す）。範囲外は clamp して `g_warning`。
 - **光学の設定はこれ以上増やさない**（既存拡張の方針 7）。`EDGE_LENS_FALLOFF`・`EDGE_LENS_REACH` は定数のまま。
 - 定義は `spec/params.json` に 1 か所で書き、C のヘッダをビルド時に生成する。
 
 ### 11.2 材質（v1 は 2 種類）
 
-| 材質 | 用途 | ぼかし半径 | ティント | 取り込みの縮小 | 備考 |
-|---|---|---|---|---|---|
-| `REGULAR` | ツールバー、タイトル、ボタンの台 | 5px | 白 0.12 | `blur-downscale` | 既存拡張のドックの既定値と同じ |
-| `CLEAR` | 写真・動画の上 | 1.5px | 白 0.04 | 1（縮小しない） | ぼかしが弱いと縮小が見えるため等倍。Adaptive が mixed のときは暗幕（黒 0.25）を足す |
+| 材質 | 用途 | ぼかし半径 | ティント | 影（半径・強さ） | 取り込みの縮小 | 備考 |
+|---|---|---|---|---|---|---|
+| `REGULAR` | ツールバー、タイトル、ボタンの台 | 3px | 白 0.12 | 16px・0.20 | `blur-downscale` | ティントは既存拡張のドックの既定値と同じ。ぼかし（拡張のドックは 5）と影は S1 でユーザーと比べて決めた初期値 |
+| `CLEAR` | 写真・動画の上 | 1.5px | 白 0.04 | 16px・0.20 | 1（縮小しない） | ぼかしが弱いと縮小が見えるため等倍。Adaptive が mixed のときは暗幕（黒 0.25）を足す |
 
+- 🔒 **縁の値（アプリ内用）**: 拡張の光学の値は大きなガラス向けの絶対 px で、小さなアプリ内のガラスでは縁が太く濁る（ユーザーの指摘、`docs/memo.md` 地雷8・追記4）。
+  アプリ内の材質は、縁に効く値（`edge_smoothing`・`rim_width`・`rim_power`・`ao_radius`・`ao_intensity`・`chroma_strength`・`profile_shape_n`・`displacement_scale`・`max_z`）を**材質自身の値**として持つ。
+  初期値は S1 のプリセット `crisp`（値は memo 追記5 の表）。縁の**線**（輪郭のぼかし・リムの光・内側の影・色のにじみ）は細くし、
+  **レンズ**（縁の近くで背景が曲がる帯＝ガラス感）は拡張のドームの形のまま強さだけを選ぶ。設定の種類は増やさない（値の選び方だけ）。
+  §11.1 の全体の値（拡張と同じ）は、大きなガラス（将来のサイドバーなど）と比較用に残す。
 - 見た目（明/暗）でティントを変えるか（Apple は変える）は、**v1 では変えない**（既存拡張と同じ: 白いティント固定、前景色だけ切り替える）。
   デモの Lab で「見た目に応じたティント」を A/B で試せるようにし、良ければ v1.x で材質の既定にする。
 - アプリが変えられるのは `tint`・`corner-radius`・`has-shadow`・`material` だけ。光学パラメータはアプリごとではなく全体の設定（`GlassContext`）。
@@ -702,6 +741,30 @@ v1 の必須ではない（`GlassContext` のプロパティ `follow-shell-setti
 - 写真は同梱しない（ライセンスのため）。実行時に `/usr/share/backgrounds` の画像を読み、加えて「フォルダを開く」（ファイル選択のポータル）と、コードで生成するテスト模様を使う。
 - 開発中は `meson devenv` でビルドしたライブラリ（typelib）を使って `gjs -m` で起動する。Flatpak は Phase 4。
 
+### 14.1 ショーケース用デモ（将来）: 天気アプリ（仮称 Glass Weather）
+
+Glass Gallery は**検証用のハーネス**。開発者を惹きつけるための「見せる」デモは別に作る。ユーザーの提案で**天気アプリ**にする（2026-09-24。作成は v1 のライブラリが固まってから）。
+
+**天気アプリが向いている理由**
+
+- ガラスの見せ場が自然に揃う。空の上に浮く現在の天気のカード、横にスクロールする時間ごとの予報の帯、週間予報のリストがあり、中身がガラスの下を流れる。
+- 背景（空）を**コードで生成**できる。晴れ・曇り・雨・夜のグラデーションと動く雲や雨粒を描けば、画像のライセンス問題が無い。動く背景の上のガラスは屈折がよく見える。
+- 昼は明るく夜は暗い背景になるので、**前景色の自動切り替え（Adaptive）**を自然に見せられる。
+- v1 の範囲（ただのガラスのパネル）だけで作れる。
+
+**データ（無料で使える公開 API。2026-09-24 に規約を確認）**
+
+| API | キー | 条件 | ライセンス・表示 |
+|---|---|---|---|
+| [Open-Meteo](https://open-meteo.com/)（予報・ジオコーディング） | 不要 | **非営利に限る**（有料プラン・広告のないアプリは可）。上限 600 回/分・5,000 回/時・10,000 回/日 | データは CC BY 4.0。アプリ内に出典の表示が要る |
+| [MET Norway Locationforecast](https://api.met.no/)（予備） | 不要 | アプリ名と連絡先を入れた **User-Agent が必須**。ローカルにキャッシュし、`If-Modified-Since` と `Expires` を守る。座標は小数 4 桁まで | CC BY 4.0（出典・ライセンスへのリンク・改変の有無の表示） |
+
+- 既定は Open-Meteo（キー不要・扱いが簡単）。規約は実装のときに再確認する（⚠️ 変わっている可能性がある）。
+- 位置: 都市名の検索（Open-Meteo のジオコーディング）を基本とし、現在地は位置情報のポータル（GeoClue）でユーザーが許可したときだけ使う。
+- アイコン: Adwaita のシンボリックアイコン（`weather-clear-symbolic` など）を使う（同梱不要）。
+- 通信: libsoup 3（GJS から `Soup 3.0`）。取得結果をキャッシュし、起動のたびに API を叩かない。
+- 言語: Glass Gallery と同じ TypeScript → GJS。Flatpak で配布（`--share=network`）。
+
 ---
 
 ## 15. リポジトリ構成・ビルド・開発環境
@@ -727,8 +790,9 @@ glass-lib/
 │   ├── adaptive/  glass-adaptive.[ch]   （非公開）
 │   └── style/  glass.css  glass.gresource.xml
 ├── demo/                      Glass Gallery（TypeScript）: package.json  tsconfig.json  src/  data/
-├── tests/                     C の単体テスト、ゴールデン画像
-└── tools/                     glsl-include.py  glass-harness.c  計測スクリプト
+├── tests/                     C の単体テスト、golden/（Core と参照の比較。§10.5）
+├── spikes/                    Phase 0 の試作（s1-full-renderer）
+└── tools/                     glsl-include.py（#include の展開）、計測スクリプト
 ```
 
 ### 15.2 開発環境（このマシン）
@@ -760,7 +824,7 @@ meson devenv -C build gjs -m demo/dist/main.js
 
 | 対象 | 方法 | 合格条件 |
 |---|---|---|
-| シェーダ Core | ゴールデン画像（§10.5） | 元の `glass.frag` と 1 LSB 以内 |
+| シェーダ Core | ゴールデンテスト（§10.5、`meson test`） | 参照 `glass.frag` と 1/255 以内（実績 0/255） |
 | シェーダの構文 | `glslangValidator`（GLES 3.0 / GL 3.3） | エラーなし |
 | ぼかし | カーネルの係数を既存拡張の TS 実装と比較 | 係数が一致 |
 | Adaptive | `adaptive-vectors.json` を C で再生 | 全ベクタで一致 |
@@ -779,8 +843,8 @@ meson devenv -C build gjs -m demo/dist/main.js
 
 | ID | 内容 | Go の基準 | 規模 |
 |---|---|---|---|
-| S1 | **Full レンダラの最小試作**（C 1 ファイル）: スクロールする写真の上に 1 枚のパネル。取り込み → 読み出し → GL のぼかし → 元の `glass.frag` を互換プレリュードで動かす → `GdkGLTexture` | (1) 中身とガラスのずれが 0 フレーム、(2) 780M・1x でスクロール中 60fps、(3) 追加の CPU ≤ 3ms/frame、(4) Vulkan と GL の両レンダラで動く、(5) snapshot 中の `render_texture` が安全（または専用レンダラで回避できる） | M |
-| S5 | **Core の切り出しとハーネス**（§10） | 元と 1 LSB 以内 | M |
+| S1 | **Full レンダラの最小試作**（`spikes/s1-full-renderer`）: スクロールする中身の上にパネル 2 枚。取り込み → 読み出し → GL のぼかし → 元の `glass.frag` を互換プレリュードで動かす → `GdkGLTexture` | (1) 中身とガラスのずれが 0 フレーム、(2) 780M・1x でスクロール中 60fps、(3) 追加の CPU ≤ 3ms/frame、(4) Vulkan と GL の両レンダラで動く、(5) snapshot 中の `render_texture` が安全（または専用レンダラで回避できる） | ✅ **Go**（2026-09-24）。(2)〜(5) は満たした。パネル 2 枚で平均 1.4〜1.5 ms/frame、最大 3.5 ms。(1) は構造上保証済みで、ユーザーの目視でも問題なし（リサイズも正常）。ユーザーの指摘で影を弱め、縁のジャギーをスーパーサンプリングで直した（`docs/memo.md` 追記2）。詳細は試作の README と `docs/memo.md` 追記1 |
+| S5 | **Core の切り出しとハーネス**（§10） | 元と 1 LSB 以内 | ✅ **Go**（2026-09-24）。200 ケースで差 0/255。S1 も Core を既定にした |
 | ~~S4~~ | 窓の同定（Tier 2 用） | ✅ 完了（§2.3） | – |
 
 S2（GSK だけで描く Lite）、S3（拡張機能での blit）、S6（GNOME 51）は、v1 の範囲外になったので行わない。
@@ -807,7 +871,7 @@ Photos / Playground / Lab。
 
 | リスク | 影響 | 対策 |
 |---|---|---|
-| snapshot 中の `render_texture` が GTK と衝突する | Full が使えない | 専用レンダラ（§8.2）。S1 で確かめる |
+| snapshot 中の `render_texture` が GTK と衝突する | Full が使えない | ✅ S1 で衝突しないことを確認。ただし GL レンダラでは current のコンテキストが変わる（§8.2、地雷1） |
 | dGPU で読み出しが遅い | スクロール中にカクつく | 縮小・キャッシュ。上流に dmabuf の取り出しか displacement ノードの公開を提案（§19） |
 | パネルを重ねたときに互いを屈折しない | 見た目の違和感 | v1 では重ねない前提を文書化。v2 で DAG の層にする |
 | content の背景が透明だとガラスが黒ずむ | 見た目 | `backdrop-color`（§7.3） |
@@ -832,6 +896,27 @@ Photos / Playground / Lab。
 | 既存拡張が Core を使う（シェーダの一本化） | §10.2 の明示化で、拡張機能は今と同じ値を渡せば一致する |
 | 上流 GTK への提案（displacement ノードの公開、dmabuf の取り出し） | 実現すれば読み出しが不要になり、GPU 内で完結する |
 
+### 19.1 macOS のようなウィンドウ部品群を既定で提供するか（2026-09-24 のユーザーの問い）
+
+**結論: 提供するべき。ただし v2 以降で、libadwaita の部品の「置き換え版」として作る。**
+macOS Tahoe では、ツールバー・サイドバー・ポップオーバー・メニュー・セグメントが**何もしなくても**ガラスになる。
+アプリの開発者に一番効くのは「部品を差し替えるだけで窓全体が Liquid Glass らしくなる」こと。
+libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwNavigationSplitView` などで窓を組んでいるので、同じ使い方の Glass 版を用意すれば移行は数行で済む。
+v1 の範囲（ただのガラス）は変えない（決定事項 9）。以下は v1 の後に作る順の計画。
+
+| macOS Tahoe の部品 | libadwaita の対応 | glass-lib の案（仮称） | 技術的な注意 | 優先度 |
+|---|---|---|---|---|
+| ツールバー（窓の上） | `AdwToolbarView` ＋ `AdwHeaderBar` | `GlassToolbarView`: 中身がバーの下まで伸び、ボタンはガラスのカプセルにまとまって浮く | v1 の `GlassView` の延長。窓のボタン（閉じる等）との並び、ドラッグ領域 | 1 |
+| スクロール端の効果（soft / hard） | なし（上のバーの影だけ） | `GlassToolbarView` の機能 | ぼかし＋マスクで中身の端を薄める。hard（列ヘッダ等）は均一の帯 | 1 |
+| サイドバー | `AdwNavigationSplitView` / `AdwOverlaySplitView` | `GlassSidebar`: 窓の中に浮く角丸の板（大きい要素用の材質） | 大きい要素は明暗を**切り替えず**濃さを連続的に変える（§12・v0.1 §9.4）。角ごとの半径 | 2 |
+| セグメント | `AdwToggleGroup` | `GlassToggleGroup`: 選択がガラスの滴として移動 | 融合（smooth union）と純レンズの層が要る | 3 |
+| ボタン（.glass / .glassProminent） | `GtkButton` ＋ CSS | ボタンのスタイルクラス | 押下の反応（interactive） | 3 |
+| ダイアログ・シート | `AdwDialog`（窓の中に浮くとき） | Glass 版の背景 | 窓の中に描かれるので、アプリ内ガラスで描ける | 4 |
+| ポップオーバー・コンテキストメニュー | `GtkPopover` / `GtkPopoverMenu` | `GlassPopover` | **別の Wayland サーフェス（xdg_popup）**なので、今の方式（同じ窓の中身を取り込む）がそのままでは使えない。親の `GlassView` から背景を借りる方式を検討。当面は不透明な MENU 材質 | 5（難） |
+| スイッチ・スライダー（操作中だけレンズ） | `GtkSwitch` / `GtkScale` | 専用部品 | 純レンズの層 | 5 |
+
+参考資料: `docs/research/macos-tahoe-liquid-glass-widgets.md`（ユーザーが ChatGPT Deep Research で作成した調査。推測を含むので、そのまま仕様にはしない）。
+
 ---
 
 ## 20. 残っている確認事項
@@ -839,10 +924,11 @@ Photos / Playground / Lab。
 | # | 内容 | 決め方 |
 |---|---|---|
 | C1 | `backdrop-color` の既定値（libadwaita 1.9 の `--window-bg-color` の実際の値） | 実装時に libadwaita の CSS から確認 |
-| C2 | 材質 `REGULAR` / `CLEAR` の値（§11.2 は初期案） | デモの Playground・Lab で見て、ユーザーが決める |
+| C2 | 材質 `REGULAR` / `CLEAR` の値（§11.2 は初期案。影は S1 で 16px・0.20 に仮決め） | デモの Playground・Lab で見て、ユーザーが決める |
 | C3 | 見た目に応じたティント（Apple 流）を既定にするか | デモの Lab の A/B で、ユーザーが決める |
-| C4 | snapshot 中の `render_texture` の安全性 | S1 |
+| ~~C4~~ | snapshot 中の `render_texture` の安全性 | ✅ S1 で解決（安全。専用レンダラは不要） |
 | C5 | 既存拡張の `prefs.js` の各パラメータの範囲 | 実装時に写す |
+| C6 | アプリ内の縁の値（S1 のプリセット `crisp` / `crisp-strong` / `crisp-soft` / `thinner` / `extension`）とぼかし半径（2〜5） | ユーザーが S1 の `E`・`B` キーで見比べて決める（`crisp`・3 を提案。`thin` は廃止、memo 追記5） |
 
 ---
 
