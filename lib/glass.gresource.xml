@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The stylesheet (lib/style) and the build-time expanded shaders
+     (build/shaders, shaders/meson.build). -->
+<gresources>
+  <gresource prefix="/io/github/ryohsuke1231/GlassLib/style">
+    <file>glass.css</file>
+  </gresource>
+  <gresource prefix="/io/github/ryohsuke1231/GlassLib/shaders">
+    <file>glass-core.frag</file>
+    <file>quad.vert</file>
+  </gresource>
+</gresources>

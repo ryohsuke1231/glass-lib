@@ -11,6 +11,7 @@ project('glass-lib', 'c',
 gnome = import('gnome')
 
 gtk_dep = dependency('gtk4', version: '>= 4.22')
+adw_dep = dependency('libadwaita-1', version: '>= 1.9')
 epoxy_dep = dependency('epoxy')
 libm_dep = meson.get_compiler('c').find_library('m', required: false)
 
@@ -21,6 +22,7 @@ add_project_arguments(
 )
 
 subdir('shaders')
+subdir('lib')
 subdir('tests')
 
 if get_option('spikes')

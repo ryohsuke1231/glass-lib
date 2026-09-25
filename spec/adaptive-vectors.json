@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Test vectors for the adaptive foreground decision (design.md §12, lib/adaptive/glass-adaptive.c).",
+    "Each case feeds samples in order to one fresh state. luma = [P10, P50, P90] relative luminance of",
+    "the glass; t = time in ms; expect = the appearance after that sample (light = the glass looks",
+    "light = dark foreground). pref: none | light | dark. Borderline values are chosen by hand so the",
+    "expected result follows from the rules, not from re-running the implementation:",
+    "  light fg #f2f2f2 (L 0.888) scores (0.938)/(P90+0.05); dark fg #1a1a1a (L 0.0103) scores (P10+0.05)/0.0603;",
+    "  the two are equal at a flat luma of about 0.188."
+  ],
+  "cases": [
+    { "name": "white page is light", "pref": "none",
+      "samples": [ { "t": 0, "luma": [0.90, 0.92, 0.95], "expect": "light" } ] },
+    { "name": "black page is dark", "pref": "none",
+      "samples": [ { "t": 0, "luma": [0.01, 0.02, 0.03], "expect": "dark" } ] },
+    { "name": "light fg is scored on the brightest part", "pref": "none",
+      "_why": "the mean (~0.15) would pick light text; against P90 = 0.70 it scores 1.25, dark text 1.66 against P10",
+      "samples": [ { "t": 0, "luma": [0.05, 0.08, 0.70], "expect": "light" } ] },
+    { "name": "hysteresis keeps light under a 1.2x advantage", "pref": "none",
+      "samples": [ { "t": 0, "luma": [0.90, 0.90, 0.90], "expect": "light" },
+                   { "t": 3000, "luma": [0.17, 0.17, 0.17], "expect": "light" },
+                   { "t": 6000, "luma": [0.12, 0.12, 0.12], "expect": "dark" } ] },
+    { "name": "no flip back within 400 ms", "pref": "none",
+      "samples": [ { "t": 0, "luma": [0.02, 0.02, 0.02], "expect": "dark" },
+                   { "t": 1000, "luma": [0.90, 0.90, 0.90], "expect": "light" },
+                   { "t": 1100, "luma": [0.02, 0.02, 0.02], "expect": "light" },
+                   { "t": 2000, "luma": [0.02, 0.02, 0.02], "expect": "dark" } ] },
+    { "name": "ambiguous grey follows the preference (dark)", "pref": "dark",
+      "samples": [ { "t": 0, "luma": [0.188, 0.188, 0.188], "expect": "dark" } ] },
+    { "name": "ambiguous grey follows the preference (light)", "pref": "light",
+      "samples": [ { "t": 0, "luma": [0.188, 0.188, 0.188], "expect": "light" } ] },
+    { "name": "readability wins over the smoothing", "pref": "none",
+      "samples": [ { "t": 0, "luma": [0.02, 0.02, 0.02], "expect": "dark" },
+                   { "t": 1000, "luma": [0.02, 0.02, 0.02], "expect": "dark" },
+                   { "t": 1010, "luma": [0.70, 0.70, 0.70], "expect": "light" } ] },
+    { "name": "preference against a clear background loses", "pref": "dark",
+      "samples": [ { "t": 0, "luma": [0.85, 0.90, 0.95], "expect": "light" } ] }
+  ]
+}

@@ -115,11 +115,11 @@ typedef struct {
 
 #define THIN_LINES "edge_smoothing=0.75,rim_width=2,rim_power=9,ao_radius=3,ao_intensity=0.10,chroma_strength=0.8"
 
-/* In E-key order; the first is the default. */
+/* In E-key order; the first is the default (the user's choice, 2026-09-25). */
 static const EdgePreset edge_presets[] = {
+  { "crisp-soft",   THIN_LINES ",profile_shape_n=7,max_z=14,displacement_scale=45" },
   { "crisp",        THIN_LINES ",profile_shape_n=7,max_z=20,displacement_scale=60" },
   { "crisp-strong", THIN_LINES },   /* the extension's lens */
-  { "crisp-soft",   THIN_LINES ",profile_shape_n=7,max_z=14,displacement_scale=45" },
   { "thinner",      THIN_LINES ",profile_shape_n=24,max_z=14,displacement_scale=30" },
   { "extension",    "" },
 };
@@ -1312,7 +1312,7 @@ s1_glass_view_init (S1GlassView *self)
   self->opts.glass_enabled = TRUE;
   self->opts.use_cache = TRUE;
   self->opts.private_renderer = FALSE;
-  self->opts.blur_radius = 3.0;   /* in-app (user, 2026-09-25); the extension's dock uses 5 */
+  self->opts.blur_radius = 2.0;   /* in-app (user, 2026-09-25); the extension's dock uses 5 */
   self->opts.downscale = 2;
   self->opts.debug_view = 0;
   self->opts.supersample = TRUE;

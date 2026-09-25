@@ -1,8 +1,9 @@
 # glass-lib 設計書
 
-- 版: **v0.2（v1 の範囲を確定した版）**
-- 日付: 2026-09-24
-- 状態: 設計確定・実装未着手（Phase 0 のスパイクから開始）
+- 版: **v0.3（ウィンドウ部品群を v1 に入れた版）**
+- 日付: 2026-09-25
+- 状態: Phase 0（S1・S5）完了。Phase 2（ライブラリ本体）とウィンドウ部品群、デモの最初の版を実装（2026-09-25）
+- v0.2 からの変更: ウィンドウ部品群（§6.6）を v2 から v1 に移した（ユーザーの決定、2026-09-25）。アプリ内の縁の値とぼかし半径を確定（§11.2、C6）
 - 前版: [`archive/design-v0.1.md`](archive/design-v0.1.md)（調査の全記録。Tier 2 やウィジェット群の検討はそちらに残してある）
 
 凡例: ✅ = 確認済み（実測または一次情報）/ ⚠️ = スパイクで検証する / 💡 = 判断・提案 / 🔒 = 決定事項（変更するときはこの文書を改訂する）
@@ -48,7 +49,7 @@
 | 6 | ライセンス | 🔒 MIT | `LICENSE` は既存リポジトリと同じ文面 |
 | 7 | Mutter を改造する路線 | 🔒 やらない | Wayland プロトコルの草案も v1 では作らない |
 | 8 | 対象のツールキット | 🔒 GTK4 / libadwaita のみ | Qt・Electron・Flutter は対象外 |
-| 9 | 部品の範囲 | 🔒 **ただのガラスだけ**（アイコン・テキストなどを載せられるもの） | スライダー・スイッチ・タブバーなどは v2 以降（§19） |
+| 9 | 部品の範囲 | 🔒 **ただのガラス（アイコン・テキストなどを載せられるもの）＋ウィンドウ部品群**（ツールバー・ヘッダーバー・サイドバー・セグメント・ボタン。§6.6） | ウィンドウ部品群は 2026-09-25 のユーザーの決定で v2 から前倒し。スライダー・スイッチ・ポップオーバー・ダイアログは v2 以降（§19） |
 | 10 | アプリへの適用のしかた | 🔒 **アプリ内の中身に対するガラスだけ**（macOS Tahoe と同じ） | Tier 2（窓そのものが透けるガラス）は v1 から外す（§2） |
 
 ---
@@ -95,6 +96,7 @@ Tier 2 を将来作る場合も、この方法で「アプリは自分の窓に�
 |---|---|
 | `GlassView` | 中身（content）の上にガラスの層を持つコンテナ。ガラスの本体はこれが描く |
 | `GlassPanel` | ガラスの板。子を 1 つ持ち、アイコン・テキスト・ボタンなどを載せられる。カプセル型または角丸矩形 |
+| ウィンドウ部品群（§6.6） | `GlassToolbarView`（スクロール端の効果つき）、`GlassHeaderBar`、`GlassSplitView`（浮くサイドバー）、`GlassToggleGroup`（セグメント）、`GlassButton` |
 | `GlassContext` | ライブラリ全体の設定（レンダラの選択、透明度を下げる、光学パラメータ） |
 | Full レンダラ | 既存の `glass.frag` と同じ見た目（屈折・色収差・リム・影・AO）をアプリ内で描く |
 | フォールバック | GL が使えないとき、または `GlassView` の外に置かれた `GlassPanel` を、CSS の `backdrop-filter` ですりガラスとして描く |
@@ -105,13 +107,14 @@ Tier 2 を将来作る場合も、この方法で「アプリは自分の窓に�
 
 ### 3.2 作らないもの（v1）
 
-- スライダー、スイッチ、セグメント、タブバー、検索欄などの専用部品
+- スライダー、スイッチ、タブバー、検索欄などの専用部品（セグメントは §6.6 の簡易版を作る）
+- ポップオーバー・メニュー（別の Wayland サーフェスなので今の方式では描けない）、ダイアログ（libadwaita の窓の内部に置かれ、`GlassView` の中に入らない）
 - ガラス同士の融合（液滴のようにくっつく表現）とモーフィング
 - 押したときの膨らみ・光（interactive）
 - ガラスの上のガラス（重なったパネルが互いを屈折させること）
 - デスクトップが透けるガラス（Tier 2）と D-Bus サービス
 - GNOME 51 の `ext-background-effect-v1` 対応
-- 大きなパネル用の材質（THICK / MENU）、角ごとの半径
+- メニュー用の材質（MENU）、角ごとの半径
 
 いずれも v2 以降の候補として §19 に理由と入口を残す。**v1 の設計は、これらを後から足しても作り直しにならないようにする**（形状は配列で持つ、材質は enum で持つ、など）。
 
@@ -207,8 +210,11 @@ gboolean        glass_context_get_reduce_transparency (GlassContext *self);
 /* 光学パラメータ（上級者・デモの Lab 用）。キーは §11.1 の表。範囲外は clamp して警告 */
 gboolean        glass_context_set_param         (GlassContext *self, const char *key, double value);
 double          glass_context_get_param         (GlassContext *self, const char *key);
+gboolean        glass_context_is_param_set      (GlassContext *self, const char *key);
+double          glass_context_get_effective_param (GlassContext *self, GlassMaterial material, const char *key); /* その材質で実際に使われる値 */
 void            glass_context_reset_param       (GlassContext *self, const char *key);
 const char * const *glass_context_list_params   (GlassContext *self);
+gboolean        glass_context_get_param_range   (GlassContext *self, const char *key, double *min, double *max, double *def);
 
 /* ── GlassView ── */
 GtkWidget      *glass_view_new                  (void);
@@ -235,7 +241,8 @@ GlassAppearance glass_panel_get_appearance      (GlassPanel *self);  /* 読み�
 | 型 | 値 | 意味 |
 |---|---|---|
 | `GlassRendererMode` | `AUTO` / `FULL` / `FALLBACK` | AUTO = GL が使えれば FULL |
-| `GlassMaterial` | `REGULAR` / `CLEAR` | §11.2 |
+| `GlassMaterial` | `REGULAR` / `CLEAR` / `THICK` | §11.2。`THICK` は大きな板（サイドバー）用 |
+| `GlassEdgeStyle` | `NONE` / `SOFT` / `HARD` | スクロール端の効果（§6.6） |
 | `GlassAdaptiveMode` | `AUTO` / `PREFER_LIGHT` / `PREFER_DARK` / `OFF` | 判定が曖昧なときにどちらへ寄せるか。OFF = 切り替えない（テーマの色のまま） |
 | `GlassAppearance` | `UNKNOWN` / `LIGHT` / `DARK` | LIGHT = ガラスの下が明るい → 前景は暗い色 |
 
@@ -320,6 +327,27 @@ glass_panel_set_child (GLASS_PANEL (panel), gtk_label_new ("Hello"));
 glass_view_add_overlay (GLASS_VIEW (view), panel);
 ```
 
+### 6.6 ウィンドウ部品群（v1。2026-09-25 に v2 から前倒し）
+
+macOS Tahoe では、ツールバー・サイドバー・セグメントが**何もしなくても**ガラスになる。
+libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOverlaySplitView`・`AdwToggleGroup` で窓を組んでいるので、**同じ使い方の Glass 版**を用意する。
+部品はすべて `GlassView`・`GlassPanel` の上に組み立てる（描画の仕組みは増やさない）。
+
+| 部品 | libadwaita の対応 | 振る舞い |
+|---|---|---|
+| `GlassToolbarView` | `AdwToolbarView` | 中身がバーの下まで伸びる（常に）。上下のバーは中身の上に浮く。**スクロール端の効果**（`top-edge-style`・`bottom-edge-style`）: `SOFT` = バーの下の帯で中身をぼかしながら薄めて、背景の色へ溶かす（既定）。`HARD` = 同じ帯を均一にぼかして区切り線を引く。`NONE` = なし。バーの高さは `top-bar-height`・`bottom-bar-height`（読み取り専用）で出すので、アプリはスクロールする中身の先頭にその分の余白を付ける（libadwaita の `extend-content-to-top-edge` と同じ扱い） |
+| `GlassHeaderBar` | `AdwHeaderBar` | `pack_start`・`pack_end` の部品は、それぞれ**1 つのガラスのカプセル**にまとめて浮かせる。タイトルはガラスなし（スクロール端の効果の上に載る）。窓のボタン（閉じる等）も小さなカプセルに入れる（どんな中身の上でも見えるように）。空の所はドラッグで窓を動かせる（`GtkWindowHandle`） |
+| `GlassSplitView` | `AdwOverlaySplitView` | サイドバーは**窓の中に浮く角丸の板**（材質 `THICK`、窓の縁から 8px 内側、半径 14px）。中身はサイドバーの下まで伸び、サイドバーが覆う幅は `content-inset`（読み取り専用）で出す。`show-sidebar` でスライドして出し入れする |
+| `GlassToggleGroup` | `AdwToggleGroup` | カプセルの中に並んだトグル。選ばれたものの下を明るい丸い板がスライドする。**板はガラスではない**（ガラスの上のガラスは v2 の層が要る。Apple の「つまんでいる間だけレンズ」も v2）。トグルは `GtkToggleButton` ではなく `GtkButton`＋`.active` クラス（テーマの `button:checked` の塗りが板を覆うため。memo 地雷12） |
+| `GlassButton` | `GtkButton` ＋ `.circular` / `.pill` | それ自体がガラスのボタン（アイコンか文字）。押している間はガラスが少し明るくなる。`GtkActionable` |
+
+- 部品の中のボタンは自動で `flat` の見た目になる（ガラスの上に libadwaita の塗りの背景を重ねない）。前景色は Adaptive に従う。
+- **ガラスの上のガラスは描かない**: `GlassPanel` の子孫にある `GlassPanel`（例: サイドバーの中のヘッダーバーのカプセル）はガラスを描かず、`.glass-nested` として薄い面だけにする。
+  `GlassPanel` の中に置いた `GlassView` は背景色を塗らない（下のガラスを隠さないため）。
+- スクロール端の効果は `GlassView` が描く（中身の直後、ガラスの前）。ガラスの取り込みもこの効果を含む（ガラスの後ろに見えているものと同じ）。
+  SOFT: バーの高さ＋最大 32px の帯で、中身を GSK の blur（10px）でぼかし、背景色を 55% 重ね、バーの半分まで不透明・帯の終わりで透明になるマスクをかける。HARD: バーの高さの帯を blur 16px・背景色 72% で覆い、前景色 15% の 1px の線を引く。
+- 実装済み（2026-09-25）。API は `lib/glass-toolbar-view.h` などの各ヘッダ。CSS: ヘッダーバーのカプセルは `.header-capsule`（窓のボタンは `.window-controls` も）、サイドバーは `.sidebar`、セグメントは `.toggle-group`（板の色は子ノード `pill` の `color`）、ボタンは `.glass-button`。
+
 ---
 
 ## 7. GlassView の詳細
@@ -349,7 +377,9 @@ GTK は窓の CSS の背景を別の段で描くので、ビューからはノ�
 
 - 💡 ビューは CSS の背景を使わず（`glassview { background: none; }`）、`backdrop-color` の単色を content の下に自分で描く。
   **画面に出すものと取り込むものが同じ**になる。
-- 既定（NULL）は `AdwStyleManager:dark` に追従する窓の背景色にする（libadwaita の `--window-bg-color` 相当。値は ⚠️ 実装時に libadwaita 1.9 の CSS から確認する）。
+- 既定（NULL）は窓の背景色。🔒 **CSS の `var(--window-bg-color)` を実行時に解決する**: ビューの内部に描かない子のノード（CSS 名 `backdrop`）を持ち、その `color` を `var(--window-bg-color)` にして `gtk_widget_get_color()` で読む。
+  テーマ（ライト/ダーク、アクセント、Ubuntu の Yaru の変種）が変わると `css-changed` で追従する。値を固定で持たない（C1）。
+- `GlassPanel` の中にあるビュー（入れ子）は、既定で背景色を塗らない（§6.6）。
 
 ### 7.4 snapshot の手順（擬似コード）
 
@@ -434,6 +464,8 @@ tex        = gsk_renderer_render_texture (renderer, node, C を S·k 倍した�
 - `S` は `gdk_surface_get_scale()`（分数スケールに対応）。
 - 🔒 **レンズの余白**: レンズは縁から内側へ最大 `EDGE_LENS_REACH` 先を読む。パネルがそれより薄いと反対側の縁の先に出るので、その分も取り込む。
   足りないと、縁の帯が取り込みの縁で固定された色の筋になる（`docs/memo.md` 地雷10）。
+- 🔒 **隣り合うパネルは 1 回の取り込みを共有する**（2026-09-25、memo 地雷16）。取り込み 1 回のコストはほぼ固定（`render_texture` 0.5〜0.8ms）なので、
+  同じぼかしで、和集合の面積が 2 つの和の 1.35 倍以下になるパネルの取り込み矩形をまとめる（ヘッダーのカプセルの行は 1 回、上と下のバーは別）。ガラスのパスはパネルごと。
 - `renderer` は窓のもの（`gtk_native_get_renderer`）を使う。
   ✅ **snapshot の中で `render_texture` を呼んでよい**（S1 で確認。Vulkan・GL の両レンダラ、Wayland・X11）。
   背景の取り込み専用の `GskRenderer` は不要だった（試作では `--private-renderer` で比べたが、性能も結果も同じ）。
@@ -498,6 +530,8 @@ tex        = gsk_renderer_render_texture (renderer, node, C を S·k 倍した�
 - 見積り: 1200x240 の帯を半分（600x120）で読み出すと約 0.3ms（付録 A.2）。
 - **計測点**（`GLASS_DEBUG=hud` でビューの隅に表示。デモの Lab からも切り替え可能）:
   取り込み / 読み出し / アップロード / ぼかし / ガラスパス の各 ms、キャッシュの当たり率、テクスチャのサイズ。
+- 実測（2026-09-25、Glass Gallery の Photos を自動スクロール、ビュー 2 つ・パネル 8 枚・取り込み 3 回/フレーム）: 60fps、ガラスの CPU 約 3.3ms/フレーム、GPU busy 31%。
+  予算をわずかに超える。残りはサイドバーの取り込み（下の見た目が変わらなくても中身のノードが変わるたびに取り直す）。候補は memo 追記6。
 - dGPU（PCIe）では読み出しが iGPU より遅い見込み。縮小（1/2、設定で 1/4）とキャッシュで吸収する。
   1/4 は見た目が落ちるので既定にしない（既存拡張の方針 6 と同じ）。
 
@@ -643,17 +677,21 @@ shaders/
 
 | 材質 | 用途 | ぼかし半径 | ティント | 影（半径・強さ） | 取り込みの縮小 | 備考 |
 |---|---|---|---|---|---|---|
-| `REGULAR` | ツールバー、タイトル、ボタンの台 | 3px | 白 0.12 | 16px・0.20 | `blur-downscale` | ティントは既存拡張のドックの既定値と同じ。ぼかし（拡張のドックは 5）と影は S1 でユーザーと比べて決めた初期値 |
+| `REGULAR` | ツールバー、タイトル、ボタンの台 | 2px | 白 0.12 | 16px・0.20 | `blur-downscale` | ティントは既存拡張のドックの既定値と同じ。ぼかし（拡張のドックは 5）と影は S1 でユーザーと比べて決めた（2026-09-25） |
 | `CLEAR` | 写真・動画の上 | 1.5px | 白 0.04 | 16px・0.20 | 1（縮小しない） | ぼかしが弱いと縮小が見えるため等倍。Adaptive が mixed のときは暗幕（黒 0.25）を足す |
+| `THICK` | サイドバー（大きな板） | 12px | 窓の背景色 0.55（ライト/ダークに追従） | 24px・0.16 | `blur-downscale` | 大きな板は下の中身が場所ごとに違うので、前景色を切り替えず（Adaptive なし、テーマの色のまま）、濃いティントで読めるようにする |
 
 - 🔒 **縁の値（アプリ内用）**: 拡張の光学の値は大きなガラス向けの絶対 px で、小さなアプリ内のガラスでは縁が太く濁る（ユーザーの指摘、`docs/memo.md` 地雷8・追記4）。
   アプリ内の材質は、縁に効く値（`edge_smoothing`・`rim_width`・`rim_power`・`ao_radius`・`ao_intensity`・`chroma_strength`・`profile_shape_n`・`displacement_scale`・`max_z`）を**材質自身の値**として持つ。
-  初期値は S1 のプリセット `crisp`（値は memo 追記5 の表）。縁の**線**（輪郭のぼかし・リムの光・内側の影・色のにじみ）は細くし、
-  **レンズ**（縁の近くで背景が曲がる帯＝ガラス感）は拡張のドームの形のまま強さだけを選ぶ。設定の種類は増やさない（値の選び方だけ）。
+  🔒 値は S1 のプリセット **`crisp-soft`**（ユーザーの決定、2026-09-25。値は memo 追記5 の表）: `edge_smoothing` 0.75、`rim_width` 2、`rim_power` 9、`ao_radius` 3、`ao_intensity` 0.10、`chroma_strength` 0.8、`profile_shape_n` 7、`max_z` 14、`displacement_scale` 45。
+  縁の**線**（輪郭のぼかし・リムの光・内側の影・色のにじみ）は細くし、**レンズ**（縁の近くで背景が曲がる帯＝ガラス感）は拡張のドームの形のまま弱めにした。設定の種類は増やさない（値の選び方だけ）。
+  スーパーサンプリング 4x と測ったフットプリントは既定 ON（§8.5）。
   §11.1 の全体の値（拡張と同じ）は、大きなガラス（将来のサイドバーなど）と比較用に残す。
 - 見た目（明/暗）でティントを変えるか（Apple は変える）は、**v1 では変えない**（既存拡張と同じ: 白いティント固定、前景色だけ切り替える）。
   デモの Lab で「見た目に応じたティント」を A/B で試せるようにし、良ければ v1.x で材質の既定にする。
 - アプリが変えられるのは `tint`・`corner-radius`・`has-shadow`・`material` だけ。光学パラメータはアプリごとではなく全体の設定（`GlassContext`）。
+- 🔒 **値の決まり方**: 各キーの値は「`glass_context_set_param()` で明示された値 → 材質の値 → §11.1 の既定値（拡張と同じ）」の順に最初にあるもの。
+  つまり Lab などで明示した値はすべての材質に効き、`glass_context_reset_param()` で材質の値に戻る。ぼかし半径も同じ仕組みのキー `blur-radius` で扱う（既存拡張も要素ごとのぼかし半径を設定に持っているので、新しい光学の設定ではない）。
 
 ### 11.3 既存拡張の設定に追従する（v1.x・任意）
 
@@ -807,7 +845,7 @@ meson test -C build
 
 # デモ（Node 22 は導入済み）
 cd demo && npm install && npm run build
-meson devenv -C build gjs -m demo/dist/main.js
+meson devenv -C build -w . gjs -m demo/dist/main.js
 ```
 
 - デモの型: `@girs/gtk-4.0`・`@girs/adw-1` と、ビルドした `Glass-1.gir` から `@ts-for-gir/cli` で生成した型。
@@ -827,9 +865,9 @@ meson devenv -C build gjs -m demo/dist/main.js
 | シェーダ Core | ゴールデンテスト（§10.5、`meson test`） | 参照 `glass.frag` と 1/255 以内（実績 0/255） |
 | シェーダの構文 | `glslangValidator`（GLES 3.0 / GL 3.3） | エラーなし |
 | ぼかし | カーネルの係数を既存拡張の TS 実装と比較 | 係数が一致 |
-| Adaptive | `adaptive-vectors.json` を C で再生 | 全ベクタで一致 |
-| パラメータ | clamp・既定値・`list_params` | 表（§11.1）と一致 |
-| ウィジェット | GTK のテスト（登録と解除、content 側に置いたときのフォールバック、unrealize で GL 資源が解放されること） | 警告・リークなし |
+| Adaptive | `adaptive-vectors.json` を C で再生（`tests/test-adaptive.c`） | 全ベクタで一致 ✅ |
+| パラメータ | clamp・既定値・`list_params`・材質の解決（`tests/test-params.c`） | 表（§11.1）と一致 ✅ |
+| ウィジェット | 登録と解除、content 側・入れ子・レンダラ設定でのフォールバック、部品の報告値（`tests/test-widgets.c`。ディスプレイが要る） | 警告なし ✅ |
 | 性能 | デモの HUD、GPU busy%（既存の計測方法） | §8.8 の予算内 |
 | 手動 | チェックリスト: 1x / 1.25x / 2x、ライト/ダーク、ハイコントラスト、Vulkan / GL（`GSK_RENDERER=gl`）、X11、Flatpak | 文字が常に読める・ずれがない |
 
@@ -849,21 +887,31 @@ meson devenv -C build gjs -m demo/dist/main.js
 
 S2（GSK だけで描く Lite）、S3（拡張機能での blit）、S6（GNOME 51）は、v1 の範囲外になったので行わない。
 
-### Phase 1: 土台（M）
+### Phase 1: 土台（M）— CI 以外は完了
 
-meson の骨組み、`spec/params.json` とヘッダの生成、シェーダ Core、ハーネスとゴールデン画像、CI（GitHub Actions: ビルド・単体テスト・シェーダ検査）。
+- ✅ meson の骨組み、`spec/params.json` とヘッダの生成、シェーダ Core、ハーネスとゴールデン画像（Phase 0 と Phase 2 の中で作った）
+- ⬜ CI（GitHub Actions: ビルド・単体テスト・シェーダ検査）
 
-### Phase 2: ライブラリ本体（L）
+### Phase 2: ライブラリ本体（L）— 実装済み（2026-09-25。memo 追記6）
 
-`glass_init`、`GlassContext`、`GlassView`、`GlassPanel`、Full レンダラ、フォールバック、Adaptive、CSS、GIR/typelib。
+- ✅ `glass_init`、`GlassContext`、`GlassView`、`GlassPanel`、Full レンダラ、フォールバック、Adaptive、CSS、GIR/typelib
+- ✅ ウィンドウ部品群（§6.6。2026-09-25 のユーザーの決定で v2 から前倒し）
+- ⬜ 残り: フォールバックの Adaptive（§12.1 の小さな取り込み）、スクロール中の CPU を予算（3ms）内へ（サイドバーの取り込み。memo 追記6）、HiDPI（2x・分数スケール）と dGPU での確認、Python からの利用の確認
 
-### Phase 3: デモ（M）
+### Phase 3: デモ（M）— 最初の版を実装済み（2026-09-25）
 
-Photos / Playground / Lab。
+- ✅ Photos / Playground / Lab
+- ⬜ 「見た目に応じたティント」の A/B（C3）、材質の値を見比べて決める（C2）
 
 ### Phase 4: 仕上げ（M）
 
-性能の調整、アクセシビリティの確認、API ドキュメント（gi-docgen）、Flatpak（デモ）、README のスクリーンショット。
+性能の調整、アクセシビリティの確認（ハイコントラスト・透明度を下げる・動きを減らす）、API ドキュメント（gi-docgen）、Flatpak（デモ）、README のスクリーンショット、GNOME 51 のランタイムでの CI。
+
+### v1 の後
+
+- v1.x: 既存拡張の設定への追従（§11.3）、見た目に応じたティント（C3 の結果しだい）
+- ショーケース: 天気アプリ Glass Weather（§14.1）
+- v2: §19 の候補（ガラスの融合・押したときの反応・ガラスの上のガラス・専用部品・ポップオーバー／メニュー／ダイアログ・Tier 2 など）
 
 ---
 
@@ -898,7 +946,10 @@ Photos / Playground / Lab。
 
 ### 19.1 macOS のようなウィンドウ部品群を既定で提供するか（2026-09-24 のユーザーの問い）
 
-**結論: 提供するべき。ただし v2 以降で、libadwaita の部品の「置き換え版」として作る。**
+> **2026-09-25 更新**: ユーザーの決定で、優先度 1〜3（ツールバー・スクロール端・サイドバー・セグメント・ボタン）を v1 に前倒しした（§6.6）。
+> 以下の表の 4・5（ダイアログ・ポップオーバー・スイッチ・スライダー）は v2 のまま。
+
+**結論（2026-09-24 時点）: 提供するべき。ただし v2 以降で、libadwaita の部品の「置き換え版」として作る。**
 macOS Tahoe では、ツールバー・サイドバー・ポップオーバー・メニュー・セグメントが**何もしなくても**ガラスになる。
 アプリの開発者に一番効くのは「部品を差し替えるだけで窓全体が Liquid Glass らしくなる」こと。
 libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwNavigationSplitView` などで窓を組んでいるので、同じ使い方の Glass 版を用意すれば移行は数行で済む。
@@ -923,12 +974,12 @@ v1 の範囲（ただのガラス）は変えない（決定事項 9）。以下
 
 | # | 内容 | 決め方 |
 |---|---|---|
-| C1 | `backdrop-color` の既定値（libadwaita 1.9 の `--window-bg-color` の実際の値） | 実装時に libadwaita の CSS から確認 |
+| ~~C1~~ | `backdrop-color` の既定値 | ✅ 固定値にせず、実行時に CSS の `var(--window-bg-color)` を解決して使う（このマシンの libadwaita 1.9 ではライト `#fafafb`・ダーク `#222226`。Ubuntu の Yaru の色の変種でも正しくなる）。§7.3 |
 | C2 | 材質 `REGULAR` / `CLEAR` の値（§11.2 は初期案。影は S1 で 16px・0.20 に仮決め） | デモの Playground・Lab で見て、ユーザーが決める |
 | C3 | 見た目に応じたティント（Apple 流）を既定にするか | デモの Lab の A/B で、ユーザーが決める |
 | ~~C4~~ | snapshot 中の `render_texture` の安全性 | ✅ S1 で解決（安全。専用レンダラは不要） |
-| C5 | 既存拡張の `prefs.js` の各パラメータの範囲 | 実装時に写す |
-| C6 | アプリ内の縁の値（S1 のプリセット `crisp` / `crisp-strong` / `crisp-soft` / `thinner` / `extension`）とぼかし半径（2〜5） | ユーザーが S1 の `E`・`B` キーで見比べて決める（`crisp`・3 を提案。`thin` は廃止、memo 追記5） |
+| ~~C5~~ | 既存拡張の `prefs.js` の各パラメータの範囲 | ✅ `spec/params.json` に写した |
+| ~~C6~~ | アプリ内の縁の値とぼかし半径 | ✅ ユーザーが決定（2026-09-25）: `crisp-soft`・ぼかし 2px・測ったフットプリント・スーパーサンプリング 4x |
 
 ---
 

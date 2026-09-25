@@ -26,7 +26,8 @@
 - シェーダを変更したら、`meson test -C build` で `glslangValidator` の検査（GLES 3.0 / GL 3.3）が通ることを確認する。
 - **シェーダ Core（`shaders/core/`）を変更したら、`glass-core-golden`（参照 `glass.frag` との比較）が通ることを確認する。** 意図して見た目を変えるときは、先にユーザーに相談する（参照との差が出るのは当然なので、その差を説明できること）。
 - `npm` のコマンドは `demo/` の中で実行する（例: `cd demo && npm run build`）。TS ファイルを修正・編集したら `npm run build` を実行してビルドエラーを確認する。
-- デモの起動は `meson devenv -C build gjs -m demo/dist/main.js`（ビルドしたライブラリの typelib を使うため）。
+- デモの起動は `meson devenv -C build -w . gjs -m demo/dist/main.js`（ビルドしたライブラリの typelib を使うため。`-w .` がないと build/ の中で実行されてパスが合わない）。
+- デモの `npm run build` は、先にビルドしたライブラリの `build/lib/Glass-1.gir` から型（`demo/types/`）を生成する。ライブラリの公開 API を変えたら `meson compile -C build` の後に `npm run build`。
 
 ## ファイル読み取りの許可
 - `docs/memo.md`: 踏んだ地雷や罠、教訓の記録。読み取りも書き込みも自由。新しい罠が原因まで確定したら追記する（書き方は既存リポジトリの `memo.md` に倣う）。

@@ -1,0 +1,185 @@
+/* glass-lib's stylesheet (design.md §6.4). Loaded at
+ * GTK_STYLE_PROVIDER_PRIORITY_SETTINGS: above libadwaita, below the app. */
+
+/* ── The view: the glass is drawn in code, not by CSS ── */
+
+glassview {
+  background: none;
+}
+
+/* Never drawn: GlassView reads its colour as the default backdrop colour. */
+glassview > backdrop {
+  color: var(--window-bg-color);
+}
+
+/* ── Panels ── */
+
+glasspanel {
+  background: none;
+  border-radius: 9999px;
+  transition: color 200ms ease-out;
+}
+
+/* Adaptive colours (§12): .glass-light = the glass looks light. */
+glasspanel.glass-light {
+  color: #1a1a1a;
+  --glass-fg-color: #1a1a1a;
+  --glass-dim-fg-color: rgb(26 26 26 / 60%);
+  --glass-hover-color: rgb(0 0 0 / 7%);
+  --glass-active-color: rgb(0 0 0 / 14%);
+}
+
+glasspanel.glass-dark {
+  color: #f2f2f2;
+  --glass-fg-color: #f2f2f2;
+  --glass-dim-fg-color: rgb(242 242 242 / 65%);
+  --glass-hover-color: rgb(255 255 255 / 10%);
+  --glass-active-color: rgb(255 255 255 / 18%);
+}
+
+/* Buttons on glass have no filled background of their own: the glass is
+ * the background. Suggested / destructive buttons keep theirs. */
+glasspanel button:not(.suggested-action):not(.destructive-action):not(.opaque) {
+  background: none;
+  box-shadow: none;
+  color: inherit;
+}
+
+glasspanel button:not(.suggested-action):not(.destructive-action):not(.opaque):hover {
+  background: alpha(currentColor, 0.08);
+}
+
+glasspanel button:not(.suggested-action):not(.destructive-action):not(.opaque):active,
+glasspanel button:not(.suggested-action):not(.destructive-action):not(.opaque):checked {
+  background: alpha(currentColor, 0.16);
+  color: inherit;
+}
+
+/* Lists and scrolled views on a sidebar are on the glass, not over it. */
+glasspanel.sidebar list,
+glasspanel.sidebar listview,
+glasspanel.sidebar gridview,
+glasspanel.sidebar columnview,
+glasspanel.sidebar viewport,
+glasspanel.sidebar scrolledwindow {
+  background: none;
+}
+
+glasspanel button:focus-visible {
+  outline-color: alpha(currentColor, 0.5);
+}
+
+/* ── When CSS draws the glass (§9) ── */
+
+glasspanel.glass-fallback {
+  background-color: alpha(white, 0.18);
+  backdrop-filter: blur(12px) saturate(1.6);
+  box-shadow: inset 0 1px alpha(white, 0.45),
+              inset 0 -1px alpha(black, 0.08),
+              0 6px 18px alpha(black, 0.18);
+}
+
+glasspanel.glass-fallback.sidebar {
+  background-color: color-mix(in srgb, var(--window-bg-color) 60%, transparent);
+  backdrop-filter: blur(24px) saturate(1.4);
+}
+
+/* Inside another panel: glass is not drawn on glass (§6.6). */
+glasspanel.glass-nested {
+  background-color: alpha(currentColor, 0.06);
+  box-shadow: none;
+}
+
+/* High contrast (§13): opaque, outlined. */
+glasspanel.glass-high-contrast {
+  background-color: var(--window-bg-color);
+  backdrop-filter: none;
+  box-shadow: none;
+  border: 1px solid var(--border-color);
+}
+
+/* ── Header bar (§6.6) ── */
+
+glassheaderbar {
+  padding: 6px 8px;
+  min-height: 34px;
+}
+
+glassheaderbar .title {
+  font-weight: bold;
+  padding: 0 12px;
+}
+
+glassheaderbar glasspanel.header-capsule {
+  padding: 2px;
+}
+
+glassheaderbar glasspanel.header-capsule button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 4px;
+  border-radius: 9999px;
+}
+
+glassheaderbar glasspanel.header-capsule button.text-button {
+  padding: 0 12px;
+}
+
+glassheaderbar glasspanel.window-controls windowcontrols {
+  margin: 0 2px;
+}
+
+/* ── Toggle group ── */
+
+glasspanel.toggle-group {
+  padding: 3px;
+}
+
+glasspanel.toggle-group button {
+  min-height: 28px;
+  padding: 0 14px;
+  border-radius: 9999px;
+}
+
+/* The active toggle is marked by the plate, not by a background. */
+glasspanel.toggle-group button.active,
+glasspanel.toggle-group button.active:hover {
+  background: none;
+}
+
+glasspanel.toggle-group > pill {
+  color: rgb(255 255 255 / 70%);
+}
+
+glasspanel.toggle-group.glass-dark > pill {
+  color: rgb(255 255 255 / 20%);
+}
+
+@media (prefers-color-scheme: dark) {
+  glasspanel.toggle-group > pill {
+    color: rgb(255 255 255 / 20%);
+  }
+
+  glasspanel.toggle-group.glass-light > pill {
+    color: rgb(255 255 255 / 70%);
+  }
+}
+
+/* ── Glass button ── */
+
+glasspanel.glass-button > button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: 9999px;
+}
+
+glasspanel.glass-button > button.text-button {
+  padding: 0 18px;
+}
+
+glasspanel.glass-button > button,
+glasspanel.glass-button > button:hover,
+glasspanel.glass-button > button:active {
+  background: none;
+}

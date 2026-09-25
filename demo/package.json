@@ -1,0 +1,19 @@
+{
+  "name": "glass-gallery",
+  "private": true,
+  "type": "module",
+  "description": "Glass Gallery: the demo and test harness of glass-lib (design.md §14)",
+  "license": "MIT",
+  "scripts": {
+    "types": "ts-for-gir generate Glass-1 --girDirectories ../build/lib --girDirectories /usr/share/gir-1.0 --externalDeps --outdir types --ignoreVersionConflicts",
+    "build": "npm run types && tsc",
+    "watch": "tsc -w"
+  },
+  "devDependencies": {
+    "@girs/adw-1": "^5.4.0",
+    "@girs/gjs": "^5.4.0",
+    "@girs/gtk-4.0": "^5.4.0",
+    "@ts-for-gir/cli": "^5.4.0",
+    "typescript": "^6.0.3"
+  }
+}

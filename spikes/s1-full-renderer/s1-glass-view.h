@@ -15,7 +15,7 @@ typedef struct {
   gboolean glass_enabled;     /* FALSE = draw only the panels' foreground (A/B) */
   gboolean use_cache;         /* reuse the capture / the finished glass when nothing changed */
   gboolean private_renderer;  /* capture with a dedicated GskRenderer instead of the window's */
-  double   blur_radius;       /* px; in-app default 3 (the extension's dock uses 5) */
+  double   blur_radius;       /* px; in-app default 2 (the extension's dock uses 5) */
   int      downscale;         /* capture scale 1/2 (default) or 1/4 */
   gboolean capture_full;      /* capture at full resolution and box-downsample in GL, as the extension does */
   int      debug_view;        /* glass.frag's debug_view: 0 off, 1 masks, 2 raw masks */
@@ -61,7 +61,7 @@ gboolean    s1_glass_view_set_param       (S1GlassView     *self,
 double      s1_glass_view_get_param       (S1GlassView     *self,
                                            const char      *name);
 void        s1_glass_view_reset_params    (S1GlassView     *self);
-/* "crisp" (in-app default), "crisp-strong", "crisp-soft", "thinner",
+/* "crisp-soft" (in-app default), "crisp", "crisp-strong", "thinner",
  * "extension" (the extension's values). */
 gboolean    s1_glass_view_apply_preset    (S1GlassView     *self,
                                            const char      *name);

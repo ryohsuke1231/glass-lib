@@ -21,10 +21,10 @@ meson compile -C build
 | `--no-cache` | 毎回取り込み直し・描き直す |
 | `--private-renderer` | 取り込みに窓のレンダラではなく専用の `GskRenderer` を使う |
 | `--no-glass` | ガラスなしで開始（A/B 用） |
-| `--blur-radius=PX` | ぼかし半径（既定 3。拡張のドックは 5） |
+| `--blur-radius=PX` | ぼかし半径（既定 2。拡張のドックは 5） |
 | `--downscale=2\|4` | 取り込みの縮小率（既定 2） |
 | `--debug-view=0\|1\|2` | `glass.frag` のデバッグ表示（1 = 形状と影のマスク） |
-| `--preset=NAME` | 縁のプリセット: `crisp`（既定）・`crisp-strong`・`crisp-soft`・`thinner`・`extension`（拡張の値）。値は `docs/memo.md` 追記5 |
+| `--preset=NAME` | 縁のプリセット: `crisp-soft`（既定）・`crisp`・`crisp-strong`・`thinner`・`extension`（拡張の値）。値は `docs/memo.md` 追記5 |
 | `--param NAME=VALUE` | 光学パラメータを 1 つ上書き（繰り返し可。例 `--param rim_width=2`） |
 | `--sweep=DIR --candidate NAME:K=V,... [--sweep-scroll=A,B,...]` | 候補ごとの見た目を、同じ窓の中で順に描いてパネルの周りを保存する（比較用）。`K` は光学パラメータのほか `ss=0\|1`・`rim=N`・`fp=0\|1`・`fph=PX`・`blur=PX` |
 | `--screenshot-panel` | 画面の保存を上のパネルの周りだけに切り出す |
@@ -40,7 +40,7 @@ meson compile -C build
 
 キー操作: `Space` ガラスの ON/OFF、`C` キャッシュの ON/OFF、`D` デバッグ表示の切り替え、`A` 自動スクロールの ON/OFF、
 `S` スーパーサンプリングの ON/OFF、`H` 影をアプリ内の値 ⇔ 拡張の値で切り替え、`R` Core ⇔ 参照シェーダ、
-`E` 縁のプリセット（crisp → crisp-strong → crisp-soft → thinner → extension）、
+`E` 縁のプリセット（crisp-soft → crisp → crisp-strong → thinner → extension）、
 `F` 測ったフットプリント ⇔ 参照の見積もり、`B` ぼかし半径（2 → 3 → 4 → 5）。
 
 レンダラの切り替え: `GSK_RENDERER=vulkan|gl`、X11: `GDK_BACKEND=x11`。
@@ -104,3 +104,4 @@ GTK の GL レンダラでは、`gsk_renderer_render_texture()` と `GdkTextureD
 - **ぼかし半径**: 既定 5 → 3。
 - 計測（既定の設定、スクロール中、パネル 2 枚）: 60fps、CPU 1.5〜1.9 ms/フレーム、GPU busy% はガラスなしとの差 4〜5 ポイント。
 
+**ユーザーの決定（2026-09-25）**: 既定は `crisp-soft`・ぼかし半径 2・測ったフットプリント・スーパーサンプリング 4x。ライブラリの材質 `REGULAR` の値になる（設計書 §11.2）。

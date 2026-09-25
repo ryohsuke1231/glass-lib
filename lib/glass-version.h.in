@@ -1,0 +1,19 @@
+/* glass-version.h — glass-lib's version (generated from glass-version.h.in).
+ *
+ * SPDX-License-Identifier: MIT
+ */
+#pragma once
+
+#if !defined(GLASS_INSIDE) && !defined(GLASS_COMPILATION)
+#error "Only <glass.h> can be included directly."
+#endif
+
+#define GLASS_MAJOR_VERSION (@GLASS_MAJOR_VERSION@)
+#define GLASS_MINOR_VERSION (@GLASS_MINOR_VERSION@)
+#define GLASS_MICRO_VERSION (@GLASS_MICRO_VERSION@)
+#define GLASS_VERSION_S "@GLASS_VERSION@"
+
+#define GLASS_CHECK_VERSION(major, minor, micro) \
+  (GLASS_MAJOR_VERSION > (major) || \
+   (GLASS_MAJOR_VERSION == (major) && GLASS_MINOR_VERSION > (minor)) || \
+   (GLASS_MAJOR_VERSION == (major) && GLASS_MINOR_VERSION == (minor) && GLASS_MICRO_VERSION >= (micro)))

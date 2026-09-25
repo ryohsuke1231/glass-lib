@@ -1,0 +1,1068 @@
+/* glass-view.c — a container that draws glass over its own content
+ * (design.md §5, §7).
+ *
+ * The glass bodies are drawn here, never by the panels: GTK caches each
+ * widget's render node, so a panel's own snapshot does not run when only the
+ * content under it scrolled. The view is snapshotted whenever any
+ * descendant changed, so glass and content can never be a frame apart.
+ *
+ * SPDX-License-Identifier: MIT
+ */
+#include "glass-private.h"
+#include "render/glass-renderer.h"
+
+#include <math.h>
+#include <string.h>
+
+/**
+ * GlassView:
+ *
+ * A container that draws glass over its own content.
+ *
+ * The content fills the view; overlay children are placed over it like in
+ * `GtkOverlay`, by their own `halign`, `valign` and margins. Every
+ * [class@Panel] among the overlay children (at any depth) is drawn as glass
+ * that refracts the content under it, in the same frame as the content.
+ *
+ * The view paints its backdrop colour (by default the window background)
+ * under the content, so the glass never sees through to nothing. Containers
+ * between the view and a panel should have no background of their own.
+ *
+ * ## CSS nodes
+ *
+ * `GlassView` has a single CSS node with name `glassview`.
+ */
+
+typedef struct {
+  GlassPanel       *panel;
+  GlassPanelRender *render;
+} PanelEntry;
+
+typedef struct {
+  GlassEdgeStyle style;
+  int            size;
+} Edge;
+
+struct _GlassView {
+  GtkWidget       parent_instance;
+
+  GtkWidget      *content;
+  GPtrArray      *overlays;          /* GtkWidget*, parented to us */
+  GHashTable     *offsets;           /* overlay -> graphene_point_t* */
+  GtkWidget      *backdrop_node;     /* never drawn: resolves --window-bg-color */
+  GdkRGBA         backdrop_color;
+  gboolean        backdrop_color_set;
+  GPtrArray      *entries;           /* PanelEntry* */
+  GPtrArray      *captures;          /* GlassCapture*, one per group of panels */
+
+  GlassRenderer  *renderer;
+  gboolean        renderer_failed;
+  gboolean        full;              /* panels are drawn by us (not the CSS fallback) */
+  Edge            edges[2];          /* top, bottom */
+
+  gint64          hud_last_us;
+  char           *hud_text;
+};
+
+enum {
+  PROP_0,
+  PROP_CONTENT,
+  PROP_BACKDROP_COLOR,
+  N_PROPS
+};
+
+static GParamSpec *props[N_PROPS];
+
+static void glass_view_buildable_init (GtkBuildableIface *iface);
+
+G_DEFINE_FINAL_TYPE_WITH_CODE (GlassView, glass_view, GTK_TYPE_WIDGET,
+                               G_IMPLEMENT_INTERFACE (GTK_TYPE_BUILDABLE, glass_view_buildable_init))
+
+static GtkBuildableIface *parent_buildable_iface;
+
+/* ── Panels ───────────────────────────────────────────────────────────────── */
+
+static void
+entry_free (PanelEntry *entry, GlassRenderer *renderer)
+{
+  glass_panel_render_free (entry->render, renderer);
+  g_free (entry);
+}
+
+static gboolean
+wants_full (GlassView *self)
+{
+  GlassContext *context = glass_context_get_default ();
+
+  return glass_context_get_wanted_renderer (context) == GLASS_RENDERER_MODE_FULL &&
+         !glass_context_get_high_contrast (context) &&
+         !self->renderer_failed;
+}
+
+static void
+update_panel_modes (GlassView *self)
+{
+  GlassPanelMode mode;
+
+  self->full = wants_full (self);
+  mode = self->full ? GLASS_PANEL_MODE_VIEW : GLASS_PANEL_MODE_FALLBACK;
+  for (guint i = 0; i < self->entries->len; i++)
+    {
+      PanelEntry *entry = g_ptr_array_index (self->entries, i);
+
+      glass_panel_set_mode (entry->panel, mode);
+    }
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+void
+glass_view_register_panel (GlassView  *self,
+                           GlassPanel *panel)
+{
+  PanelEntry *entry;
+
+  for (guint i = 0; i < self->entries->len; i++)
+    if (((PanelEntry *) g_ptr_array_index (self->entries, i))->panel == panel)
+      return;
+
+  entry = g_new0 (PanelEntry, 1);
+  entry->panel = panel;
+  entry->render = glass_panel_render_new ();
+  g_ptr_array_add (self->entries, entry);
+
+  self->full = wants_full (self);
+  glass_panel_set_mode (panel, self->full ? GLASS_PANEL_MODE_VIEW : GLASS_PANEL_MODE_FALLBACK);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+void
+glass_view_unregister_panel (GlassView  *self,
+                             GlassPanel *panel)
+{
+  for (guint i = 0; i < self->entries->len; i++)
+    {
+      PanelEntry *entry = g_ptr_array_index (self->entries, i);
+
+      if (entry->panel == panel)
+        {
+          g_ptr_array_remove_index (self->entries, i);
+          entry_free (entry, self->renderer);
+          gtk_widget_queue_draw (GTK_WIDGET (self));
+          return;
+        }
+    }
+}
+
+/* TRUE if widget is (inside) one of our overlay children, as opposed to the
+ * content: only those can be glass over the content (design.md §7.2). */
+gboolean
+glass_view_is_overlay_descendant (GlassView *self,
+                                  GtkWidget *widget)
+{
+  for (guint i = 0; i < self->overlays->len; i++)
+    {
+      GtkWidget *overlay = g_ptr_array_index (self->overlays, i);
+
+      if (widget == overlay || gtk_widget_is_ancestor (widget, overlay))
+        return TRUE;
+    }
+  return FALSE;
+}
+
+static void
+context_changed (GlassContext *context,
+                 GlassView    *self)
+{
+  update_panel_modes (self);
+}
+
+/* ── Renderer lifetime ────────────────────────────────────────────────────── */
+
+static void
+release_renderer (GlassView *self)
+{
+  if (self->renderer == NULL)
+    return;
+
+  glass_renderer_make_current (self->renderer);
+  for (guint i = 0; i < self->entries->len; i++)
+    glass_panel_render_release_gl (((PanelEntry *) g_ptr_array_index (self->entries, i))->render);
+  for (guint i = 0; i < self->captures->len; i++)
+    glass_capture_release_gl (g_ptr_array_index (self->captures, i));
+  gdk_gl_context_clear_current ();
+  g_clear_pointer (&self->renderer, glass_renderer_release);
+}
+
+static void
+glass_view_realize (GtkWidget *widget)
+{
+  GlassView *self = GLASS_VIEW (widget);
+
+  GTK_WIDGET_CLASS (glass_view_parent_class)->realize (widget);
+
+  /* Like GtkGLArea: the context is made when the surface exists. */
+  if (glass_context_get_wanted_renderer (glass_context_get_default ()) == GLASS_RENDERER_MODE_FULL)
+    {
+      self->renderer = glass_renderer_acquire (gtk_widget_get_native (widget));
+      self->renderer_failed = self->renderer == NULL;
+    }
+  update_panel_modes (self);
+}
+
+static void
+glass_view_unrealize (GtkWidget *widget)
+{
+  GlassView *self = GLASS_VIEW (widget);
+
+  release_renderer (self);
+  self->renderer_failed = FALSE;
+  GTK_WIDGET_CLASS (glass_view_parent_class)->unrealize (widget);
+}
+
+/* ── Backdrop colour and edge effects ─────────────────────────────────────── */
+
+static gboolean
+inside_panel (GlassView *self)
+{
+  return gtk_widget_get_ancestor (GTK_WIDGET (self), GLASS_TYPE_PANEL) != NULL;
+}
+
+static void
+resolve_backdrop_color (GlassView *self, GdkRGBA *out)
+{
+  if (self->backdrop_color_set)
+    *out = self->backdrop_color;
+  else if (inside_panel (self))
+    *out = (GdkRGBA) { 0, 0, 0, 0 };   /* do not hide the glass we are on */
+  else
+    gtk_widget_get_color (self->backdrop_node, out);
+}
+
+void
+glass_view_set_edge (GlassView       *self,
+                     GtkPositionType  position,
+                     GlassEdgeStyle   style,
+                     int              size)
+{
+  Edge *edge;
+
+  g_return_if_fail (position == GTK_POS_TOP || position == GTK_POS_BOTTOM);
+
+  edge = &self->edges[position == GTK_POS_TOP ? 0 : 1];
+  if (edge->style == style && edge->size == size)
+    return;
+  edge->style = style;
+  edge->size = size;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+/* The scroll edge effect (design.md §6.6): the content under the bar,
+ * blurred and washed towards the window background. SOFT fades out below
+ * the bar; HARD stops at the bar with a hairline. */
+static GskRenderNode *
+edge_node (GlassView     *self,
+           GskRenderNode *content,
+           const Edge    *edge,
+           gboolean       top,
+           float          width,
+           float          height,
+           const GdkRGBA *bg)
+{
+  const float blur = edge->style == GLASS_EDGE_STYLE_HARD ? 16.0f : 10.0f;
+  float band = edge->style == GLASS_EDGE_STYLE_HARD ? edge->size : edge->size + MIN (edge->size, 32);
+  graphene_rect_t rect, source;
+  GtkSnapshot *snapshot;
+  GdkRGBA wash = *bg;
+
+  band = MIN (band, height);
+  if (band <= 0.0f || edge->style == GLASS_EDGE_STYLE_NONE)
+    return NULL;
+
+  rect = GRAPHENE_RECT_INIT (0, top ? 0 : height - band, width, band);
+  source = rect;
+  graphene_rect_inset (&source, 0, -3.0f * blur);
+
+  snapshot = gtk_snapshot_new ();
+  gtk_snapshot_push_clip (snapshot, &rect);
+
+  if (edge->style == GLASS_EDGE_STYLE_SOFT)
+    {
+      /* Opaque down to half the bar, gone at the end of the band. */
+      GskColorStop stops[3] = {
+        { 0.0f, { 0, 0, 0, 1.0f } },
+        { edge->size * 0.5f / band, { 0, 0, 0, 0.92f } },
+        { 1.0f, { 0, 0, 0, 0.0f } },
+      };
+      graphene_point_t from = GRAPHENE_POINT_INIT (0, top ? rect.origin.y : rect.origin.y + band);
+      graphene_point_t to = GRAPHENE_POINT_INIT (0, top ? rect.origin.y + band : rect.origin.y);
+
+      gtk_snapshot_push_mask (snapshot, GSK_MASK_MODE_ALPHA);
+      gtk_snapshot_append_linear_gradient (snapshot, &rect, &from, &to, stops, G_N_ELEMENTS (stops));
+      gtk_snapshot_pop (snapshot);
+      wash.alpha *= 0.55f;
+    }
+  else
+    wash.alpha *= 0.72f;
+
+  gtk_snapshot_append_color (snapshot, bg, &rect);
+  gtk_snapshot_push_blur (snapshot, blur);
+  gtk_snapshot_push_clip (snapshot, &source);
+  gtk_snapshot_append_node (snapshot, content);
+  gtk_snapshot_pop (snapshot);
+  gtk_snapshot_pop (snapshot);
+  gtk_snapshot_append_color (snapshot, &wash, &rect);
+
+  if (edge->style == GLASS_EDGE_STYLE_SOFT)
+    gtk_snapshot_pop (snapshot);   /* the mask */
+  else
+    {
+      GdkRGBA line;
+
+      gtk_widget_get_color (GTK_WIDGET (self), &line);
+      line.alpha *= 0.15f;
+      gtk_snapshot_append_color (snapshot, &line,
+                                 &GRAPHENE_RECT_INIT (0, top ? band - 1.0f : rect.origin.y, width, 1.0f));
+    }
+
+  gtk_snapshot_pop (snapshot);     /* the clip */
+  return gtk_snapshot_free_to_node (snapshot);
+}
+
+/* ── Snapshot ─────────────────────────────────────────────────────────────── */
+
+static float
+opacity_to (GtkWidget *widget, GtkWidget *ancestor)
+{
+  float opacity = 1.0f;
+
+  for (; widget && widget != ancestor; widget = gtk_widget_get_parent (widget))
+    opacity *= (float) gtk_widget_get_opacity (widget);
+  return opacity;
+}
+
+static void
+adjust_for_reduce_transparency (double *params, float tint[4])
+{
+  params[GLASS_PARAM_DISPLACEMENT_SCALE] = 0.0;
+  params[GLASS_PARAM_CHROMA_STRENGTH] = 0.0;
+  params[GLASS_PARAM_BLUR_RADIUS] = MIN (MAX (params[GLASS_PARAM_BLUR_RADIUS] * 3.0, 8.0), 30.0);
+  tint[3] = MAX (tint[3], 0.6f);
+}
+
+typedef struct {
+  PanelEntry      *entry;
+  graphene_rect_t  P;
+  graphene_rect_t  C;
+  double           params[GLASS_N_PARAMS];
+  float            tint[4];
+  float            opacity;
+  guint            group;
+} Item;
+
+typedef struct {
+  graphene_rect_t C;
+  double          blur_radius;
+  int             downscale;
+} Group;
+
+static float
+area (const graphene_rect_t *r)
+{
+  return r->size.width * r->size.height;
+}
+
+/* Panels next to each other share one capture (design.md §8.2): a capture's
+ * cost is mostly fixed (render_texture), so a row of header capsules costs
+ * one instead of four. Two captures merge when they blur alike and their
+ * union is not much bigger than the two together; the top and the bottom
+ * bar never do. */
+#define GROUP_SLACK 1.35f
+
+static guint
+group_for (GArray *groups, const Item *item)
+{
+  double blur = item->params[GLASS_PARAM_BLUR_RADIUS];
+  int downscale = (int) item->params[GLASS_PARAM_BLUR_DOWNSCALE];
+
+  for (guint g = 0; g < groups->len; g++)
+    {
+      Group *group = &g_array_index (groups, Group, g);
+      graphene_rect_t u;
+
+      if (group->blur_radius != blur || group->downscale != downscale)
+        continue;
+      graphene_rect_union (&group->C, &item->C, &u);
+      if (area (&u) <= GROUP_SLACK * (area (&group->C) + area (&item->C)))
+        {
+          group->C = u;
+          return g;
+        }
+    }
+
+  g_array_append_val (groups, ((Group) { item->C, blur, downscale }));
+  return groups->len - 1;
+}
+
+static void
+draw_panels (GlassView             *self,
+             GtkSnapshot           *snapshot,
+             GskRenderNode         *backdrop,
+             GskRenderNode         *content_node,
+             guint                  key_extra,
+             const graphene_rect_t *view_rect,
+             const GdkRGBA         *theme_bg)
+{
+  GtkWidget *widget = GTK_WIDGET (self);
+  GlassContext *context = glass_context_get_default ();
+  gboolean reduce = glass_context_get_reduce_transparency (context);
+  GlassRenderStats *stats = glass_renderer_get_stats (self->renderer);
+  double scale = gdk_surface_get_scale (gtk_native_get_surface (gtk_widget_get_native (widget)));
+  gint64 t0 = g_get_monotonic_time ();
+  g_autoptr (GArray) items = g_array_new (FALSE, TRUE, sizeof (Item));
+  g_autoptr (GArray) groups = g_array_new (FALSE, TRUE, sizeof (Group));
+  GskRenderNode *leaf;
+  float dx, dy;
+
+  /* 1. The visible panels, in the overlays' order then registration order
+   * (the stacking order), with everything read now (§5.3-2). */
+  for (guint o = 0; o < self->overlays->len; o++)
+    {
+      GtkWidget *overlay = g_ptr_array_index (self->overlays, o);
+
+      for (guint i = 0; i < self->entries->len; i++)
+        {
+          PanelEntry *entry = g_ptr_array_index (self->entries, i);
+          GtkWidget *panel = GTK_WIDGET (entry->panel);
+          Item item = { .entry = entry };
+
+          if (!(panel == overlay || gtk_widget_is_ancestor (panel, overlay)))
+            continue;
+          if (!gtk_widget_get_mapped (panel))
+            continue;
+          item.opacity = opacity_to (panel, widget);
+          if (item.opacity <= 0.0f)
+            continue;
+          if (!gtk_widget_compute_bounds (panel, widget, &item.P))
+            continue;
+          if (item.P.size.width < 1.0f || item.P.size.height < 1.0f)
+            continue;
+
+          glass_context_resolve (context, glass_panel_get_material (entry->panel), item.params);
+          glass_panel_get_tint_rgba (entry->panel, theme_bg, item.tint);
+          if (reduce)
+            adjust_for_reduce_transparency (item.params, item.tint);
+          if (!glass_capture_rect_for_panel (&item.P, item.params[GLASS_PARAM_BLUR_RADIUS],
+                                             view_rect, &item.C))
+            continue;
+
+          item.group = group_for (groups, &item);
+          g_array_append_val (items, item);
+        }
+    }
+
+  leaf = glass_unwrap_node (content_node, &dx, &dy);
+  glass_renderer_make_current (self->renderer);
+
+  /* 2. One capture per group, reused while nothing under it changed. */
+  while (self->captures->len < groups->len)
+    g_ptr_array_add (self->captures, glass_capture_new ());
+  while (self->captures->len > groups->len)
+    {
+      glass_capture_free (g_ptr_array_index (self->captures, self->captures->len - 1), self->renderer);
+      g_ptr_array_remove_index (self->captures, self->captures->len - 1);
+      glass_renderer_make_current (self->renderer);
+    }
+
+  for (guint g = 0; g < groups->len; g++)
+    {
+      Group *group = &g_array_index (groups, Group, g);
+      GlassCaptureRequest req = {
+        .backdrop = backdrop,
+        .content_key = leaf,
+        .key_dx = dx,
+        .key_dy = dy,
+        .key_extra = key_extra,
+        .rect = group->C,
+        .scale = scale,
+        .blur_radius = group->blur_radius,
+        .downscale = group->downscale,
+      };
+
+      glass_renderer_capture (self->renderer, g_ptr_array_index (self->captures, g), &req);
+    }
+
+  /* 3. Each panel's glass over its group's capture. */
+  for (guint i = 0; i < items->len; i++)
+    {
+      Item *item = &g_array_index (items, Item, i);
+      GlassCapture *capture = g_ptr_array_index (self->captures, item->group);
+      GlassRenderRequest req = {
+        .view_rect = *view_rect,
+        .panel = item->P,
+        .scale = scale,
+        .corner_radius = glass_panel_get_corner_radius (item->entry->panel),
+        .params = item->params,
+        .has_shadow = glass_panel_get_has_shadow (item->entry->panel),
+      };
+      GlassRenderResult res;
+
+      memcpy (req.tint, item->tint, sizeof req.tint);
+      if (!glass_renderer_render_panel (self->renderer, item->entry->render, capture, &req, &res))
+        continue;
+
+      if (item->opacity < 1.0f)
+        gtk_snapshot_push_opacity (snapshot, item->opacity);
+      gtk_snapshot_append_texture (snapshot, res.texture, &res.rect);
+      if (item->opacity < 1.0f)
+        gtk_snapshot_pop (snapshot);
+
+      /* Only stored here; the colours change before the next frame. */
+      if (glass_capture_is_fresh (capture) && glass_panel_uses_adaptive (item->entry->panel))
+        {
+          GlassLumaStats luma;
+
+          if (glass_capture_measure (capture, &item->P, item->tint, &luma))
+            glass_panel_push_luma (item->entry->panel, &luma);
+        }
+    }
+
+  stats->snapshots++;
+  stats->us_total += g_get_monotonic_time () - t0;
+}
+
+static void
+draw_hud (GlassView *self, GtkSnapshot *snapshot)
+{
+  GlassRenderStats *s;
+  gint64 now = g_get_monotonic_time ();
+  PangoLayout *layout;
+  GdkRGBA bg = { 0, 0, 0, 0.6f }, fg = { 1, 1, 1, 1 };
+  int w, h;
+
+  if (self->renderer == NULL)
+    return;
+  s = glass_renderer_get_stats (self->renderer);
+
+  if (self->hud_text == NULL || now - self->hud_last_us > G_USEC_PER_SEC)
+    {
+      double secs = self->hud_last_us ? (now - self->hud_last_us) / (double) G_USEC_PER_SEC : 1.0;
+      guint captures = MAX (s->captures, 1);
+
+      g_free (self->hud_text);
+      self->hud_text = g_strdup_printf (
+        "%s\n%.0f snapshots/s · glass %.2f ms/snapshot\n"
+        "captures %u (hits %u) · passes %u (hits %u)\n"
+        "per capture: render %.2f · download %.2f · upload %.2f ms",
+        glass_renderer_get_info (self->renderer),
+        s->snapshots / secs, s->snapshots ? s->us_total / 1000.0 / s->snapshots : 0.0,
+        s->captures, s->capture_hits, s->passes, s->pass_hits,
+        s->us_render_texture / 1000.0 / captures, s->us_download / 1000.0 / captures,
+        s->us_upload / 1000.0 / captures);
+      g_debug ("hud: %s", self->hud_text);
+      memset (s, 0, sizeof *s);
+      self->hud_last_us = now;
+    }
+
+  layout = gtk_widget_create_pango_layout (GTK_WIDGET (self), self->hud_text);
+  pango_layout_get_pixel_size (layout, &w, &h);
+  gtk_snapshot_append_color (snapshot, &bg, &GRAPHENE_RECT_INIT (8, 8, w + 12, h + 8));
+  gtk_snapshot_save (snapshot);
+  gtk_snapshot_translate (snapshot, &GRAPHENE_POINT_INIT (14, 12));
+  gtk_snapshot_append_layout (snapshot, layout, &fg);
+  gtk_snapshot_restore (snapshot);
+  g_object_unref (layout);
+}
+
+static guint
+hash_backdrop (GlassView *self, const GdkRGBA *bg, float w, float h)
+{
+  guint hash = gdk_rgba_hash (bg);
+
+  hash = hash * 31 + (guint) (w * 4.0f);
+  hash = hash * 31 + (guint) (h * 4.0f);
+  for (int i = 0; i < 2; i++)
+    hash = hash * 31 + (guint) self->edges[i].style * 4099 + (guint) self->edges[i].size;
+  return hash;
+}
+
+static void
+glass_view_snapshot (GtkWidget   *widget,
+                     GtkSnapshot *snapshot)
+{
+  GlassView *self = GLASS_VIEW (widget);
+  float width = gtk_widget_get_width (widget);
+  float height = gtk_widget_get_height (widget);
+  graphene_rect_t view_rect = GRAPHENE_RECT_INIT (0, 0, width, height);
+  GskRenderNode *content_node = NULL;
+  GskRenderNode *nodes[4];
+  GskRenderNode *backdrop;
+  GdkRGBA bg, theme_bg;
+  int n_nodes = 0;
+
+  resolve_backdrop_color (self, &bg);
+  gtk_widget_get_color (self->backdrop_node, &theme_bg);
+
+  /* 1. Backdrop colour + content + edge effects: what the glass sees, and
+   * what is on screen. Transparent parts of the content would otherwise
+   * capture as transparent and darken the glass (§7.3). */
+  if (self->content)
+    {
+      GtkSnapshot *content_snapshot = gtk_snapshot_new ();
+
+      gtk_widget_snapshot_child (widget, self->content, content_snapshot);
+      content_node = gtk_snapshot_free_to_node (content_snapshot);
+    }
+
+  if (bg.alpha > 0.0f)
+    nodes[n_nodes++] = gsk_color_node_new (&bg, &view_rect);
+  if (content_node)
+    {
+      nodes[n_nodes++] = gsk_render_node_ref (content_node);
+      for (int i = 0; i < 2; i++)
+        {
+          GskRenderNode *edge = edge_node (self, content_node, &self->edges[i], i == 0,
+                                           width, height, &theme_bg);
+          if (edge)
+            nodes[n_nodes++] = edge;
+        }
+    }
+  backdrop = gsk_container_node_new (nodes, n_nodes);
+  gtk_snapshot_append_node (snapshot, backdrop);
+
+  /* 2. The glass bodies. */
+  if (self->full && self->renderer && self->entries->len > 0)
+    draw_panels (self, snapshot, backdrop, content_node,
+                 hash_backdrop (self, &bg, width, height), &view_rect, &theme_bg);
+
+  /* 3. Overlay children: the panels' foreground. */
+  for (guint i = 0; i < self->overlays->len; i++)
+    gtk_widget_snapshot_child (widget, g_ptr_array_index (self->overlays, i), snapshot);
+
+  if (glass_get_debug_flags () & GLASS_DEBUG_HUD)
+    draw_hud (self, snapshot);
+
+  for (int i = 0; i < n_nodes; i++)
+    gsk_render_node_unref (nodes[i]);
+  g_clear_pointer (&content_node, gsk_render_node_unref);
+  gsk_render_node_unref (backdrop);
+}
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
+
+static void
+glass_view_measure (GtkWidget      *widget,
+                    GtkOrientation  orientation,
+                    int             for_size,
+                    int            *minimum,
+                    int            *natural,
+                    int            *minimum_baseline,
+                    int            *natural_baseline)
+{
+  GlassView *self = GLASS_VIEW (widget);
+
+  *minimum = *natural = 0;
+  if (self->content && gtk_widget_should_layout (self->content))
+    gtk_widget_measure (self->content, orientation, for_size, minimum, natural, NULL, NULL);
+
+  /* Overlays count for the minimum only, like GtkOverlay's measured children
+   * do not: the view must be able to hold them. */
+  for (guint i = 0; i < self->overlays->len; i++)
+    {
+      GtkWidget *child = g_ptr_array_index (self->overlays, i);
+      int child_min = 0;
+
+      if (!gtk_widget_should_layout (child))
+        continue;
+      gtk_widget_measure (child, orientation, -1, &child_min, NULL, NULL, NULL);
+      *minimum = MAX (*minimum, child_min);
+      *natural = MAX (*natural, *minimum);
+    }
+}
+
+/* GtkOverlay's rule: the content fills the view, and each overlay child is
+ * given the whole view and places itself by its own halign / valign /
+ * margins (gtk_widget_allocate() applies them). */
+static void
+glass_view_size_allocate (GtkWidget *widget,
+                          int        width,
+                          int        height,
+                          int        baseline)
+{
+  GlassView *self = GLASS_VIEW (widget);
+
+  if (self->content && gtk_widget_should_layout (self->content))
+    gtk_widget_allocate (self->content, width, height, baseline, NULL);
+
+  for (guint i = 0; i < self->overlays->len; i++)
+    {
+      GtkWidget *child = g_ptr_array_index (self->overlays, i);
+      graphene_point_t *offset;
+      GskTransform *transform = NULL;
+
+      if (!gtk_widget_should_layout (child))
+        continue;
+      offset = g_hash_table_lookup (self->offsets, child);
+      if (offset && (offset->x != 0.0f || offset->y != 0.0f))
+        transform = gsk_transform_translate (NULL, offset);
+      gtk_widget_allocate (child, width, height, -1, transform);
+    }
+
+  gtk_widget_allocate (self->backdrop_node, 0, 0, -1, NULL);
+}
+
+void
+glass_view_set_overlay_offset (GlassView *self,
+                               GtkWidget *overlay,
+                               double     dx,
+                               double     dy)
+{
+  graphene_point_t *offset = g_hash_table_lookup (self->offsets, overlay);
+
+  if (offset == NULL)
+    {
+      offset = g_new0 (graphene_point_t, 1);
+      g_hash_table_insert (self->offsets, overlay, offset);
+    }
+  if (offset->x == (float) dx && offset->y == (float) dy)
+    return;
+  offset->x = (float) dx;
+  offset->y = (float) dy;
+  gtk_widget_queue_allocate (GTK_WIDGET (self));
+}
+
+static void
+glass_view_css_changed (GtkWidget         *widget,
+                        GtkCssStyleChange *change)
+{
+  GTK_WIDGET_CLASS (glass_view_parent_class)->css_changed (widget, change);
+  gtk_widget_queue_draw (widget);
+}
+
+static void
+glass_view_root (GtkWidget *widget)
+{
+  GTK_WIDGET_CLASS (glass_view_parent_class)->root (widget);
+  glass_style_ensure (gtk_widget_get_display (widget));
+}
+
+/* ── GObject ──────────────────────────────────────────────────────────────── */
+
+static void
+glass_view_dispose (GObject *object)
+{
+  GlassView *self = GLASS_VIEW (object);
+
+  release_renderer (self);
+  for (guint i = 0; i < self->captures->len; i++)
+    glass_capture_free (g_ptr_array_index (self->captures, i), NULL);
+  g_ptr_array_set_size (self->captures, 0);
+  while (self->entries->len > 0)
+    {
+      PanelEntry *entry = g_ptr_array_index (self->entries, self->entries->len - 1);
+
+      g_ptr_array_remove_index (self->entries, self->entries->len - 1);
+      glass_panel_set_mode (entry->panel, GLASS_PANEL_MODE_NONE);
+      entry_free (entry, NULL);
+    }
+  g_clear_pointer (&self->content, gtk_widget_unparent);
+  for (guint i = 0; i < self->overlays->len; i++)
+    gtk_widget_unparent (g_ptr_array_index (self->overlays, i));
+  g_ptr_array_set_size (self->overlays, 0);
+  g_clear_pointer (&self->backdrop_node, gtk_widget_unparent);
+
+  G_OBJECT_CLASS (glass_view_parent_class)->dispose (object);
+}
+
+static void
+glass_view_finalize (GObject *object)
+{
+  GlassView *self = GLASS_VIEW (object);
+
+  g_ptr_array_unref (self->entries);
+  g_ptr_array_unref (self->captures);
+  g_ptr_array_unref (self->overlays);
+  g_hash_table_unref (self->offsets);
+  g_free (self->hud_text);
+
+  G_OBJECT_CLASS (glass_view_parent_class)->finalize (object);
+}
+
+static void
+glass_view_get_property (GObject    *object,
+                         guint       prop_id,
+                         GValue     *value,
+                         GParamSpec *pspec)
+{
+  GlassView *self = GLASS_VIEW (object);
+
+  switch (prop_id)
+    {
+    case PROP_CONTENT:
+      g_value_set_object (value, self->content);
+      break;
+    case PROP_BACKDROP_COLOR:
+      g_value_set_boxed (value, self->backdrop_color_set ? &self->backdrop_color : NULL);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+    }
+}
+
+static void
+glass_view_set_property (GObject      *object,
+                         guint         prop_id,
+                         const GValue *value,
+                         GParamSpec   *pspec)
+{
+  GlassView *self = GLASS_VIEW (object);
+
+  switch (prop_id)
+    {
+    case PROP_CONTENT:
+      glass_view_set_content (self, g_value_get_object (value));
+      break;
+    case PROP_BACKDROP_COLOR:
+      glass_view_set_backdrop_color (self, g_value_get_boxed (value));
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+    }
+}
+
+static void
+glass_view_class_init (GlassViewClass *klass)
+{
+  GObjectClass *object_class = G_OBJECT_CLASS (klass);
+  GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
+
+  object_class->dispose = glass_view_dispose;
+  object_class->finalize = glass_view_finalize;
+  object_class->get_property = glass_view_get_property;
+  object_class->set_property = glass_view_set_property;
+
+  widget_class->snapshot = glass_view_snapshot;
+  widget_class->measure = glass_view_measure;
+  widget_class->size_allocate = glass_view_size_allocate;
+  widget_class->realize = glass_view_realize;
+  widget_class->unrealize = glass_view_unrealize;
+  widget_class->css_changed = glass_view_css_changed;
+  widget_class->root = glass_view_root;
+
+  /**
+   * GlassView:content:
+   *
+   * The widget the glass is drawn over. It fills the view.
+   */
+  props[PROP_CONTENT] =
+    g_param_spec_object ("content", NULL, NULL, GTK_TYPE_WIDGET,
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * GlassView:backdrop-color:
+   *
+   * The colour painted under the content, which the glass sees where the
+   * content is transparent. %NULL (the default) is the window background
+   * (`--window-bg-color`), or nothing inside a [class@Panel].
+   */
+  props[PROP_BACKDROP_COLOR] =
+    g_param_spec_boxed ("backdrop-color", NULL, NULL, GDK_TYPE_RGBA,
+                        G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
+  g_object_class_install_properties (object_class, N_PROPS, props);
+
+  gtk_widget_class_set_css_name (widget_class, "glassview");
+}
+
+static void
+glass_view_init (GlassView *self)
+{
+  self->overlays = g_ptr_array_new ();
+  self->entries = g_ptr_array_new ();
+  self->captures = g_ptr_array_new ();
+  self->offsets = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+
+  /* A never-drawn node whose CSS colour is var(--window-bg-color) (glass.css):
+   * the theme's window background, resolved by GTK (C1). */
+  self->backdrop_node = glass_style_node_new ("backdrop");
+  gtk_widget_set_parent (self->backdrop_node, GTK_WIDGET (self));
+
+  gtk_widget_set_overflow (GTK_WIDGET (self), GTK_OVERFLOW_HIDDEN);
+  self->full = TRUE;
+
+  g_signal_connect_object (glass_context_get_default (), "changed",
+                           G_CALLBACK (context_changed), self, 0);
+}
+
+/* ── Buildable ────────────────────────────────────────────────────────────── */
+
+static void
+glass_view_buildable_add_child (GtkBuildable *buildable,
+                                GtkBuilder   *builder,
+                                GObject      *child,
+                                const char   *type)
+{
+  GlassView *self = GLASS_VIEW (buildable);
+
+  if (GTK_IS_WIDGET (child) && g_strcmp0 (type, "overlay") == 0)
+    glass_view_add_overlay (self, GTK_WIDGET (child));
+  else if (GTK_IS_WIDGET (child) && type == NULL)
+    glass_view_set_content (self, GTK_WIDGET (child));
+  else
+    parent_buildable_iface->add_child (buildable, builder, child, type);
+}
+
+static void
+glass_view_buildable_init (GtkBuildableIface *iface)
+{
+  parent_buildable_iface = g_type_interface_peek_parent (iface);
+  iface->add_child = glass_view_buildable_add_child;
+}
+
+/* ── Public API ───────────────────────────────────────────────────────────── */
+
+/**
+ * glass_view_new:
+ *
+ * Returns: a new view
+ */
+GtkWidget *
+glass_view_new (void)
+{
+  return g_object_new (GLASS_TYPE_VIEW, NULL);
+}
+
+/**
+ * glass_view_get_content:
+ * @self: a view
+ *
+ * Returns: (transfer none) (nullable): the content
+ */
+GtkWidget *
+glass_view_get_content (GlassView *self)
+{
+  g_return_val_if_fail (GLASS_IS_VIEW (self), NULL);
+
+  return self->content;
+}
+
+/**
+ * glass_view_set_content:
+ * @self: a view
+ * @content: (nullable): the widget the glass is drawn over
+ *
+ * Sets the content.
+ */
+void
+glass_view_set_content (GlassView *self,
+                        GtkWidget *content)
+{
+  g_return_if_fail (GLASS_IS_VIEW (self));
+  g_return_if_fail (content == NULL || GTK_IS_WIDGET (content));
+
+  if (self->content == content)
+    return;
+
+  g_clear_pointer (&self->content, gtk_widget_unparent);
+  if (content)
+    {
+      self->content = content;
+      gtk_widget_insert_after (content, GTK_WIDGET (self), self->backdrop_node);
+    }
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_CONTENT]);
+}
+
+/**
+ * glass_view_add_overlay:
+ * @self: a view
+ * @widget: a widget; the [class@Panel]s in it are drawn as glass
+ *
+ * Adds an overlay child, above the ones added before.
+ */
+void
+glass_view_add_overlay (GlassView *self,
+                        GtkWidget *widget)
+{
+  g_return_if_fail (GLASS_IS_VIEW (self));
+  g_return_if_fail (GTK_IS_WIDGET (widget));
+  g_return_if_fail (gtk_widget_get_parent (widget) == NULL);
+
+  g_ptr_array_add (self->overlays, widget);
+  gtk_widget_set_parent (widget, GTK_WIDGET (self));
+}
+
+/**
+ * glass_view_remove_overlay:
+ * @self: a view
+ * @widget: an overlay child
+ *
+ * Removes an overlay child.
+ */
+void
+glass_view_remove_overlay (GlassView *self,
+                           GtkWidget *widget)
+{
+  g_return_if_fail (GLASS_IS_VIEW (self));
+
+  if (!g_ptr_array_remove (self->overlays, widget))
+    {
+      g_critical ("glass_view_remove_overlay: not an overlay child");
+      return;
+    }
+  g_hash_table_remove (self->offsets, widget);
+  gtk_widget_unparent (widget);
+}
+
+/**
+ * glass_view_set_backdrop_color:
+ * @self: a view
+ * @color: (nullable): the colour, or %NULL for the window background
+ *
+ * Sets [property@View:backdrop-color].
+ */
+void
+glass_view_set_backdrop_color (GlassView     *self,
+                               const GdkRGBA *color)
+{
+  g_return_if_fail (GLASS_IS_VIEW (self));
+
+  if (color == NULL && !self->backdrop_color_set)
+    return;
+  self->backdrop_color_set = color != NULL;
+  if (color)
+    self->backdrop_color = *color;
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_BACKDROP_COLOR]);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+/**
+ * glass_view_get_backdrop_color:
+ * @self: a view
+ * @color: (out): the colour in use
+ *
+ * Returns: %TRUE if the colour was set with
+ *   [method@View.set_backdrop_color], %FALSE if it is automatic
+ */
+gboolean
+glass_view_get_backdrop_color (GlassView *self,
+                               GdkRGBA   *color)
+{
+  g_return_val_if_fail (GLASS_IS_VIEW (self), FALSE);
+
+  resolve_backdrop_color (self, color);
+  return self->backdrop_color_set;
+}
+
+/**
+ * glass_view_get_active_renderer:
+ * @self: a view
+ *
+ * Returns: %GLASS_RENDERER_MODE_FULL or %GLASS_RENDERER_MODE_FALLBACK: how
+ *   this view's glass is drawn right now
+ */
+GlassRendererMode
+glass_view_get_active_renderer (GlassView *self)
+{
+  g_return_val_if_fail (GLASS_IS_VIEW (self), GLASS_RENDERER_MODE_FALLBACK);
+
+  return self->full ? GLASS_RENDERER_MODE_FULL : GLASS_RENDERER_MODE_FALLBACK;
+}

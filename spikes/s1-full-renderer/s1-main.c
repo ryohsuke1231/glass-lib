@@ -5,7 +5,7 @@
  *        D      debug view 0/1/2      A  autoscroll on/off
  *        S      supersampling on/off  H  in-app / extension shadow
  *        R      shader core / reference shader
- *        E      edge preset: crisp -> crisp-strong -> crisp-soft -> thinner -> extension
+ *        E      edge preset: crisp-soft -> crisp -> crisp-strong -> thinner -> extension
  *        F      measured / estimated (reference) lens footprint
  *        B      blur radius 2 -> 3 -> 4 -> 5 px
  *
@@ -21,7 +21,7 @@ static gboolean opt_no_cache;
 static gboolean opt_private_renderer;
 static gboolean opt_autoscroll;
 static gboolean opt_no_glass;
-static double   opt_blur_radius = 3.0;
+static double   opt_blur_radius = 2.0;
 static int      opt_downscale = 2;
 static int      opt_debug_view;
 static double   opt_quit_after;
@@ -48,8 +48,8 @@ static const GOptionEntry entries[] = {
   { "no-cache", 0, 0, G_OPTION_ARG_NONE, &opt_no_cache, "Re-capture and re-draw the glass on every snapshot", NULL },
   { "private-renderer", 0, 0, G_OPTION_ARG_NONE, &opt_private_renderer, "Capture with a dedicated GskRenderer instead of the window's", NULL },
   { "no-glass", 0, 0, G_OPTION_ARG_NONE, &opt_no_glass, "Start with the glass switched off", NULL },
-  { "blur-radius", 0, 0, G_OPTION_ARG_DOUBLE, &opt_blur_radius, "Blur radius in px (default 3; the extension's dock uses 5)", "PX" },
-  { "preset", 0, 0, G_OPTION_ARG_STRING, &opt_preset, "Edge preset: crisp (default), crisp-strong, crisp-soft, thinner, or extension (the extension's values)", "NAME" },
+  { "blur-radius", 0, 0, G_OPTION_ARG_DOUBLE, &opt_blur_radius, "Blur radius in px (default 2; the extension's dock uses 5)", "PX" },
+  { "preset", 0, 0, G_OPTION_ARG_STRING, &opt_preset, "Edge preset: crisp-soft (default), crisp, crisp-strong, thinner, or extension (the extension's values)", "NAME" },
   { "param", 0, 0, G_OPTION_ARG_STRING_ARRAY, &opt_params, "Override an optical parameter, e.g. --param rim_width=2.5 (repeatable)", "NAME=VALUE" },
   { "reference", 0, 0, G_OPTION_ARG_NONE, &opt_reference, "Draw with the unmodified reference glass.frag instead of the shader core", NULL },
   { "no-supersample", 0, 0, G_OPTION_ARG_NONE, &opt_no_supersample, "One glass.frag sample per pixel (the extension's sampling)", NULL },
@@ -675,11 +675,11 @@ on_activate (GtkApplication *app, gpointer data)
   opts->rim_samples = opt_rim_samples;
   opts->measured_footprint = !opt_estimated_footprint;
   opts->use_reference = opt_reference;
-  s->preset = opt_preset ? opt_preset : "crisp";
+  s->preset = opt_preset ? opt_preset : "crisp-soft";
   if (!s1_glass_view_apply_preset (s->view, s->preset))
     {
-      g_printerr ("[s1] unknown --preset %s, using crisp\n", s->preset);
-      s->preset = "crisp";
+      g_printerr ("[s1] unknown --preset %s, using crisp-soft\n", s->preset);
+      s->preset = "crisp-soft";
       s1_glass_view_apply_preset (s->view, s->preset);
     }
   for (int i = 0; opt_params && opt_params[i]; i++)

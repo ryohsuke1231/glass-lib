@@ -7,6 +7,7 @@
 # demo (TypeScript / npm)
 node_modules/
 /demo/dist/
+/demo/types/
 
 # editors
 .idea/
