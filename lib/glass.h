@@ -20,5 +20,12 @@
 #include "glass-split-view.h"
 #include "glass-toggle-group.h"
 #include "glass-button.h"
+#include "glass-button-group.h"
+#include "glass-switch.h"
+#include "glass-slider.h"
+#include "glass-group.h"
+#include "glass-popover.h"
+#include "glass-menu-button.h"
+#include "glass-dialog.h"
 
 #undef GLASS_INSIDE

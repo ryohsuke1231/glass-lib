@@ -40,12 +40,25 @@ vec2 getDisplacement(float d, vec3 normal, vec2 resolution) {
 // the lens ramp and capped at the lens reach. Mirrors the main path of
 // glass_shade() step for step; used only to measure the footprint
 // (lens_footprint_px > 0), so the reference path does not go through it.
-vec2 lensDisplacementPx(vec2 local_pos, vec2 box_size, vec2 resolution) {
-    float d = sdRoundRect(local_pos, box_size, corner_radius);
-    vec3 normal = getNormal(heightGradient(local_pos, box_size, corner_radius, max_z));
+// box_center turns local_pos back into surface px for fused shapes.
+vec2 lensDisplacementPx(vec2 local_pos, vec2 box_size, vec2 box_center, vec2 resolution) {
+    float d;
+    vec3 normal;
+    float bevelPx;
+
+    if (glass_shape_count > 0.5) {
+        float r;
+        vec2 p = local_pos + box_center;
+        d = fusedSD(p, r);
+        normal = getNormal(heightGradientFused(p, max_z));
+        bevelPx = max(r, 1.0);
+    } else {
+        d = sdRoundRect(local_pos, box_size, corner_radius);
+        normal = getNormal(heightGradient(local_pos, box_size, corner_radius, max_z));
+        bevelPx = max(min(corner_radius, min(box_size.x, box_size.y)), 1.0);
+    }
     vec2 disp = getDisplacement(d, normal, resolution);
 
-    float bevelPx = max(min(corner_radius, min(box_size.x, box_size.y)), 1.0);
     float edgeT = clamp(1.0 - max(-d, 0.0) / bevelPx, 0.0, 1.0);
     vec2 dispPx = disp * resolution * pow(edgeT, EDGE_LENS_FALLOFF);
 
@@ -159,6 +172,38 @@ vec3 sampleBackdropPath(vec2 uvc, vec2 p0, vec2 p1, vec2 p2, vec2 p3, vec2 p4,
                 break;
             seg += GLASS_SAMPLE(blurUV(uvc + mix(a, b, (float(i) + 0.5) / n) + o * texel,
                                        resolution)).rgb;
+            o = vec2(-o.y, o.x);
+        }
+        sum += seg / n;
+    }
+    return sum * 0.25;
+}
+
+// sampleBackdropPath() with chromatic aberration: the red, green and blue
+// channels of three paths that differ only in where they start (uvR, uvG,
+// uvB). Channel for channel the same sums as three calls, taken in one walk:
+// the path, its tap counts and offsets are worked out once instead of three
+// times (docs/memo.md 追記7).
+vec3 sampleBackdropPathRGB(vec2 uvR, vec2 uvG, vec2 uvB,
+                           vec2 p0, vec2 p1, vec2 p2, vec2 p3, vec2 p4,
+                           vec2 texel, vec2 resolution, float texelPx) {
+    vec2 o = vec2(0.375, -0.125);
+    vec3 sum = vec3(0.0);
+
+    for (int k = 0; k < 4; k++) {
+        vec2 a = (k == 0) ? p0 : ((k == 1) ? p1 : ((k == 2) ? p2 : p3));
+        vec2 b = (k == 0) ? p1 : ((k == 1) ? p2 : ((k == 2) ? p3 : p4));
+        float n = clamp(ceil(length((b - a) * resolution) / (LENS_PATH_TAP_TEXELS * texelPx)),
+                        1.0, float(LENS_SEGMENT_MAX_TAPS));
+        vec3 seg = vec3(0.0);
+
+        for (int i = 0; i < LENS_SEGMENT_MAX_TAPS; i++) {
+            if (float(i) >= n)
+                break;
+            vec2 step = mix(a, b, (float(i) + 0.5) / n) + o * texel;
+            seg.r += GLASS_SAMPLE(blurUV(uvR + step, resolution)).r;
+            seg.g += GLASS_SAMPLE(blurUV(uvG + step, resolution)).g;
+            seg.b += GLASS_SAMPLE(blurUV(uvB + step, resolution)).b;
             o = vec2(-o.y, o.x);
         }
         sum += seg / n;

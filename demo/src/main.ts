@@ -4,9 +4,9 @@
 //   meson devenv -C build gjs -m demo/dist/main.js
 //
 // Environment (for comparisons and screenshots):
-//   GLASS_GALLERY_PAGE=photos|playground|lab   the page to start on
+//   GLASS_GALLERY_PAGE=photos|playground|controls|lab   the page to start on
 //   GLASS_GALLERY_SCROLL=PX                    the Photos page's scroll position
-//   GLASS_GALLERY_PATTERN=stripes|checker|...  the Playground's background
+//   GLASS_GALLERY_PATTERN=stripes|checker|...  the background of Playground, Controls and Lab
 //   GLASS_GALLERY_AUTOSCROLL=1                 scroll the photos forever (measurements)
 //   GLASS_GALLERY_SCREENSHOT=file.png          render the window, then quit
 //   GLASS_DEBUG=hud                            timings in each view's corner
@@ -19,6 +19,7 @@ import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 import System from 'system';
 
+import { ControlsPage } from './pages/controls.js';
 import { LabPage } from './pages/lab.js';
 import { PhotosPage } from './pages/photos.js';
 import { PlaygroundPage } from './pages/playground.js';
@@ -27,6 +28,7 @@ import { maybeScreenshot, Pattern } from './util.js';
 const PAGES: [string, string, string][] = [
     ['photos', 'Photos', 'image-x-generic-symbolic'],
     ['playground', 'Playground', 'input-mouse-symbolic'],
+    ['controls', 'Controls', 'emblem-system-symbolic'],
     ['lab', 'Lab', 'preferences-other-symbolic'],
 ];
 
@@ -38,8 +40,9 @@ function buildWindow(app: Adw.Application) {
 
     const photos = new PhotosPage();
     const playground = new PlaygroundPage();
+    const controls = new ControlsPage();
     const lab = new LabPage();
-    const pages = { photos, playground, lab };
+    const pages = { photos, playground, controls, lab };
 
     const stack = new Gtk.Stack({ transition_type: Gtk.StackTransitionType.CROSSFADE, hexpand: true, vexpand: true });
     for (const [name, title] of PAGES)
@@ -72,7 +75,7 @@ function buildWindow(app: Adw.Application) {
 
     // Each page's header: its window controls and a "show sidebar" button
     // appear when the sidebar (which has the controls) slides away.
-    for (const page of [photos, playground, lab]) {
+    for (const page of [photos, playground, controls, lab]) {
         page.setInsetSource(split);
         const show = new Gtk.Button({ icon_name: 'sidebar-show-symbolic', tooltip_text: 'Show the sidebar' });
         show.connect('clicked', () => split.set_show_sidebar(true));
@@ -91,7 +94,7 @@ function buildWindow(app: Adw.Application) {
 
     const pattern = GLib.getenv('GLASS_GALLERY_PATTERN');
     if (pattern)
-        playground.setPattern(pattern as Pattern);
+        [playground, controls, lab].forEach(p => p.setPattern(pattern as Pattern));
 
     window.present();
 

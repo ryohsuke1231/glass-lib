@@ -1,13 +1,16 @@
 /* glass-toggle-group.c — a segmented control on glass (design.md §6.6).
  *
- * A capsule of glass holding a row of buttons, one of them active. A light
- * rounded plate slides under the active one. The plate is not glass: glass
- * over glass needs the layered drawing of v2 (design.md §19).
+ * A capsule of glass holding a row of buttons, one of them active. Under the
+ * active one lies a plate that is glass on the glass (a nested GlassPanel,
+ * drawn by the view in a later layer, design.md §6.7): it slides to the
+ * toggle that becomes active, and swells like a lens while the group is
+ * pressed.
  *
  * The buttons are plain GtkButtons marked with the style class `.active`,
  * not GtkToggleButtons: a theme's `button:checked` background (even one in
  * ~/.config/gtk-4.0/gtk.css, at USER priority, which nothing can override)
- * would otherwise cover the plate (docs/memo.md 地雷12).
+ * would otherwise cover the plate (docs/memo.md 地雷12). Each is drawn
+ * inside a pill (GlassPillBox), so its hover background is round.
  *
  * SPDX-License-Identifier: MIT
  */
@@ -19,20 +22,23 @@
  * GlassToggleGroup:
  *
  * The glass counterpart of `AdwToggleGroup`: a row of toggles on a glass
- * capsule, one of them active, marked by a plate that slides to it.
+ * capsule, one of them active, marked by a plate of glass that slides to
+ * it and swells while the group is pressed.
  *
  * ## CSS nodes
  *
  * `GlassToggleGroup` is a [class@Panel] (CSS name `glasspanel`) with the
- * style class `.toggle-group`. The plate's colour is the `color` of its
- * never-drawn child node `pill`.
+ * style class `.toggle-group`. The plate is a [class@Panel] with the style
+ * class `.toggle-plate`; its tint is the `color` of the never-drawn child
+ * node `pill`.
  */
 
 struct _GlassToggleGroup {
   GlassPanel      parent_instance;
 
   GtkWidget      *box;
-  GtkWidget      *pill_node;
+  GtkWidget      *plate;           /* GlassPanel, glass on our glass */
+  GtkWidget      *pill_node;       /* resolves the plate's tint from CSS */
   GPtrArray      *buttons;         /* GtkButton* */
   GPtrArray      *names;           /* char* */
   guint           active;
@@ -41,7 +47,7 @@ struct _GlassToggleGroup {
   double          progress;
   graphene_rect_t from;            /* the plate where the animation started */
   gboolean        have_from;
-  graphene_rect_t shown;           /* the plate as last drawn */
+  graphene_rect_t shown;           /* the plate as last allocated */
 };
 
 enum {
@@ -68,33 +74,12 @@ active_rect (GlassToggleGroup *self, graphene_rect_t *out)
 }
 
 static void
-glass_toggle_group_snapshot (GtkWidget   *widget,
-                             GtkSnapshot *snapshot)
+update_plate_tint (GlassToggleGroup *self)
 {
-  GlassToggleGroup *self = GLASS_TOGGLE_GROUP (widget);
-  graphene_rect_t target, plate;
-  GskRoundedRect rounded;
   GdkRGBA color;
 
-  if (active_rect (self, &target))
-    {
-      /* Followed every frame, so the plate stays under the button through
-       * relayouts; interpolated from where it was while it slides. */
-      if (self->have_from && self->progress < 1.0)
-        graphene_rect_interpolate (&self->from, &target, self->progress, &plate);
-      else
-        plate = target;
-      self->shown = plate;
-
-      gtk_widget_get_color (self->pill_node, &color);
-      gsk_rounded_rect_init_from_rect (&rounded, &plate, MIN (plate.size.width, plate.size.height) / 2.0f);
-      gtk_snapshot_push_rounded_clip (snapshot, &rounded);
-      gtk_snapshot_append_color (snapshot, &color, &plate);
-      gtk_snapshot_pop (snapshot);
-    }
-
-  /* Not the pill node: it only carries the colour. */
-  gtk_widget_snapshot_child (widget, self->box, snapshot);
+  gtk_widget_get_color (self->pill_node, &color);
+  glass_panel_set_tint (GLASS_PANEL (self->plate), &color);
 }
 
 static void
@@ -104,9 +89,44 @@ glass_toggle_group_size_allocate (GtkWidget *widget,
                                   int        baseline)
 {
   GlassToggleGroup *self = GLASS_TOGGLE_GROUP (widget);
+  graphene_rect_t target, plate;
 
   GTK_WIDGET_CLASS (glass_toggle_group_parent_class)->size_allocate (widget, width, height, baseline);
   gtk_widget_allocate (self->pill_node, 0, 0, -1, NULL);
+
+  /* The buttons are placed now; the plate follows the active one, from
+   * where it was while it slides. */
+  if (!active_rect (self, &target))
+    {
+      gtk_widget_set_child_visible (self->plate, FALSE);
+      return;
+    }
+  if (self->have_from && self->progress < 1.0)
+    graphene_rect_interpolate (&self->from, &target, self->progress, &plate);
+  else
+    plate = target;
+  self->shown = plate;
+
+  gtk_widget_set_child_visible (self->plate, TRUE);
+  gtk_widget_size_allocate (self->plate,
+                            &(GtkAllocation) { (int) roundf (plate.origin.x), (int) roundf (plate.origin.y),
+                                               (int) roundf (plate.size.width), (int) roundf (plate.size.height) },
+                            -1);
+}
+
+static void
+glass_toggle_group_css_changed (GtkWidget         *widget,
+                                GtkCssStyleChange *change)
+{
+  GTK_WIDGET_CLASS (glass_toggle_group_parent_class)->css_changed (widget, change);
+  update_plate_tint (GLASS_TOGGLE_GROUP (widget));
+}
+
+static void
+glass_toggle_group_root (GtkWidget *widget)
+{
+  GTK_WIDGET_CLASS (glass_toggle_group_parent_class)->root (widget);
+  update_plate_tint (GLASS_TOGGLE_GROUP (widget));
 }
 
 static void
@@ -115,7 +135,7 @@ animation_value (double value, gpointer data)
   GlassToggleGroup *self = data;
 
   self->progress = value;
-  gtk_widget_queue_draw (GTK_WIDGET (self));
+  gtk_widget_queue_allocate (GTK_WIDGET (self));
 }
 
 static void
@@ -150,7 +170,7 @@ set_active_internal (GlassToggleGroup *self, guint active, gboolean animate)
       adw_animation_reset (self->animation);
       adw_animation_play (self->animation);
     }
-  gtk_widget_queue_draw (GTK_WIDGET (self));
+  gtk_widget_queue_allocate (GTK_WIDGET (self));
 
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ACTIVE]);
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ACTIVE_NAME]);
@@ -166,6 +186,31 @@ button_clicked (GtkButton        *button,
     set_active_internal (self, index, TRUE);
 }
 
+/* The plate lies under the buttons, so it never sees the press: the group
+ * watches it (in the capture phase, without taking it) for the plate. */
+static gboolean
+press_event (GtkEventControllerLegacy *controller,
+             GdkEvent                 *event,
+             GlassToggleGroup         *self)
+{
+  switch ((int) gdk_event_get_event_type (event))
+    {
+    case GDK_BUTTON_PRESS:
+    case GDK_TOUCH_BEGIN:
+      glass_panel_set_pressed (GLASS_PANEL (self->plate), TRUE);
+      break;
+    case GDK_BUTTON_RELEASE:
+    case GDK_TOUCH_END:
+    case GDK_TOUCH_CANCEL:
+    case GDK_GRAB_BROKEN:
+      glass_panel_set_pressed (GLASS_PANEL (self->plate), FALSE);
+      break;
+    default:
+      break;
+    }
+  return GDK_EVENT_PROPAGATE;
+}
+
 static void
 glass_toggle_group_dispose (GObject *object)
 {
@@ -173,6 +218,7 @@ glass_toggle_group_dispose (GObject *object)
 
   g_clear_object (&self->animation);
   g_clear_pointer (&self->pill_node, gtk_widget_unparent);
+  g_clear_pointer (&self->plate, gtk_widget_unparent);
 
   G_OBJECT_CLASS (glass_toggle_group_parent_class)->dispose (object);
 }
@@ -244,8 +290,9 @@ glass_toggle_group_class_init (GlassToggleGroupClass *klass)
   object_class->get_property = glass_toggle_group_get_property;
   object_class->set_property = glass_toggle_group_set_property;
 
-  widget_class->snapshot = glass_toggle_group_snapshot;
   widget_class->size_allocate = glass_toggle_group_size_allocate;
+  widget_class->css_changed = glass_toggle_group_css_changed;
+  widget_class->root = glass_toggle_group_root;
 
   /**
    * GlassToggleGroup:active:
@@ -281,20 +328,36 @@ static void
 glass_toggle_group_init (GlassToggleGroup *self)
 {
   AdwAnimationTarget *target;
+  GtkEventController *press;
 
   self->buttons = g_ptr_array_new ();
   self->names = g_ptr_array_new_with_free_func (g_free);
   self->progress = 1.0;
 
-  self->box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_box_set_homogeneous (GTK_BOX (self->box), TRUE);
+  /* Each toggle is drawn inside a pill, like the plate under it. */
+  self->box = glass_pill_box_new ();
+  glass_pill_box_set_homogeneous (GLASS_PILL_BOX (self->box), TRUE);
   glass_panel_set_child (GLASS_PANEL (self), self->box);
   gtk_widget_add_css_class (GTK_WIDGET (self), "toggle-group");
 
+  /* The plate: glass on our glass, under the buttons (drawn first). */
+  self->plate = glass_panel_new ();
+  gtk_widget_add_css_class (self->plate, "toggle-plate");
+  glass_panel_set_has_shadow (GLASS_PANEL (self->plate), FALSE);
+  glass_panel_set_adaptive (GLASS_PANEL (self->plate), GLASS_ADAPTIVE_MODE_OFF);
+  glass_panel_set_press_grow (GLASS_PANEL (self->plate), 12.0, 0.2);
+  gtk_widget_set_can_target (self->plate, FALSE);
+  gtk_widget_insert_before (self->plate, GTK_WIDGET (self), self->box);
+
   /* Visible (an invisible node's style is not kept up to date) but never
-   * drawn: it resolves the plate's colour from CSS. */
+   * drawn: it resolves the plate's tint from CSS. */
   self->pill_node = glass_style_node_new ("pill");
   gtk_widget_set_parent (self->pill_node, GTK_WIDGET (self));
+
+  press = gtk_event_controller_legacy_new ();
+  gtk_event_controller_set_propagation_phase (press, GTK_PHASE_CAPTURE);
+  g_signal_connect (press, "event", G_CALLBACK (press_event), self);
+  gtk_widget_add_controller (GTK_WIDGET (self), press);
 
   target = adw_callback_animation_target_new (animation_value, self, NULL);
   self->animation = adw_timed_animation_new (GTK_WIDGET (self), 0.0, 1.0, 280, target);
@@ -317,8 +380,7 @@ glass_toggle_group_new (void)
  * @self: a toggle group
  * @name: (nullable): the toggle's name
  * @label: (nullable): its text
- * @icon_name: (nullable): its icon, used when there is no @label (and as
- *   the tooltip's companion otherwise)
+ * @icon_name: (nullable): its icon, used when there is no @label
  *
  * Adds a toggle at the end. The first one added is active.
  */
@@ -334,13 +396,16 @@ glass_toggle_group_append (GlassToggleGroup *self,
   g_return_if_fail (label != NULL || icon_name != NULL);
 
   button = label ? gtk_button_new_with_label (label) : gtk_button_new_from_icon_name (icon_name);
+  /* Frameless: a theme can paint framed buttons from USER priority, which
+   * would put a pill under every toggle at rest (docs/memo.md 地雷27). */
+  gtk_button_set_has_frame (GTK_BUTTON (button), FALSE);
   if (!label && name)
     gtk_widget_set_tooltip_text (button, name);
   gtk_widget_add_css_class (button, "toggle");
   mark (button, self->buttons->len == 0);
 
   g_signal_connect_object (button, "clicked", G_CALLBACK (button_clicked), self, 0);
-  gtk_box_append (GTK_BOX (self->box), button);
+  glass_pill_box_append (GLASS_PILL_BOX (self->box), button);
   g_ptr_array_add (self->buttons, button);
   g_ptr_array_add (self->names, g_strdup (name));
 

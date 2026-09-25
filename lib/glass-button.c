@@ -1,7 +1,7 @@
 /* glass-button.c — a button that is itself glass (design.md §6.6).
  *
- * A capsule of glass holding a flat GtkButton. While the button is pressed
- * the glass turns a little lighter (glass_panel_set_highlight()).
+ * A capsule of glass holding a flat GtkButton. While it is pressed the glass
+ * swells and lights up (GlassPanel:interactive).
  *
  * SPDX-License-Identifier: MIT
  */
@@ -25,7 +25,6 @@ struct _GlassButton {
   GlassPanel    parent_instance;
 
   GtkWidget    *button;
-  AdwAnimation *animation;
 };
 
 enum {
@@ -50,29 +49,6 @@ static void glass_button_actionable_init (GtkActionableInterface *iface);
 
 G_DEFINE_FINAL_TYPE_WITH_CODE (GlassButton, glass_button, GLASS_TYPE_PANEL,
                                G_IMPLEMENT_INTERFACE (GTK_TYPE_ACTIONABLE, glass_button_actionable_init))
-
-static void
-animation_value (double value, gpointer data)
-{
-  glass_panel_set_highlight (GLASS_PANEL (data), value);
-}
-
-static void
-press_changed (GtkWidget     *button,
-               GtkStateFlags  previous,
-               GlassButton   *self)
-{
-  gboolean was = (previous & GTK_STATE_FLAG_ACTIVE) != 0;
-  gboolean is = (gtk_widget_get_state_flags (button) & GTK_STATE_FLAG_ACTIVE) != 0;
-
-  if (was == is)
-    return;
-  adw_timed_animation_set_value_from (ADW_TIMED_ANIMATION (self->animation),
-                                      glass_panel_get_highlight (GLASS_PANEL (self)));
-  adw_timed_animation_set_value_to (ADW_TIMED_ANIMATION (self->animation), is ? 1.0 : 0.0);
-  adw_timed_animation_set_duration (ADW_TIMED_ANIMATION (self->animation), is ? 90 : 260);
-  adw_animation_play (self->animation);
-}
 
 static void
 clicked (GtkButton *button, GlassButton *self)
@@ -135,16 +111,6 @@ glass_button_actionable_init (GtkActionableInterface *iface)
 }
 
 static void
-glass_button_dispose (GObject *object)
-{
-  GlassButton *self = GLASS_BUTTON (object);
-
-  g_clear_object (&self->animation);
-
-  G_OBJECT_CLASS (glass_button_parent_class)->dispose (object);
-}
-
-static void
 glass_button_get_property (GObject    *object,
                            guint       prop_id,
                            GValue     *value,
@@ -203,7 +169,6 @@ glass_button_class_init (GlassButtonClass *klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
-  object_class->dispose = glass_button_dispose;
   object_class->get_property = glass_button_get_property;
   object_class->set_property = glass_button_set_property;
 
@@ -244,8 +209,6 @@ glass_button_class_init (GlassButtonClass *klass)
 static void
 glass_button_init (GlassButton *self)
 {
-  AdwAnimationTarget *target;
-
   self->button = gtk_button_new ();
   gtk_widget_add_css_class (self->button, "flat");
   glass_panel_set_child (GLASS_PANEL (self), self->button);
@@ -253,11 +216,9 @@ glass_button_init (GlassButton *self)
   update_shape (self);
 
   g_signal_connect_object (self->button, "clicked", G_CALLBACK (clicked), self, 0);
-  g_signal_connect_object (self->button, "state-flags-changed", G_CALLBACK (press_changed), self, 0);
 
-  target = adw_callback_animation_target_new (animation_value, self, NULL);
-  self->animation = adw_timed_animation_new (GTK_WIDGET (self), 0.0, 1.0, 120, target);
-  adw_timed_animation_set_easing (ADW_TIMED_ANIMATION (self->animation), ADW_EASE_OUT_CUBIC);
+  /* Pressed, the glass swells and lights up (GlassPanel:interactive). */
+  glass_panel_set_interactive (GLASS_PANEL (self), TRUE);
 }
 
 /**

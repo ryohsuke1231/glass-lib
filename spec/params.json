@@ -32,17 +32,17 @@
     { "key": "blur-downscale",            "uniform": null,                        "default": 2.0,  "min": 1.0, "max": 4.0,   "px": false, "extension_key": "glass-blur-downscale", "values": [1.0, 2.0, 4.0] }
   ],
   "edge_presets": {
-    "_comment": "The in-app edge values the user chose in S1 (crisp-soft, 2026-09-25; docs/memo.md 追記5).",
+    "_comment": "The in-app edge values the user chose in S1 (crisp-soft, 2026-09-25; docs/memo.md 追記5); max-z 14 -> 50 (the user, 2026-09-26).",
     "crisp-soft": {
       "edge-smoothing": 0.75, "rim-width": 2.0, "rim-power": 9.0, "ao-radius": 3.0, "ao-intensity": 0.10,
-      "chroma-strength": 0.8, "profile-shape-n": 7.0, "max-z": 14.0, "displacement-scale": 45.0
+      "chroma-strength": 0.8, "profile-shape-n": 7.0, "max-z": 50.0, "displacement-scale": 45.0
     }
   },
   "materials": [
     {
       "name": "regular",
       "edge": "crisp-soft",
-      "values": { "blur-radius": 2.0, "shadow-radius": 16.0, "shadow-intensity": 0.20 },
+      "values": { "blur-radius": 2.0, "shadow-radius": 16.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
       "tint": [1.0, 1.0, 1.0, 0.12],
       "tint_from_theme": false,
       "adaptive": true
@@ -50,7 +50,7 @@
     {
       "name": "clear",
       "edge": "crisp-soft",
-      "values": { "blur-radius": 1.5, "blur-downscale": 1.0, "shadow-radius": 16.0, "shadow-intensity": 0.20 },
+      "values": { "blur-radius": 1.5, "blur-downscale": 1.0, "shadow-radius": 16.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
       "tint": [1.0, 1.0, 1.0, 0.04],
       "tint_from_theme": false,
       "adaptive": true
@@ -58,7 +58,7 @@
     {
       "name": "thick",
       "edge": "crisp-soft",
-      "values": { "blur-radius": 12.0, "shadow-radius": 24.0, "shadow-intensity": 0.16 },
+      "values": { "blur-radius": 12.0, "shadow-radius": 24.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
       "tint": [1.0, 1.0, 1.0, 0.55],
       "tint_from_theme": true,
       "adaptive": false

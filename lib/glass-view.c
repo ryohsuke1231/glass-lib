@@ -52,8 +52,11 @@ struct _GlassView {
   GtkWidget      *backdrop_node;     /* never drawn: resolves --window-bg-color */
   GdkRGBA         backdrop_color;
   gboolean        backdrop_color_set;
+  gboolean        backdrop_capture_only;
   GPtrArray      *entries;           /* PanelEntry* */
-  GPtrArray      *captures;          /* GlassCapture*, one per group of panels */
+  GPtrArray      *captures;          /* GlassCapture*, one per group of panels (GTK draws them) */
+  GPtrArray      *composed;          /* GlassCapture*, composed from our own textures */
+  GlassPanel     *under_panel;       /* the panel we are in, while rooted */
 
   GlassRenderer  *renderer;
   gboolean        renderer_failed;
@@ -145,6 +148,7 @@ glass_view_unregister_panel (GlassView  *self,
 
       if (entry->panel == panel)
         {
+          glass_panel_set_output (panel, NULL, NULL);
           g_ptr_array_remove_index (self->entries, i);
           entry_free (entry, self->renderer);
           gtk_widget_queue_draw (GTK_WIDGET (self));
@@ -189,6 +193,8 @@ release_renderer (GlassView *self)
     glass_panel_render_release_gl (((PanelEntry *) g_ptr_array_index (self->entries, i))->render);
   for (guint i = 0; i < self->captures->len; i++)
     glass_capture_release_gl (g_ptr_array_index (self->captures, i));
+  for (guint i = 0; i < self->composed->len; i++)
+    glass_capture_release_gl (g_ptr_array_index (self->composed, i));
   gdk_gl_context_clear_current ();
   g_clear_pointer (&self->renderer, glass_renderer_release);
 }
@@ -352,11 +358,24 @@ adjust_for_reduce_transparency (double *params, float tint[4])
 typedef struct {
   PanelEntry      *entry;
   graphene_rect_t  P;
-  graphene_rect_t  C;
+  graphene_rect_t  C;           /* what its own glass needs */
+  graphene_rect_t  C_tree;      /* ... and every panel nested in it (layer 0 only) */
   double           params[GLASS_N_PARAMS];
   float            tint[4];
   float            opacity;
-  guint            group;
+  guint            layer;       /* GlassPanel ancestors below this view */
+  guint            root;        /* index of its layer-0 ancestor item */
+  guint            group;       /* layer 0: its capture group */
+  GlassCapture    *capture;
+  GlassLayerSource output;
+  gboolean         has_output;
+
+  /* A GlassGroup's panels: one body of glass (fused shapes). */
+  GtkWidget       *fuse_group;
+  guint            n_shapes;
+  graphene_rect_t  shapes[GLASS_MAX_SHAPES];
+  float            radii[GLASS_MAX_SHAPES];
+  PanelEntry      *members[GLASS_MAX_SHAPES];
 } Item;
 
 typedef struct {
@@ -391,37 +410,143 @@ group_for (GArray *groups, const Item *item)
 
       if (group->blur_radius != blur || group->downscale != downscale)
         continue;
-      graphene_rect_union (&group->C, &item->C, &u);
-      if (area (&u) <= GROUP_SLACK * (area (&group->C) + area (&item->C)))
+      graphene_rect_union (&group->C, &item->C_tree, &u);
+      if (area (&u) <= GROUP_SLACK * (area (&group->C) + area (&item->C_tree)))
         {
           group->C = u;
           return g;
         }
     }
 
-  g_array_append_val (groups, ((Group) { item->C, blur, downscale }));
+  g_array_append_val (groups, ((Group) { item->C_tree, blur, downscale }));
   return groups->len - 1;
 }
 
+static guint
+panel_layer (GlassView *self, GtkWidget *panel)
+{
+  guint layer = 0;
+
+  for (GtkWidget *w = gtk_widget_get_parent (panel); w && w != GTK_WIDGET (self); w = gtk_widget_get_parent (w))
+    if (GLASS_IS_PANEL (w))
+      layer++;
+  return layer;
+}
+
+static gboolean
+item_contains (const Item *item, GtkWidget *widget)
+{
+  if (gtk_widget_is_ancestor (widget, GTK_WIDGET (item->entry->panel)))
+    return TRUE;
+  for (guint m = 1; m < item->n_shapes; m++)
+    if (gtk_widget_is_ancestor (widget, GTK_WIDGET (item->members[m]->panel)))
+      return TRUE;
+  return FALSE;
+}
+
+/* The GlassGroup a panel belongs to in this view, if any. */
+static GtkWidget *
+fuse_group_of (GlassView *self, GtkWidget *panel)
+{
+  GtkWidget *group = gtk_widget_get_ancestor (panel, GLASS_TYPE_GROUP);
+
+  return group && gtk_widget_is_ancestor (group, GTK_WIDGET (self)) ? group : NULL;
+}
+
+static GlassCapture *
+composed_capture (GlassView *self, guint index)
+{
+  while (self->composed->len <= index)
+    g_ptr_array_add (self->composed, glass_capture_new ());
+  return g_ptr_array_index (self->composed, index);
+}
+
+/* The glass of the panel this view sits in, as a layer in this view's
+ * coordinates: the view's own backdrop is transparent there, and its panels
+ * are glass over that glass (design.md §6.7). */
+static gboolean
+ancestor_glass (GlassView *self, GlassLayerSource *out)
+{
+  GtkWidget *panel = gtk_widget_get_ancestor (GTK_WIDGET (self), GLASS_TYPE_PANEL);
+  GlassView *owner;
+  graphene_rect_t bounds;
+
+  if (panel == NULL || !glass_panel_get_output (GLASS_PANEL (panel), &owner, out) || owner == NULL)
+    return FALSE;
+  if (!gtk_widget_compute_bounds (GTK_WIDGET (self), GTK_WIDGET (owner), &bounds))
+    return FALSE;
+  out->rect.origin.x -= bounds.origin.x;
+  out->rect.origin.y -= bounds.origin.y;
+  return TRUE;
+}
+
 static void
-draw_panels (GlassView             *self,
-             GtkSnapshot           *snapshot,
-             GskRenderNode         *backdrop,
-             GskRenderNode         *content_node,
-             guint                  key_extra,
+draw_item (GlassView             *self,
+           GtkSnapshot           *snapshot,
+           Item                  *item,
+           const graphene_rect_t *view_rect,
+           double                 scale)
+{
+  GlassRenderRequest req = {
+    .view_rect = *view_rect,
+    .panel = item->P,
+    .scale = scale,
+    .corner_radius = glass_panel_get_corner_radius (item->entry->panel),
+    .params = item->params,
+    .has_shadow = glass_panel_get_has_shadow (item->entry->panel),
+    .n_shapes = item->fuse_group ? item->n_shapes : 0,
+    .merge_k = item->fuse_group ? (float) glass_group_get_spacing (GLASS_GROUP (item->fuse_group)) : 0.0f,
+  };
+  GlassRenderResult res;
+
+  memcpy (req.tint, item->tint, sizeof req.tint);
+  memcpy (req.shapes, item->shapes, sizeof req.shapes);
+  memcpy (req.radii, item->radii, sizeof req.radii);
+  if (!glass_renderer_render_panel (self->renderer, item->entry->render, item->capture, &req, &res))
+    {
+      glass_panel_set_output (item->entry->panel, NULL, NULL);
+      return;
+    }
+
+  if (item->opacity < 1.0f)
+    gtk_snapshot_push_opacity (snapshot, item->opacity);
+  gtk_snapshot_append_texture (snapshot, res.texture, &res.rect);
+  if (item->opacity < 1.0f)
+    gtk_snapshot_pop (snapshot);
+
+  item->has_output = glass_panel_render_get_output (item->entry->render, &item->output);
+
+  for (guint m = 0; m < MAX (item->n_shapes, 1); m++)
+    {
+      GlassPanel *panel = item->n_shapes ? item->members[m]->panel : item->entry->panel;
+      const graphene_rect_t *own = item->n_shapes ? &item->shapes[m] : &item->P;
+
+      glass_panel_set_output (panel, self, item->has_output ? &item->output : NULL);
+
+      /* Only stored here; the colours change before the next frame. */
+      if (glass_capture_is_fresh (item->capture) && glass_panel_uses_adaptive (panel))
+        {
+          GlassLumaStats luma;
+
+          if (glass_capture_measure (item->capture, own, item->tint, &luma))
+            glass_panel_push_luma (panel, &luma);
+        }
+    }
+}
+
+/* Which panels to draw, and the captures they need, read now (§5.3-2).
+ * Returns the highest layer. */
+static guint
+plan_panels (GlassView             *self,
              const graphene_rect_t *view_rect,
-             const GdkRGBA         *theme_bg)
+             const GdkRGBA         *theme_bg,
+             GArray                *items,
+             GArray                *groups)
 {
   GtkWidget *widget = GTK_WIDGET (self);
   GlassContext *context = glass_context_get_default ();
   gboolean reduce = glass_context_get_reduce_transparency (context);
-  GlassRenderStats *stats = glass_renderer_get_stats (self->renderer);
-  double scale = gdk_surface_get_scale (gtk_native_get_surface (gtk_widget_get_native (widget)));
-  gint64 t0 = g_get_monotonic_time ();
-  g_autoptr (GArray) items = g_array_new (FALSE, TRUE, sizeof (Item));
-  g_autoptr (GArray) groups = g_array_new (FALSE, TRUE, sizeof (Group));
-  GskRenderNode *leaf;
-  float dx, dy;
+  guint max_layer = 0;
 
   /* 1. The visible panels, in the overlays' order then registration order
    * (the stacking order), with everything read now (§5.3-2). */
@@ -434,11 +559,15 @@ draw_panels (GlassView             *self,
           PanelEntry *entry = g_ptr_array_index (self->entries, i);
           GtkWidget *panel = GTK_WIDGET (entry->panel);
           Item item = { .entry = entry };
+          double vs;
 
           if (!(panel == overlay || gtk_widget_is_ancestor (panel, overlay)))
             continue;
           if (!gtk_widget_get_mapped (panel))
-            continue;
+            {
+              glass_panel_set_output (entry->panel, NULL, NULL);
+              continue;
+            }
           item.opacity = opacity_to (panel, widget);
           if (item.opacity <= 0.0f)
             continue;
@@ -447,23 +576,125 @@ draw_panels (GlassView             *self,
           if (item.P.size.width < 1.0f || item.P.size.height < 1.0f)
             continue;
 
-          glass_context_resolve (context, glass_panel_get_material (entry->panel), item.params);
+          /* The press bulge: the glass grows around its centre. */
+          vs = glass_panel_get_visual_scale (entry->panel);
+          if (vs != 1.0)
+            graphene_rect_inset (&item.P, -item.P.size.width * (float) (vs - 1.0) / 2.0f,
+                                 -item.P.size.height * (float) (vs - 1.0) / 2.0f);
+
+          item.layer = panel_layer (self, panel);
+
+          /* A GlassGroup's panels join one body of glass. */
+          item.fuse_group = fuse_group_of (self, panel);
+          if (item.fuse_group)
+            {
+              Item *leader = NULL;
+
+              for (guint k = 0; k < items->len; k++)
+                {
+                  Item *other = &g_array_index (items, Item, k);
+
+                  if (other->fuse_group == item.fuse_group && other->layer == item.layer)
+                    leader = other;
+                }
+              if (leader && leader->n_shapes < GLASS_MAX_SHAPES)
+                {
+                  leader->shapes[leader->n_shapes] = item.P;
+                  leader->radii[leader->n_shapes] = (float) glass_panel_effective_radius (entry->panel, &item.P);
+                  leader->members[leader->n_shapes] = entry;
+                  leader->n_shapes++;
+                  graphene_rect_union (&leader->P, &item.P, &leader->P);
+                  continue;
+                }
+              item.n_shapes = 1;
+              item.shapes[0] = item.P;
+              item.radii[0] = (float) glass_panel_effective_radius (entry->panel, &item.P);
+              item.members[0] = entry;
+            }
+
+          glass_panel_resolve_params (entry->panel, context, item.params);
           glass_panel_get_tint_rgba (entry->panel, theme_bg, item.tint);
           if (reduce)
             adjust_for_reduce_transparency (item.params, item.tint);
-          if (!glass_capture_rect_for_panel (&item.P, item.params[GLASS_PARAM_BLUR_RADIUS],
-                                             view_rect, &item.C))
-            continue;
-
-          item.group = group_for (groups, &item);
+          max_layer = MAX (max_layer, item.layer);
           g_array_append_val (items, item);
         }
     }
 
+  /* What each needs captured (a fused group's bounds are final now). */
+  for (guint i = 0; i < items->len; i++)
+    {
+      Item *item = &g_array_index (items, Item, i);
+
+      if (!glass_capture_rect_for_panel (&item->P, item->params[GLASS_PARAM_BLUR_RADIUS],
+                                         view_rect, &item->C))
+        {
+          g_array_remove_index (items, i--);
+          continue;
+        }
+      item->C_tree = item->C;
+    }
+
+  /* 2. Nested panels hang off their layer-0 ancestor: its capture must
+   * cover them too, since their backdrop is made from it. */
+  for (guint i = 0; i < items->len; i++)
+    {
+      Item *item = &g_array_index (items, Item, i);
+
+      item->root = i;
+      if (item->layer == 0)
+        continue;
+      for (guint j = 0; j < items->len; j++)
+        {
+          Item *other = &g_array_index (items, Item, j);
+
+          if (other->layer == 0 && item_contains (other, GTK_WIDGET (item->entry->panel)))
+            {
+              item->root = j;
+              graphene_rect_union (&other->C_tree, &item->C, &other->C_tree);
+              break;
+            }
+        }
+    }
+  for (guint i = 0; i < items->len; i++)
+    {
+      Item *item = &g_array_index (items, Item, i);
+
+      if (item->layer == 0)
+        item->group = group_for (groups, item);
+    }
+
+  return max_layer;
+}
+
+static void
+draw_panels (GlassView             *self,
+             GtkSnapshot           *snapshot,
+             GskRenderNode         *backdrop,
+             GskRenderNode         *content_node,
+             guint                  key_extra,
+             const graphene_rect_t *view_rect,
+             const GdkRGBA         *theme_bg)
+{
+  GtkWidget *widget = GTK_WIDGET (self);
+  GlassRenderStats *stats = glass_renderer_get_stats (self->renderer);
+  double scale = gdk_surface_get_scale (gtk_native_get_surface (gtk_widget_get_native (widget)));
+  gint64 t0 = g_get_monotonic_time ();
+  g_autoptr (GArray) items = g_array_new (FALSE, TRUE, sizeof (Item));
+  g_autoptr (GArray) groups = g_array_new (FALSE, TRUE, sizeof (Group));
+  GlassLayerSource under;
+  gboolean has_under = ancestor_glass (self, &under);
+  guint max_layer, composed_index = 0;
+  GskRenderNode *leaf;
+  float dx, dy;
+
+  max_layer = plan_panels (self, view_rect, theme_bg, items, groups);
+
   leaf = glass_unwrap_node (content_node, &dx, &dy);
   glass_renderer_make_current (self->renderer);
 
-  /* 2. One capture per group, reused while nothing under it changed. */
+  /* 3. Layer 0: one capture per group, reused while nothing under it
+   * changed; in a view inside a panel, composed over that panel's glass. */
   while (self->captures->len < groups->len)
     g_ptr_array_add (self->captures, glass_capture_new ());
   while (self->captures->len > groups->len)
@@ -473,58 +704,100 @@ draw_panels (GlassView             *self,
       glass_renderer_make_current (self->renderer);
     }
 
-  for (guint g = 0; g < groups->len; g++)
-    {
-      Group *group = &g_array_index (groups, Group, g);
-      GlassCaptureRequest req = {
-        .backdrop = backdrop,
-        .content_key = leaf,
-        .key_dx = dx,
-        .key_dy = dy,
-        .key_extra = key_extra,
-        .rect = group->C,
-        .scale = scale,
-        .blur_radius = group->blur_radius,
-        .downscale = group->downscale,
-      };
+  {
+    g_autofree GlassCaptureRequest *reqs = g_new0 (GlassCaptureRequest, MAX (groups->len, 1));
+    g_autofree GlassCapture **effective = g_new0 (GlassCapture *, MAX (groups->len, 1));
 
-      glass_renderer_capture (self->renderer, g_ptr_array_index (self->captures, g), &req);
-    }
+    for (guint g = 0; g < groups->len; g++)
+      {
+        Group *group = &g_array_index (groups, Group, g);
 
-  /* 3. Each panel's glass over its group's capture. */
-  for (guint i = 0; i < items->len; i++)
-    {
-      Item *item = &g_array_index (items, Item, i);
-      GlassCapture *capture = g_ptr_array_index (self->captures, item->group);
-      GlassRenderRequest req = {
-        .view_rect = *view_rect,
-        .panel = item->P,
-        .scale = scale,
-        .corner_radius = glass_panel_get_corner_radius (item->entry->panel),
-        .params = item->params,
-        .has_shadow = glass_panel_get_has_shadow (item->entry->panel),
-      };
-      GlassRenderResult res;
+        reqs[g] = (GlassCaptureRequest) {
+          .backdrop = backdrop,
+          .content_key = leaf,
+          .key_dx = dx,
+          .key_dy = dy,
+          .key_extra = key_extra,
+          .rect = group->C,
+          .scale = scale,
+          .blur_radius = group->blur_radius,
+          .downscale = group->downscale,
+        };
+      }
+    glass_renderer_capture_all (self->renderer, (GlassCapture **) self->captures->pdata, reqs, groups->len);
 
-      memcpy (req.tint, item->tint, sizeof req.tint);
-      if (!glass_renderer_render_panel (self->renderer, item->entry->render, capture, &req, &res))
-        continue;
+    for (guint g = 0; g < groups->len; g++)
+      {
+        Group *group = &g_array_index (groups, Group, g);
+        GlassCapture *raw = g_ptr_array_index (self->captures, g);
 
-      if (item->opacity < 1.0f)
-        gtk_snapshot_push_opacity (snapshot, item->opacity);
-      gtk_snapshot_append_texture (snapshot, res.texture, &res.rect);
-      if (item->opacity < 1.0f)
-        gtk_snapshot_pop (snapshot);
+        effective[g] = raw;
+        if (has_under)
+          {
+            GlassLayerSource sources[2] = { under };
+            GlassCapture *composed = composed_capture (self, composed_index++);
 
-      /* Only stored here; the colours change before the next frame. */
-      if (glass_capture_is_fresh (capture) && glass_panel_uses_adaptive (item->entry->panel))
+            glass_capture_get_source (raw, &sources[1]);
+            if (glass_renderer_compose (self->renderer, composed, &group->C, scale, group->downscale,
+                                        group->blur_radius, sources, 2))
+              effective[g] = composed;
+          }
+      }
+
+    for (guint i = 0; i < items->len; i++)
+      {
+        Item *item = &g_array_index (items, Item, i);
+
+        if (item->layer == 0)
+          {
+            item->capture = effective[item->group];
+            draw_item (self, snapshot, item, view_rect, scale);
+          }
+      }
+
+    /* 4. Later layers: glass over glass. The backdrop is the layer-0
+     * capture with the glass of every lower layer over it, composed from
+     * our own textures (no capture: design.md §6.7). */
+    for (guint layer = 1; layer <= max_layer; layer++)
+      for (guint i = 0; i < items->len; i++)
         {
-          GlassLumaStats luma;
+          Item *item = &g_array_index (items, Item, i);
+          Item *root = &g_array_index (items, Item, item->root);
+          g_autoptr (GArray) sources = NULL;
+          GlassLayerSource base;
 
-          if (glass_capture_measure (capture, &item->P, item->tint, &luma))
-            glass_panel_push_luma (item->entry->panel, &luma);
+          if (item->layer != layer || root->layer != 0 || root->capture == NULL)
+            continue;
+
+          sources = g_array_new (FALSE, FALSE, sizeof (GlassLayerSource));
+          glass_capture_get_source (root->capture, &base);
+          g_array_append_val (sources, base);
+          for (guint j = 0; j < items->len; j++)
+            {
+              Item *lower = &g_array_index (items, Item, j);
+
+              if (lower->layer < layer && lower->has_output &&
+                  graphene_rect_intersection (&lower->output.rect, &item->C, NULL))
+                g_array_append_val (sources, lower->output);
+            }
+
+          item->capture = composed_capture (self, composed_index++);
+          if (!glass_renderer_compose (self->renderer, item->capture, &item->C, scale,
+                                       (int) item->params[GLASS_PARAM_BLUR_DOWNSCALE],
+                                       item->params[GLASS_PARAM_BLUR_RADIUS],
+                                       (GlassLayerSource *) sources->data, sources->len))
+            continue;
+          draw_item (self, snapshot, item, view_rect, scale);
         }
+  }
+
+  while (self->composed->len > composed_index)
+    {
+      glass_capture_free (g_ptr_array_index (self->composed, self->composed->len - 1), self->renderer);
+      g_ptr_array_remove_index (self->composed, self->composed->len - 1);
+      glass_renderer_make_current (self->renderer);
     }
+  glass_renderer_flush (self->renderer);
 
   stats->snapshots++;
   stats->us_total += g_get_monotonic_time () - t0;
@@ -551,13 +824,13 @@ draw_hud (GlassView *self, GtkSnapshot *snapshot)
       g_free (self->hud_text);
       self->hud_text = g_strdup_printf (
         "%s\n%.0f snapshots/s · glass %.2f ms/snapshot\n"
-        "captures %u (hits %u) · passes %u (hits %u)\n"
-        "per capture: render %.2f · download %.2f · upload %.2f ms",
+        "renders %u (regions %u, hits %u, unchanged %u) · passes %u (hits %u)\n"
+        "per render: render %.2f · download %.2f · upload+blur %.2f ms",
         glass_renderer_get_info (self->renderer),
         s->snapshots / secs, s->snapshots ? s->us_total / 1000.0 / s->snapshots : 0.0,
-        s->captures, s->capture_hits, s->passes, s->pass_hits,
+        s->captures, s->regions, s->capture_hits, s->capture_unchanged, s->passes, s->pass_hits,
         s->us_render_texture / 1000.0 / captures, s->us_download / 1000.0 / captures,
-        s->us_upload / 1000.0 / captures);
+        s->us_gl / 1000.0 / captures);
       g_debug ("hud: %s", self->hud_text);
       memset (s, 0, sizeof *s);
       self->hud_last_us = now;
@@ -613,7 +886,7 @@ glass_view_snapshot (GtkWidget   *widget,
       content_node = gtk_snapshot_free_to_node (content_snapshot);
     }
 
-  if (bg.alpha > 0.0f)
+  if (bg.alpha > 0.0f && !self->backdrop_capture_only)
     nodes[n_nodes++] = gsk_color_node_new (&bg, &view_rect);
   if (content_node)
     {
@@ -631,8 +904,21 @@ glass_view_snapshot (GtkWidget   *widget,
 
   /* 2. The glass bodies. */
   if (self->full && self->renderer && self->entries->len > 0)
-    draw_panels (self, snapshot, backdrop, content_node,
-                 hash_backdrop (self, &bg, width, height), &view_rect, &theme_bg);
+    {
+      GskRenderNode *seen = gsk_render_node_ref (backdrop);
+
+      if (self->backdrop_capture_only && bg.alpha > 0.0f)
+        {
+          GskRenderNode *parts[2] = { gsk_color_node_new (&bg, &view_rect), backdrop };
+
+          gsk_render_node_unref (seen);
+          seen = gsk_container_node_new (parts, 2);
+          gsk_render_node_unref (parts[0]);
+        }
+      draw_panels (self, snapshot, seen, content_node,
+                   hash_backdrop (self, &bg, width, height), &view_rect, &theme_bg);
+      gsk_render_node_unref (seen);
+    }
 
   /* 3. Overlay children: the panels' foreground. */
   for (guint i = 0; i < self->overlays->len; i++)
@@ -711,6 +997,14 @@ glass_view_size_allocate (GtkWidget *widget,
 }
 
 void
+glass_view_set_backdrop_capture_only (GlassView *self,
+                                      gboolean   capture_only)
+{
+  self->backdrop_capture_only = !!capture_only;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+void
 glass_view_set_overlay_offset (GlassView *self,
                                GtkWidget *overlay,
                                double     dx,
@@ -741,8 +1035,30 @@ glass_view_css_changed (GtkWidget         *widget,
 static void
 glass_view_root (GtkWidget *widget)
 {
+  GlassView *self = GLASS_VIEW (widget);
+  GtkWidget *panel;
+
   GTK_WIDGET_CLASS (glass_view_parent_class)->root (widget);
   glass_style_ensure (gtk_widget_get_display (widget));
+
+  /* Inside a panel, its glass is under our backdrop: redraw with it. */
+  panel = gtk_widget_get_ancestor (widget, GLASS_TYPE_PANEL);
+  if (panel)
+    {
+      self->under_panel = GLASS_PANEL (panel);
+      glass_panel_add_nested_view (self->under_panel, self);
+    }
+}
+
+static void
+glass_view_unroot (GtkWidget *widget)
+{
+  GlassView *self = GLASS_VIEW (widget);
+
+  if (self->under_panel)
+    glass_panel_remove_nested_view (self->under_panel, self);
+  self->under_panel = NULL;
+  GTK_WIDGET_CLASS (glass_view_parent_class)->unroot (widget);
 }
 
 /* ── GObject ──────────────────────────────────────────────────────────────── */
@@ -756,6 +1072,9 @@ glass_view_dispose (GObject *object)
   for (guint i = 0; i < self->captures->len; i++)
     glass_capture_free (g_ptr_array_index (self->captures, i), NULL);
   g_ptr_array_set_size (self->captures, 0);
+  for (guint i = 0; i < self->composed->len; i++)
+    glass_capture_free (g_ptr_array_index (self->composed, i), NULL);
+  g_ptr_array_set_size (self->composed, 0);
   while (self->entries->len > 0)
     {
       PanelEntry *entry = g_ptr_array_index (self->entries, self->entries->len - 1);
@@ -780,6 +1099,7 @@ glass_view_finalize (GObject *object)
 
   g_ptr_array_unref (self->entries);
   g_ptr_array_unref (self->captures);
+  g_ptr_array_unref (self->composed);
   g_ptr_array_unref (self->overlays);
   g_hash_table_unref (self->offsets);
   g_free (self->hud_text);
@@ -847,6 +1167,7 @@ glass_view_class_init (GlassViewClass *klass)
   widget_class->unrealize = glass_view_unrealize;
   widget_class->css_changed = glass_view_css_changed;
   widget_class->root = glass_view_root;
+  widget_class->unroot = glass_view_unroot;
 
   /**
    * GlassView:content:
@@ -879,6 +1200,7 @@ glass_view_init (GlassView *self)
   self->overlays = g_ptr_array_new ();
   self->entries = g_ptr_array_new ();
   self->captures = g_ptr_array_new ();
+  self->composed = g_ptr_array_new ();
   self->offsets = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
 
   /* A never-drawn node whose CSS colour is var(--window-bg-color) (glass.css):

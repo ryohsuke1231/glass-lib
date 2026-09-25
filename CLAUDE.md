@@ -60,7 +60,7 @@
 - 気がかりがあれば、押し通さずに止まって相談する。返答は日本語。
 
 ## デバッグ
-- アプリ側の調査: GTK Inspector（`GTK_DEBUG=interactive`）、`G_MESSAGES_DEBUG=glass`、レンダラの切り替え（`GSK_RENDERER=vulkan|gl`、`GLASS_RENDERER=full|fallback`）、計測の表示（`GLASS_DEBUG=hud`）。
+- アプリ側の調査: GTK Inspector（`GTK_DEBUG=interactive`）、`G_MESSAGES_DEBUG=glass`、レンダラの切り替え（`GSK_RENDERER=vulkan|gl`、`GLASS_RENDERER=full|fallback`）、計測の表示（`GLASS_DEBUG=hud`）、パスごとの GPU 時間（`GLASS_DEBUG=gpu-time`、ログに 2 秒ごと）。
 - 性能は「スクロール中」と「静止中」を分けて測る。GPU busy% の測り方と注意点は、既存リポジトリの `memo.md` 0.5 節に従う。
 - 実験用の Python（PyGObject）スクリプトは、プロジェクトの外（スクラッチ用のディレクトリ）に置く。
 

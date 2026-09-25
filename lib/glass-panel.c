@@ -9,6 +9,8 @@
  */
 #include "glass-private.h"
 
+#include <adwaita.h>
+#include <math.h>
 #include <string.h>
 
 /**
@@ -58,6 +60,21 @@ typedef struct {
   guint               settle_source;
 
   double              highlight;
+
+  gboolean            interactive;
+  double              press;            /* 0..1, sprung */
+  double              press_grow_px;    /* how much wider the glass gets, pressed */
+  double              press_max_extra;  /* ... at most this fraction */
+  AdwAnimation       *press_anim;
+  GtkEventController *press_controller;
+
+  GlassView          *output_view;     /* not owned; valid while registered */
+  GlassLayerSource    output;
+  gboolean            has_output;
+  GPtrArray          *nested_views;    /* GlassViews inside, not owned (they
+                                        * remove themselves when unrooted) */
+
+  double              param_default[GLASS_N_PARAMS];   /* NAN: none */
 } GlassPanelPrivate;
 
 enum {
@@ -69,6 +86,7 @@ enum {
   PROP_HAS_SHADOW,
   PROP_ADAPTIVE,
   PROP_APPEARANCE,
+  PROP_INTERACTIVE,
   N_PROPS
 };
 
@@ -120,6 +138,8 @@ glass_panel_set_mode (GlassPanel     *self,
 
   if (mode == GLASS_PANEL_MODE_NONE)
     priv->view = NULL;
+  if (mode != GLASS_PANEL_MODE_VIEW)
+    priv->has_output = FALSE;
 
   gtk_widget_remove_css_class (widget, "glass-fallback");
   gtk_widget_remove_css_class (widget, "glass-nested");
@@ -158,16 +178,9 @@ find_view (GlassPanel *self)
   GtkWidget *widget = GTK_WIDGET (self);
   GtkWidget *parent = gtk_widget_get_parent (widget);
   GtkWidget *view = parent ? gtk_widget_get_ancestor (parent, GLASS_TYPE_VIEW) : NULL;
-  GtkWidget *outer = parent ? gtk_widget_get_ancestor (parent, GLASS_TYPE_PANEL) : NULL;
 
-  /* Glass is not drawn on glass (design.md §6.6): a panel inside another
-   * panel is only a faint shape. */
-  if (outer)
-    {
-      glass_panel_set_mode (self, GLASS_PANEL_MODE_NESTED);
-      return;
-    }
-
+  /* A panel inside another panel is glass over glass: the view draws it in
+   * a later layer (design.md §6.7). */
   if (view && glass_view_is_overlay_descendant (GLASS_VIEW (view), widget))
     {
       priv->view = GLASS_VIEW (view);
@@ -200,6 +213,7 @@ glass_panel_unroot (GtkWidget *widget)
     glass_view_unregister_panel (priv->view, self);
   priv->view = NULL;
   priv->mode = GLASS_PANEL_MODE_NONE;
+  priv->has_output = FALSE;
   g_clear_handle_id (&priv->settle_source, g_source_remove);
   if (priv->apply_tick)
     {
@@ -336,6 +350,270 @@ glass_panel_uses_adaptive (GlassPanel *self)
 
 /* ── Glass parameters for the view ────────────────────────────────────────── */
 
+void
+glass_panel_set_output (GlassPanel             *self,
+                        GlassView              *view,
+                        const GlassLayerSource *output)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  gboolean changed = (output != NULL) != priv->has_output || view != priv->output_view ||
+                     (output && (output->id != priv->output.id || output->tex != priv->output.tex ||
+                                 !graphene_rect_equal (&output->rect, &priv->output.rect)));
+
+  priv->output_view = view;
+  priv->has_output = output != NULL;
+  if (output)
+    priv->output = *output;
+
+  /* The views inside draw again with the new glass under them. GTK caches
+   * their nodes, so they would otherwise keep the old glass until something
+   * in them changes. From the view's snapshot (the usual caller) this is
+   * the same frame: GTK clears draw_needed only after a widget's snapshot,
+   * so the queue stops at the drawing view, and the overlays it draws next
+   * are drawn anew, with no extra frame (docs/memo.md 地雷24). */
+  if (changed && priv->nested_views)
+    for (guint i = 0; i < priv->nested_views->len; i++)
+      gtk_widget_queue_draw (g_ptr_array_index (priv->nested_views, i));
+}
+
+void
+glass_panel_add_nested_view (GlassPanel *self,
+                             GlassView  *view)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (priv->nested_views == NULL)
+    priv->nested_views = g_ptr_array_new ();
+  if (!g_ptr_array_find (priv->nested_views, view, NULL))
+    g_ptr_array_add (priv->nested_views, view);
+}
+
+void
+glass_panel_remove_nested_view (GlassPanel *self,
+                                GlassView  *view)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (priv->nested_views)
+    g_ptr_array_remove (priv->nested_views, view);
+}
+
+void
+glass_panel_set_param_default (GlassPanel  *self,
+                               GlassParamId param,
+                               double       value)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  g_return_if_fail (param < GLASS_N_PARAMS);
+
+  priv->param_default[param] = value;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+void
+glass_panel_resolve_params (GlassPanel   *self,
+                            GlassContext *context,
+                            double        out[GLASS_N_PARAMS])
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  glass_context_resolve (context, priv->material, out);
+  for (int i = 0; i < GLASS_N_PARAMS; i++)
+    if (!isnan (priv->param_default[i]) && !glass_context_is_param_set (context, glass_param_specs[i].key))
+      out[i] = priv->param_default[i];
+}
+
+gboolean
+glass_panel_get_output (GlassPanel       *self,
+                        GlassView       **view,
+                        GlassLayerSource *output)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (!priv->has_output || priv->mode != GLASS_PANEL_MODE_VIEW)
+    return FALSE;
+  *view = priv->output_view;
+  *output = priv->output;
+  return TRUE;
+}
+
+/* ── Press (GlassPanel:interactive) ─────────────────────────────────────────
+ * Pressing anywhere in an interactive panel makes its glass (and what is on
+ * it) grow a little, lighter, and spring back on release, like Apple's
+ * interactive glass (design.md §6.7). */
+
+double
+glass_panel_effective_radius (GlassPanel            *self,
+                              const graphene_rect_t *bounds)
+{
+  double half = MIN (bounds->size.width, bounds->size.height) / 2.0;
+  double r = PRIV (self)->corner_radius;
+
+  return r < 0.0 ? half : MIN (r, half);
+}
+
+double
+glass_panel_get_visual_scale (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  int w = gtk_widget_get_width (GTK_WIDGET (self));
+  int h = gtk_widget_get_height (GTK_WIDGET (self));
+
+  if (priv->press <= 0.0 || w <= 0 || h <= 0)
+    return 1.0;
+  /* A fixed growth of the longer side: small buttons pop, long bars barely
+   * swell. */
+  return 1.0 + priv->press * MIN (priv->press_max_extra, priv->press_grow_px / MAX (w, h));
+}
+
+static void
+press_value (double value, gpointer data)
+{
+  GlassPanel *self = data;
+
+  PRIV (self)->press = MAX (value, 0.0);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+void
+glass_panel_set_pressed (GlassPanel *self,
+                         gboolean    pressed)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  AdwSpringParams *spring;
+
+  if (priv->press_anim == NULL)
+    {
+      AdwAnimationTarget *target = adw_callback_animation_target_new (press_value, self, NULL);
+
+      priv->press_anim = adw_spring_animation_new (GTK_WIDGET (self), 0.0, 1.0,
+                                                   adw_spring_params_new (1.0, 1.0, 600.0), target);
+    }
+
+  /* In fast and firm; out with a small overshoot. */
+  spring = pressed ? adw_spring_params_new (0.9, 1.0, 900.0) : adw_spring_params_new (0.45, 1.0, 420.0);
+  adw_spring_animation_set_spring_params (ADW_SPRING_ANIMATION (priv->press_anim), spring);
+  adw_spring_params_unref (spring);
+  adw_spring_animation_set_value_from (ADW_SPRING_ANIMATION (priv->press_anim), priv->press);
+  adw_spring_animation_set_value_to (ADW_SPRING_ANIMATION (priv->press_anim), pressed ? 1.0 : 0.0);
+  adw_spring_animation_set_initial_velocity (ADW_SPRING_ANIMATION (priv->press_anim), 0.0);
+  adw_animation_play (priv->press_anim);
+}
+
+void
+glass_panel_set_press_grow (GlassPanel *self,
+                            double      grow_px,
+                            double      max_extra)
+{
+  PRIV (self)->press_grow_px = grow_px;
+  PRIV (self)->press_max_extra = max_extra;
+}
+
+double
+glass_panel_get_press (GlassPanel *self)
+{
+  return PRIV (self)->press;
+}
+
+/* Watches presses in the capture phase without taking them: the buttons on
+ * the panel still get every event. */
+static gboolean
+press_event (GtkEventControllerLegacy *controller,
+             GdkEvent                 *event,
+             GlassPanel               *self)
+{
+  switch ((int) gdk_event_get_event_type (event))
+    {
+    case GDK_BUTTON_PRESS:
+    case GDK_TOUCH_BEGIN:
+      glass_panel_set_pressed (self, TRUE);
+      break;
+    case GDK_BUTTON_RELEASE:
+    case GDK_TOUCH_END:
+    case GDK_TOUCH_CANCEL:
+    case GDK_GRAB_BROKEN:
+      glass_panel_set_pressed (self, FALSE);
+      break;
+    default:
+      break;
+    }
+  return GDK_EVENT_PROPAGATE;
+}
+
+static void
+glass_panel_snapshot (GtkWidget   *widget,
+                      GtkSnapshot *snapshot)
+{
+  double vs = glass_panel_get_visual_scale (GLASS_PANEL (widget));
+  float cx = gtk_widget_get_width (widget) / 2.0f;
+  float cy = gtk_widget_get_height (widget) / 2.0f;
+
+  if (vs != 1.0)
+    {
+      gtk_snapshot_save (snapshot);
+      gtk_snapshot_translate (snapshot, &GRAPHENE_POINT_INIT (cx, cy));
+      gtk_snapshot_scale (snapshot, (float) vs, (float) vs);
+      gtk_snapshot_translate (snapshot, &GRAPHENE_POINT_INIT (-cx, -cy));
+    }
+  for (GtkWidget *child = gtk_widget_get_first_child (widget); child; child = gtk_widget_get_next_sibling (child))
+    gtk_widget_snapshot_child (widget, child, snapshot);
+  if (vs != 1.0)
+    gtk_snapshot_restore (snapshot);
+}
+
+/**
+ * glass_panel_get_interactive:
+ * @self: a panel
+ *
+ * Returns: whether the glass reacts to presses
+ */
+gboolean
+glass_panel_get_interactive (GlassPanel *self)
+{
+  g_return_val_if_fail (GLASS_IS_PANEL (self), FALSE);
+
+  return PRIV (self)->interactive;
+}
+
+/**
+ * glass_panel_set_interactive:
+ * @self: a panel
+ * @interactive: whether the glass reacts to presses
+ *
+ * Makes the glass swell and light up while it is pressed. The press is only
+ * watched: the widgets on the panel still get it.
+ */
+void
+glass_panel_set_interactive (GlassPanel *self,
+                             gboolean    interactive)
+{
+  GlassPanelPrivate *priv;
+
+  g_return_if_fail (GLASS_IS_PANEL (self));
+
+  priv = PRIV (self);
+  interactive = !!interactive;
+  if (priv->interactive == interactive)
+    return;
+  priv->interactive = interactive;
+
+  if (interactive)
+    {
+      priv->press_controller = gtk_event_controller_legacy_new ();
+      gtk_event_controller_set_propagation_phase (priv->press_controller, GTK_PHASE_CAPTURE);
+      g_signal_connect (priv->press_controller, "event", G_CALLBACK (press_event), self);
+      gtk_widget_add_controller (GTK_WIDGET (self), priv->press_controller);
+    }
+  else
+    {
+      gtk_widget_remove_controller (GTK_WIDGET (self), priv->press_controller);
+      priv->press_controller = NULL;
+      glass_panel_set_pressed (self, FALSE);
+    }
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_INTERACTIVE]);
+}
+
 double
 glass_panel_get_highlight (GlassPanel *self)
 {
@@ -381,10 +659,10 @@ glass_panel_get_tint_rgba (GlassPanel    *self,
         }
     }
 
-  /* Pressed (GlassButton): a little more of a lighter tint. */
-  if (priv->highlight > 0.0)
+  /* Pressed: a little more of a lighter tint. */
+  if (MAX (priv->highlight, priv->press) > 0.0)
     {
-      double h = priv->highlight;
+      double h = MIN (1.0, MAX (priv->highlight, priv->press));
 
       for (int i = 0; i < 3; i++)
         out[i] = out[i] + (1.0f - out[i]) * (float) (0.5 * h);
@@ -451,7 +729,9 @@ glass_panel_dispose (GObject *object)
   GlassPanelPrivate *priv = PRIV (object);
 
   g_clear_handle_id (&priv->settle_source, g_source_remove);
+  g_clear_object (&priv->press_anim);
   g_clear_pointer (&priv->child, gtk_widget_unparent);
+  g_clear_pointer (&priv->nested_views, g_ptr_array_unref);
 
   G_OBJECT_CLASS (glass_panel_parent_class)->dispose (object);
 }
@@ -488,6 +768,9 @@ glass_panel_get_property (GObject    *object,
     case PROP_APPEARANCE:
       g_value_set_enum (value, priv->appearance);
       break;
+    case PROP_INTERACTIVE:
+      g_value_set_boolean (value, priv->interactive);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
@@ -521,6 +804,9 @@ glass_panel_set_property (GObject      *object,
     case PROP_ADAPTIVE:
       glass_panel_set_adaptive (self, g_value_get_enum (value));
       break;
+    case PROP_INTERACTIVE:
+      glass_panel_set_interactive (self, g_value_get_boolean (value));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
@@ -540,6 +826,7 @@ glass_panel_class_init (GlassPanelClass *klass)
   widget_class->size_allocate = glass_panel_size_allocate;
   widget_class->get_request_mode = glass_panel_get_request_mode;
   widget_class->compute_expand = glass_panel_compute_expand;
+  widget_class->snapshot = glass_panel_snapshot;
   widget_class->root = glass_panel_root;
   widget_class->unroot = glass_panel_unroot;
 
@@ -609,6 +896,15 @@ glass_panel_class_init (GlassPanelClass *klass)
     g_param_spec_enum ("appearance", NULL, NULL, GLASS_TYPE_APPEARANCE, GLASS_APPEARANCE_UNKNOWN,
                        G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
 
+  /**
+   * GlassPanel:interactive:
+   *
+   * Whether the glass swells and lights up while it is pressed.
+   */
+  props[PROP_INTERACTIVE] =
+    g_param_spec_boolean ("interactive", NULL, NULL, FALSE,
+                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
   g_object_class_install_properties (object_class, N_PROPS, props);
 
   gtk_widget_class_set_css_name (widget_class, "glasspanel");
@@ -625,6 +921,10 @@ glass_panel_init (GlassPanel *self)
   priv->has_shadow = TRUE;
   priv->adaptive = GLASS_ADAPTIVE_MODE_AUTO;
   priv->appearance = GLASS_APPEARANCE_UNKNOWN;
+  priv->press_grow_px = 6.0;
+  priv->press_max_extra = 0.16;
+  for (int i = 0; i < GLASS_N_PARAMS; i++)
+    priv->param_default[i] = NAN;
   glass_adaptive_state_init (&priv->astate);
 
   gtk_widget_set_overflow (GTK_WIDGET (self), GTK_OVERFLOW_HIDDEN);

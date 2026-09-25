@@ -54,4 +54,8 @@ void               glass_panel_set_adaptive      (GlassPanel        *self,
 
 GlassAppearance    glass_panel_get_appearance    (GlassPanel *self);
 
+gboolean           glass_panel_get_interactive   (GlassPanel *self);
+void               glass_panel_set_interactive   (GlassPanel *self,
+                                                  gboolean    interactive);
+
 G_END_DECLS

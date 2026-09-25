@@ -33,8 +33,8 @@ struct _GlassHeaderBar {
 
   GtkWidget *handle;
   GtkWidget *center_box;
-  GtkWidget *start_capsule, *start_items;
-  GtkWidget *end_capsule, *end_items;
+  GtkWidget *start_capsule;         /* GlassButtonGroup */
+  GtkWidget *end_capsule;
   GtkWidget *start_controls_capsule, *start_controls;
   GtkWidget *end_controls_capsule, *end_controls;
   GtkWidget *title_label;
@@ -64,11 +64,16 @@ G_DEFINE_FINAL_TYPE_WITH_CODE (GlassHeaderBar, glass_header_bar, GTK_TYPE_WIDGET
 
 static GtkBuildableIface *parent_buildable_iface;
 
+/* A capsule shows while something in it does: a lone button that is hidden
+ * (a "show sidebar" button while the sidebar shows) would otherwise leave
+ * an empty dot of glass. */
 static void
 update_visibility (GlassHeaderBar *self)
 {
-  gtk_widget_set_visible (self->start_capsule, gtk_widget_get_first_child (self->start_items) != NULL);
-  gtk_widget_set_visible (self->end_capsule, gtk_widget_get_first_child (self->end_items) != NULL);
+  gtk_widget_set_visible (self->start_capsule,
+                          glass_button_group_has_visible_child (GLASS_BUTTON_GROUP (self->start_capsule)));
+  gtk_widget_set_visible (self->end_capsule,
+                          glass_button_group_has_visible_child (GLASS_BUTTON_GROUP (self->end_capsule)));
   gtk_widget_set_visible (self->start_controls_capsule,
                           self->show_start_title_buttons &&
                           !gtk_window_controls_get_empty (GTK_WINDOW_CONTROLS (self->start_controls)));
@@ -78,6 +83,14 @@ update_visibility (GlassHeaderBar *self)
   gtk_widget_set_visible (self->title_label, self->show_title && self->title_widget == NULL);
   if (self->title_widget)
     gtk_widget_set_visible (self->title_widget, self->show_title);
+}
+
+static void
+child_visible_changed (GtkWidget      *child,
+                       GParamSpec     *pspec,
+                       GlassHeaderBar *self)
+{
+  update_visibility (self);
 }
 
 static void
@@ -128,15 +141,23 @@ glass_header_bar_unroot (GtkWidget *widget)
 }
 
 static GtkWidget *
-capsule_new (const char *extra_class, GtkWidget **items)
+capsule_new (void)
+{
+  GtkWidget *capsule = glass_button_group_new ();
+
+  gtk_widget_add_css_class (capsule, "header-capsule");
+  gtk_widget_set_valign (capsule, GTK_ALIGN_CENTER);
+  return capsule;
+}
+
+static GtkWidget *
+controls_capsule_new (GtkWidget *controls)
 {
   GtkWidget *capsule = glass_panel_new ();
 
-  *items = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0);
-  glass_panel_set_child (GLASS_PANEL (capsule), *items);
+  glass_panel_set_child (GLASS_PANEL (capsule), controls);
   gtk_widget_add_css_class (capsule, "header-capsule");
-  if (extra_class)
-    gtk_widget_add_css_class (capsule, extra_class);
+  gtk_widget_add_css_class (capsule, "window-controls");
   gtk_widget_set_valign (capsule, GTK_ALIGN_CENTER);
   return capsule;
 }
@@ -281,7 +302,7 @@ glass_header_bar_class_init (GlassHeaderBarClass *klass)
 static void
 glass_header_bar_init (GlassHeaderBar *self)
 {
-  GtkWidget *start, *end, *unused;
+  GtkWidget *start, *end;
 
   self->show_title = TRUE;
   self->show_start_title_buttons = TRUE;
@@ -298,17 +319,15 @@ glass_header_bar_init (GlassHeaderBar *self)
   gtk_center_box_set_start_widget (GTK_CENTER_BOX (self->center_box), start);
   gtk_center_box_set_end_widget (GTK_CENTER_BOX (self->center_box), end);
 
-  self->start_controls_capsule = capsule_new ("window-controls", &unused);
   self->start_controls = gtk_window_controls_new (GTK_PACK_START);
-  gtk_box_append (GTK_BOX (unused), self->start_controls);
-  self->start_capsule = capsule_new (NULL, &self->start_items);
+  self->start_controls_capsule = controls_capsule_new (self->start_controls);
+  self->start_capsule = capsule_new ();
   gtk_box_append (GTK_BOX (start), self->start_controls_capsule);
   gtk_box_append (GTK_BOX (start), self->start_capsule);
 
-  self->end_capsule = capsule_new (NULL, &self->end_items);
-  self->end_controls_capsule = capsule_new ("window-controls", &unused);
+  self->end_capsule = capsule_new ();
   self->end_controls = gtk_window_controls_new (GTK_PACK_END);
-  gtk_box_append (GTK_BOX (unused), self->end_controls);
+  self->end_controls_capsule = controls_capsule_new (self->end_controls);
   gtk_box_append (GTK_BOX (end), self->end_capsule);
   gtk_box_append (GTK_BOX (end), self->end_controls_capsule);
 
@@ -380,7 +399,8 @@ glass_header_bar_pack_start (GlassHeaderBar *self,
   g_return_if_fail (GLASS_IS_HEADER_BAR (self));
   g_return_if_fail (GTK_IS_WIDGET (child));
 
-  gtk_box_append (GTK_BOX (self->start_items), child);
+  glass_button_group_append (GLASS_BUTTON_GROUP (self->start_capsule), child);
+  g_signal_connect_object (child, "notify::visible", G_CALLBACK (child_visible_changed), self, 0);
   update_visibility (self);
 }
 
@@ -399,7 +419,8 @@ glass_header_bar_pack_end (GlassHeaderBar *self,
   g_return_if_fail (GLASS_IS_HEADER_BAR (self));
   g_return_if_fail (GTK_IS_WIDGET (child));
 
-  gtk_box_prepend (GTK_BOX (self->end_items), child);
+  glass_button_group_prepend (GLASS_BUTTON_GROUP (self->end_capsule), child);
+  g_signal_connect_object (child, "notify::visible", G_CALLBACK (child_visible_changed), self, 0);
   update_visibility (self);
 }
 
@@ -419,8 +440,12 @@ glass_header_bar_remove (GlassHeaderBar *self,
   g_return_if_fail (GLASS_IS_HEADER_BAR (self));
 
   parent = gtk_widget_get_parent (child);
-  if (parent == self->start_items || parent == self->end_items)
-    gtk_box_remove (GTK_BOX (parent), child);
+  parent = parent ? gtk_widget_get_parent (parent) : NULL;   /* the group, above its row */
+  if (parent == self->start_capsule || parent == self->end_capsule)
+    {
+      g_signal_handlers_disconnect_by_func (child, child_visible_changed, self);
+      glass_button_group_remove (GLASS_BUTTON_GROUP (parent), child);
+    }
   else if (child == self->title_widget)
     glass_header_bar_set_title_widget (self, NULL);
   else

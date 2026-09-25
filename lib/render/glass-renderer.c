@@ -87,8 +87,13 @@ struct _GlassRenderer {
   char             *vertex_source;
   GLuint            vao;
   GLuint            prog_glass;
+  GLuint            prog_copy;       /* one texture, as is (compositing layers) */
   GHashTable       *uniforms;        /* static name -> location + 1 */
   GHashTable       *blur_programs;   /* sigma * 1000 -> BlurPrograms* */
+  GskRenderer      *capture_renderer; /* a private GL renderer, or NULL: the window's */
+  gboolean          capture_renderer_tried;
+  guint8           *atlas;           /* the last download, all regions */
+  gsize             atlas_size;
   GlassRenderStats  stats;
 };
 
@@ -112,6 +117,7 @@ struct _GlassCapture {
   double          blur_radius;
   int             downscale;
   guint           gen;               /* bumped on every new capture */
+  guint64         compose_key;       /* glass_renderer_compose(): what it was made of */
 };
 
 typedef struct {
@@ -123,6 +129,10 @@ typedef struct {
   gboolean        has_shadow;
   gconstpointer   capture;
   guint           capture_gen;
+  guint           n_shapes;
+  graphene_rect_t shapes[GLASS_MAX_SHAPES];
+  float           radii[GLASS_MAX_SHAPES];
+  float           merge_k;
   gboolean        supersample;
   gboolean        measured_footprint;
 } PassKey;
@@ -132,7 +142,111 @@ struct _GlassPanelRender {
   GdkTexture     *last_texture;
   gboolean        pass_valid;
   PassKey         pass_key;
+  guint64         output_gen;        /* bumped on every new output texture */
+  GLuint          output_tex;        /* last_texture's GL name (its slot stays in use while we hold it) */
 };
+
+/* ── GPU timing (GLASS_DEBUG=gpu-time) ─────────────────────────────────────
+ * EXT_disjoint_timer_query around each pass; results are read back, without
+ * waiting, a few frames later and summed per kind and size. Measurement
+ * only: it is off unless asked for. */
+
+typedef struct {
+  GLuint query;
+  char   label[48];
+} GpuTimer;
+
+#define GPU_TIMERS 64
+
+static GpuTimer gpu_timers[GPU_TIMERS];
+static guint gpu_timer_head, gpu_timer_tail;
+static GHashTable *gpu_totals;            /* label -> gint64[2] (ns, count) */
+static gint64 gpu_last_report;
+
+static gboolean
+gpu_timing (void)
+{
+  static int enabled = -1;
+
+  if (enabled < 0)
+    enabled = (glass_get_debug_flags () & GLASS_DEBUG_GPU_TIME) &&
+              epoxy_has_gl_extension ("GL_EXT_disjoint_timer_query");
+  return enabled;
+}
+
+static void
+gpu_collect (void)
+{
+  while (gpu_timer_tail != gpu_timer_head)
+    {
+      GpuTimer *t = &gpu_timers[gpu_timer_tail % GPU_TIMERS];
+      GLuint available = 0;
+      GLuint64 ns = 0;
+      gint64 *total;
+
+      glGetQueryObjectuivEXT (t->query, GL_QUERY_RESULT_AVAILABLE_EXT, &available);
+      if (!available)
+        break;
+      glGetQueryObjectui64vEXT (t->query, GL_QUERY_RESULT_EXT, &ns);
+      if (gpu_totals == NULL)
+        gpu_totals = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, g_free);
+      total = g_hash_table_lookup (gpu_totals, t->label);
+      if (total == NULL)
+        {
+          total = g_new0 (gint64, 2);
+          g_hash_table_insert (gpu_totals, g_strdup (t->label), total);
+        }
+      total[0] += (gint64) ns;
+      total[1]++;
+      gpu_timer_tail++;
+    }
+
+  if (gpu_totals && g_get_monotonic_time () - gpu_last_report > 2 * G_USEC_PER_SEC)
+    {
+      GHashTableIter iter;
+      gpointer key, value;
+      GString *report = g_string_new ("gpu (ms per second of wall time):");
+      double secs = gpu_last_report ? (g_get_monotonic_time () - gpu_last_report) / (double) G_USEC_PER_SEC : 2.0;
+
+      g_hash_table_iter_init (&iter, gpu_totals);
+      while (g_hash_table_iter_next (&iter, &key, &value))
+        {
+          gint64 *total = value;
+
+          g_string_append_printf (report, "\n  %-24s %7.2f ms/s  (%5.0f/s, %.3f ms each)", (char *) key,
+                                  total[0] / 1e6 / secs, total[1] / secs, total[0] / 1e6 / MAX (total[1], 1));
+        }
+      g_debug ("%s", report->str);
+      g_string_free (report, TRUE);
+      g_hash_table_remove_all (gpu_totals);
+      gpu_last_report = g_get_monotonic_time ();
+    }
+}
+
+static void
+gpu_begin (const char *kind, int w, int h)
+{
+  GpuTimer *t;
+
+  if (!gpu_timing ())
+    return;
+  gpu_collect ();
+  if (gpu_timer_head - gpu_timer_tail >= GPU_TIMERS)
+    return;
+  t = &gpu_timers[gpu_timer_head % GPU_TIMERS];
+  if (t->query == 0)
+    glGenQueriesEXT (1, &t->query);
+  g_snprintf (t->label, sizeof t->label, "%s %dx%d", kind, w, h);
+  glBeginQueryEXT (GL_TIME_ELAPSED_EXT, t->query);
+  gpu_timer_head++;
+}
+
+static void
+gpu_end (void)
+{
+  if (gpu_timing ())
+    glEndQueryEXT (GL_TIME_ELAPSED_EXT);
+}
 
 /* ── Output pool ──────────────────────────────────────────────────────────── */
 
@@ -371,6 +485,7 @@ glass_capture_is_fresh (GlassCapture *cap)
   return cap->fresh;
 }
 
+
 /* ── Renderer ─────────────────────────────────────────────────────────────── */
 
 static void
@@ -445,6 +560,17 @@ renderer_new (GtkNative *native)
       return NULL;
     }
 
+  {
+    static const char copy_src[] =
+      "uniform sampler2D u_src;\n"
+      "in vec4 v_tex_coord;\n"
+      "out vec4 frag_color;\n"
+      "void main() { frag_color = texture(u_src, v_tex_coord.st); }\n";
+    const char *copy_parts[] = { copy_src, NULL };
+
+    self->prog_copy = glass_gl_program_new (es, self->vertex_source, copy_parts, NULL);
+  }
+
   glGenVertexArrays (1, &self->vao);
   self->uniforms = g_hash_table_new (g_str_hash, g_str_equal);
   self->blur_programs = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, blur_programs_free);
@@ -459,10 +585,18 @@ renderer_new (GtkNative *native)
 static void
 renderer_destroy (GlassRenderer *self)
 {
+  if (self->capture_renderer)
+    {
+      gsk_renderer_unrealize (self->capture_renderer);
+      g_clear_object (&self->capture_renderer);
+    }
+  g_free (self->atlas);
   gdk_gl_context_make_current (self->ctx);
   g_hash_table_destroy (self->blur_programs);
   if (self->prog_glass)
     glDeleteProgram (self->prog_glass);
+  if (self->prog_copy)
+    glDeleteProgram (self->prog_copy);
   if (self->vao)
     glDeleteVertexArrays (1, &self->vao);
   g_hash_table_destroy (self->uniforms);
@@ -669,105 +803,67 @@ glass_capture_rect_for_panel (const graphene_rect_t *panel,
   return graphene_rect_intersection (out, view_rect, out);
 }
 
-gboolean
-glass_renderer_capture (GlassRenderer             *self,
-                        GlassCapture              *cap,
-                        const GlassCaptureRequest *req)
+/* The renderer that draws the captures. gsk_renderer_render_texture() has a
+ * fixed cost that barely depends on the size (docs/memo.md 追記7): about
+ * 0.25-0.5 ms with the Vulkan renderer GTK uses by default, 0.15 ms with
+ * its GL renderer. So captures go through a private GL renderer when the
+ * window's is not GL already. Its render_texture() still hands back a
+ * dmabuf, so the download stays; only the fixed cost goes down. */
+static GskRenderer *
+capture_renderer (GlassRenderer *self)
 {
-  GskRenderer *renderer = gtk_native_get_renderer (self->native);
-  int downscale = req->downscale >= 4 ? 4 : req->downscale >= 2 ? 2 : 1;
-  double capture_scale = req->scale / downscale;
-  graphene_rect_t C = req->rect;
-  GskRenderNode *clip, *node;
-  GskTransform *transform;
-  GdkTextureDownloader *downloader;
-  GdkTexture *texture;
+  GskRenderer *window_renderer = gtk_native_get_renderer (self->native);
+  g_autoptr (GError) error = NULL;
+  GskRenderer *renderer;
+
+  if (self->capture_renderer)
+    return self->capture_renderer;
+  if (self->capture_renderer_tried || GSK_IS_GL_RENDERER (window_renderer) ||
+      (glass_get_debug_flags () & GLASS_DEBUG_WINDOW_CAPTURE))
+    return window_renderer;
+  self->capture_renderer_tried = TRUE;
+
+  renderer = gsk_gl_renderer_new ();
+  if (!gsk_renderer_realize_for_display (renderer, gtk_widget_get_display (GTK_WIDGET (self->native)), &error))
+    {
+      g_debug ("no private GL renderer for captures, using the window's: %s", error->message);
+      g_object_unref (renderer);
+      return window_renderer;
+    }
+  self->capture_renderer = renderer;
+  return renderer;
+}
+
+static void
+ensure_textures (GlassCapture *cap, int w, int h)
+{
+  if (cap->tex_w == w && cap->tex_h == h)
+    return;
+
+  alloc_texture (&cap->capture_tex, w, h);
+  alloc_texture (&cap->blur_h_tex, w, h);
+  alloc_texture (&cap->blur_v_tex, w, h);
+  attach_fbo (&cap->capture_fbo, cap->capture_tex);
+  attach_fbo (&cap->blur_h_fbo, cap->blur_h_tex);
+  attach_fbo (&cap->blur_v_fbo, cap->blur_v_tex);
+  cap->tex_w = w;
+  cap->tex_h = h;
+}
+
+/* Blurs capture_tex into backdrop_tex. Our context must be current. */
+static void
+blur (GlassRenderer *self,
+      GlassCapture  *cap,
+      int            w,
+      int            h,
+      double         blur_radius_px,
+      int            downscale)
+{
   GlassGaussKernel kernel;
-  gint64 t0, t1, t2, t3, t4;
-  int c_w, c_h, w, h;
-  gsize stride;
 
-  cap->fresh = FALSE;
-  snap_rect (&C, capture_scale, &c_w, &c_h);
-  if (c_w < 1 || c_h < 1)
-    return FALSE;
-
-  if (!(glass_get_debug_flags () & GLASS_DEBUG_NO_CACHE) && cap->valid &&
-      req->content_key == cap->key_leaf &&
-      req->key_dx == cap->key_dx && req->key_dy == cap->key_dy &&
-      req->key_extra == cap->key_extra &&
-      graphene_rect_equal (&C, &cap->rect) &&
-      capture_scale == cap->capture_scale &&
-      req->blur_radius == cap->blur_radius &&
-      downscale == cap->downscale)
-    {
-      self->stats.capture_hits++;
-      return TRUE;
-    }
-
-  clip = gsk_clip_node_new (req->backdrop, &C);
-  transform = gsk_transform_scale (NULL, capture_scale, capture_scale);
-  transform = gsk_transform_translate (transform, &GRAPHENE_POINT_INIT (-C.origin.x, -C.origin.y));
-  node = gsk_transform_node_new (clip, transform);
-  gsk_transform_unref (transform);
-  gsk_render_node_unref (clip);
-
-  t0 = g_get_monotonic_time ();
-  texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, c_w, c_h));
-  t1 = g_get_monotonic_time ();
-  gsk_render_node_unref (node);
-
-  if (texture == NULL)
-    {
-      gdk_gl_context_make_current (self->ctx);
-      cap->valid = FALSE;
-      return FALSE;
-    }
-
-  w = gdk_texture_get_width (texture);
-  h = gdk_texture_get_height (texture);
-  stride = (gsize) w * 4;
-  if (cap->pixels_size < stride * h)
-    {
-      g_free (cap->pixels);
-      cap->pixels_size = stride * h;
-      cap->pixels = g_malloc (cap->pixels_size);
-    }
-
-  downloader = gdk_texture_downloader_new (texture);
-  gdk_texture_downloader_set_format (downloader, GDK_MEMORY_R8G8B8A8_PREMULTIPLIED);
-  gdk_texture_downloader_download_into (downloader, cap->pixels, stride);
-  gdk_texture_downloader_free (downloader);
-  g_object_unref (texture);
-
-  /* [docs/memo.md 地雷1] GTK's GL renderer makes ITS context current to
-   * render and download, and leaves it that way. Textures and programs are
-   * shared between the two contexts, framebuffer objects and VAOs are not:
-   * without this, the blur and glass passes bind ids that mean nothing (or
-   * something else) in GTK's context and draw into the wrong framebuffer. */
-  gdk_gl_context_make_current (self->ctx);
-  t2 = g_get_monotonic_time ();
-
-  if (cap->tex_w != w || cap->tex_h != h)
-    {
-      alloc_texture (&cap->capture_tex, w, h);
-      alloc_texture (&cap->blur_h_tex, w, h);
-      alloc_texture (&cap->blur_v_tex, w, h);
-      attach_fbo (&cap->capture_fbo, cap->capture_tex);
-      attach_fbo (&cap->blur_h_fbo, cap->blur_h_tex);
-      attach_fbo (&cap->blur_v_fbo, cap->blur_v_tex);
-      cap->tex_w = w;
-      cap->tex_h = h;
-    }
-
-  glPixelStorei (GL_UNPACK_ALIGNMENT, 4);
-  glPixelStorei (GL_UNPACK_ROW_LENGTH, 0);
-  glBindTexture (GL_TEXTURE_2D, cap->capture_tex);
-  glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, cap->pixels);
-  t3 = g_get_monotonic_time ();
-
+  gpu_begin ("blur", w, h);
   cap->backdrop_tex = cap->capture_tex;
-  if (glass_gauss_kernel_for_radius (req->blur_radius * req->scale, downscale, &kernel))
+  if (glass_gauss_kernel_for_radius (blur_radius_px, downscale, &kernel))
     {
       BlurPrograms *bp = blur_programs (self, &kernel);
 
@@ -781,28 +877,351 @@ glass_renderer_capture (GlassRenderer             *self,
           cap->backdrop_tex = cap->blur_v_tex;
         }
     }
-  t4 = g_get_monotonic_time ();
+  gpu_end ();
+}
 
-  if (req->content_key)
-    gsk_render_node_ref (req->content_key);
-  g_clear_pointer (&cap->key_leaf, gsk_render_node_unref);
-  cap->key_leaf = req->content_key;
-  cap->key_dx = req->key_dx;
-  cap->key_dy = req->key_dy;
-  cap->key_extra = req->key_extra;
-  cap->rect = C;
-  cap->capture_scale = capture_scale;
-  cap->blur_radius = req->blur_radius;
-  cap->downscale = downscale;
-  cap->valid = TRUE;
-  cap->fresh = TRUE;
-  cap->gen++;
+/* Uploads cap->pixels and blurs them. Our context must be current. */
+static void
+upload_and_blur (GlassRenderer *self,
+                 GlassCapture  *cap,
+                 int            w,
+                 int            h,
+                 double         blur_radius_px,
+                 int            downscale)
+{
+  ensure_textures (cap, w, h);
+  glPixelStorei (GL_UNPACK_ALIGNMENT, 4);
+  glPixelStorei (GL_UNPACK_ROW_LENGTH, 0);
+  glBindTexture (GL_TEXTURE_2D, cap->capture_tex);
+  glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, cap->pixels);
+  blur (self, cap, w, h, blur_radius_px, downscale);
+}
+
+typedef struct {
+  GlassCapture    *cap;
+  const GlassCaptureRequest *req;
+  graphene_rect_t  C;           /* snapped */
+  double           capture_scale;
+  int              downscale;
+  int              w, h;
+  int              y;           /* row in the atlas */
+} Region;
+
+#define ATLAS_GAP 2
+
+gboolean
+glass_renderer_capture_all (GlassRenderer             *self,
+                            GlassCapture             **caps,
+                            const GlassCaptureRequest *reqs,
+                            guint                      n)
+{
+  g_autoptr (GArray) regions = g_array_new (FALSE, TRUE, sizeof (Region));
+  gboolean no_cache = (glass_get_debug_flags () & GLASS_DEBUG_NO_CACHE) != 0;
+  GskRenderNode **nodes;
+  GskRenderNode *atlas_node;
+  GdkTextureDownloader *downloader;
+  GdkTexture *texture;
+  int atlas_w = 0, atlas_h = 0;
+  gsize stride;
+  gint64 t0, t1, t2, t3;
+
+  /* 1. Which captures are stale. */
+  for (guint i = 0; i < n; i++)
+    {
+      GlassCapture *cap = caps[i];
+      const GlassCaptureRequest *req = &reqs[i];
+      Region r = { .cap = cap, .req = req };
+
+      cap->fresh = FALSE;
+      r.downscale = req->downscale >= 4 ? 4 : req->downscale >= 2 ? 2 : 1;
+      r.capture_scale = req->scale / r.downscale;
+      r.C = req->rect;
+      snap_rect (&r.C, r.capture_scale, &r.w, &r.h);
+      if (r.w < 1 || r.h < 1)
+        {
+          cap->valid = FALSE;
+          continue;
+        }
+
+      if (!no_cache && cap->valid &&
+          req->content_key == cap->key_leaf &&
+          req->key_dx == cap->key_dx && req->key_dy == cap->key_dy &&
+          req->key_extra == cap->key_extra &&
+          graphene_rect_equal (&r.C, &cap->rect) &&
+          r.capture_scale == cap->capture_scale &&
+          req->blur_radius == cap->blur_radius &&
+          r.downscale == cap->downscale)
+        {
+          self->stats.capture_hits++;
+          continue;
+        }
+
+      r.y = atlas_h;
+      atlas_h += r.h + ATLAS_GAP;
+      atlas_w = MAX (atlas_w, r.w);
+      g_array_append_val (regions, r);
+    }
+
+  if (regions->len == 0)
+    return TRUE;
+
+  /* 2. One render of every stale region, stacked in an atlas: the fixed
+   * cost of render_texture() is paid once per view and frame, not once per
+   * group of panels (docs/memo.md 追記7). */
+  nodes = g_new (GskRenderNode *, regions->len);
+  for (guint i = 0; i < regions->len; i++)
+    {
+      Region *r = &g_array_index (regions, Region, i);
+      GskRenderNode *clip = gsk_clip_node_new (r->req->backdrop, &r->C);
+      GskTransform *transform = gsk_transform_translate (NULL, &GRAPHENE_POINT_INIT (0, r->y));
+
+      transform = gsk_transform_scale (transform, r->capture_scale, r->capture_scale);
+      transform = gsk_transform_translate (transform, &GRAPHENE_POINT_INIT (-r->C.origin.x, -r->C.origin.y));
+      nodes[i] = gsk_transform_node_new (clip, transform);
+      gsk_transform_unref (transform);
+      gsk_render_node_unref (clip);
+    }
+  atlas_node = gsk_container_node_new (nodes, regions->len);
+  for (guint i = 0; i < regions->len; i++)
+    gsk_render_node_unref (nodes[i]);
+  g_free (nodes);
+
+  t0 = g_get_monotonic_time ();
+  texture = gsk_renderer_render_texture (capture_renderer (self), atlas_node,
+                                         &GRAPHENE_RECT_INIT (0, 0, atlas_w, atlas_h));
+  t1 = g_get_monotonic_time ();
+  gsk_render_node_unref (atlas_node);
+
+  if (texture == NULL)
+    {
+      gdk_gl_context_make_current (self->ctx);
+      for (guint i = 0; i < regions->len; i++)
+        g_array_index (regions, Region, i).cap->valid = FALSE;
+      return FALSE;
+    }
+
+  atlas_w = gdk_texture_get_width (texture);
+  atlas_h = gdk_texture_get_height (texture);
+  stride = (gsize) atlas_w * 4;
+  if (self->atlas_size < stride * atlas_h)
+    {
+      g_free (self->atlas);
+      self->atlas_size = stride * atlas_h;
+      self->atlas = g_malloc (self->atlas_size);
+    }
+  downloader = gdk_texture_downloader_new (texture);
+  gdk_texture_downloader_set_format (downloader, GDK_MEMORY_R8G8B8A8_PREMULTIPLIED);
+  gdk_texture_downloader_download_into (downloader, self->atlas, stride);
+  gdk_texture_downloader_free (downloader);
+  g_object_unref (texture);
+
+  /* [docs/memo.md 地雷1] render_texture() and the download can leave
+   * another GL context current (GTK's GL renderer, or the private one). */
+  gdk_gl_context_make_current (self->ctx);
+  t2 = g_get_monotonic_time ();
+
+  /* 3. Per region: skip everything if the pixels did not change (the node
+   * changed, the picture did not: a sidebar next to scrolling content);
+   * otherwise upload and blur. */
+  for (guint i = 0; i < regions->len; i++)
+    {
+      Region *r = &g_array_index (regions, Region, i);
+      GlassCapture *cap = r->cap;
+      const GlassCaptureRequest *req = r->req;
+      gsize row = (gsize) r->w * 4;
+      gsize size = row * r->h;
+      gboolean same = cap->valid && cap->tex_w == r->w && cap->tex_h == r->h &&
+                      graphene_rect_equal (&r->C, &cap->rect) &&
+                      r->capture_scale == cap->capture_scale &&
+                      req->blur_radius == cap->blur_radius && r->downscale == cap->downscale;
+
+      if (cap->pixels_size < size)
+        {
+          g_free (cap->pixels);
+          cap->pixels_size = size;
+          cap->pixels = g_malloc (size);
+          same = FALSE;
+        }
+      for (int y = 0; y < r->h; y++)
+        {
+          const guint8 *src = self->atlas + (gsize) (r->y + y) * stride;
+          guint8 *dst = cap->pixels + (gsize) y * row;
+
+          if (same && memcmp (src, dst, row) != 0)
+            same = FALSE;
+          if (!same)
+            memcpy (dst, src, row);
+        }
+
+      if (req->content_key)
+        gsk_render_node_ref (req->content_key);
+      g_clear_pointer (&cap->key_leaf, gsk_render_node_unref);
+      cap->key_leaf = req->content_key;
+      cap->key_dx = req->key_dx;
+      cap->key_dy = req->key_dy;
+      cap->key_extra = req->key_extra;
+
+      if (same)
+        {
+          self->stats.capture_unchanged++;
+          continue;
+        }
+
+      upload_and_blur (self, cap, r->w, r->h, req->blur_radius * req->scale, r->downscale);
+      cap->rect = r->C;
+      cap->capture_scale = r->capture_scale;
+      cap->blur_radius = req->blur_radius;
+      cap->downscale = r->downscale;
+      cap->valid = TRUE;
+      cap->fresh = TRUE;
+      cap->gen++;
+    }
+  t3 = g_get_monotonic_time ();
 
   self->stats.us_render_texture += t1 - t0;
   self->stats.us_download += t2 - t1;
-  self->stats.us_upload += t3 - t2;
-  self->stats.us_gl += t4 - t3;
+  self->stats.us_gl += t3 - t2;
   self->stats.captures++;
+  self->stats.regions += regions->len;
+  if (glass_get_debug_flags () & GLASS_DEBUG_HUD)
+    g_debug ("capture: %u regions, atlas %dx%d: render %.3f, download %.3f, upload + blur %.3f ms",
+             regions->len, atlas_w, atlas_h, (t1 - t0) / 1000.0, (t2 - t1) / 1000.0, (t3 - t2) / 1000.0);
+
+  return TRUE;
+}
+
+void
+glass_capture_get_source (GlassCapture     *cap,
+                          GlassLayerSource *out)
+{
+  out->tex = cap->valid ? cap->capture_tex : 0;
+  out->rect = cap->rect;
+  out->id = ((guint64) GPOINTER_TO_SIZE (cap) << 20) ^ cap->gen;
+}
+
+static guint64
+mix64 (guint64 h, guint64 v)
+{
+  h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+  return h;
+}
+
+static guint64
+rect_bits (const graphene_rect_t *r)
+{
+  guint32 a, b, c, d;
+
+  memcpy (&a, &r->origin.x, 4);
+  memcpy (&b, &r->origin.y, 4);
+  memcpy (&c, &r->size.width, 4);
+  memcpy (&d, &r->size.height, 4);
+  return ((guint64) a << 32 | b) ^ ((guint64) c << 16 | d);
+}
+
+/* Draws `src` (covering src_rect, view coordinates) into the target that
+ * covers C at `scale` texels per px. Our context is current, the target is
+ * bound and blending is set. */
+static void
+draw_layer (GlassRenderer         *self,
+            GLuint                 src,
+            const graphene_rect_t *src_rect,
+            const graphene_rect_t *C,
+            double                 scale)
+{
+  graphene_rect_t I;
+  int x0, y0, x1, y1;
+
+  if (src == 0 || !graphene_rect_intersection (src_rect, C, &I))
+    return;
+
+  /* Row 0 of every target is the top of the image (quad.vert), so the
+   * viewport is in top-down pixels too. */
+  x0 = (int) lround ((I.origin.x - C->origin.x) * scale);
+  y0 = (int) lround ((I.origin.y - C->origin.y) * scale);
+  x1 = (int) lround ((I.origin.x + I.size.width - C->origin.x) * scale);
+  y1 = (int) lround ((I.origin.y + I.size.height - C->origin.y) * scale);
+  if (x1 <= x0 || y1 <= y0)
+    return;
+
+  glViewport (x0, y0, x1 - x0, y1 - y0);
+  glBindTexture (GL_TEXTURE_2D, src);
+  glUniform4f (glGetUniformLocation (self->prog_copy, "u_uv_rect"),
+               (float) ((I.origin.x - src_rect->origin.x) / src_rect->size.width),
+               (float) ((I.origin.y - src_rect->origin.y) / src_rect->size.height),
+               (float) ((I.origin.x + I.size.width - src_rect->origin.x) / src_rect->size.width),
+               (float) ((I.origin.y + I.size.height - src_rect->origin.y) / src_rect->size.height));
+  glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
+}
+
+gboolean
+glass_renderer_compose (GlassRenderer          *self,
+                        GlassCapture           *cap,
+                        const graphene_rect_t  *rect,
+                        double                  scale,
+                        int                     downscale,
+                        double                  blur_radius,
+                        const GlassLayerSource *sources,
+                        guint                   n)
+{
+  double capture_scale;
+  graphene_rect_t C = *rect;
+  guint64 key = 0x243f6a8885a308d3ull;
+  int w, h;
+
+  cap->fresh = FALSE;
+  downscale = downscale >= 4 ? 4 : downscale >= 2 ? 2 : 1;
+  capture_scale = scale / downscale;
+  snap_rect (&C, capture_scale, &w, &h);
+  if (w < 1 || h < 1 || self->prog_copy == 0)
+    {
+      cap->valid = FALSE;
+      return FALSE;
+    }
+
+  for (guint i = 0; i < n; i++)
+    {
+      key = mix64 (key, sources[i].tex);
+      key = mix64 (key, sources[i].id);
+      key = mix64 (key, rect_bits (&sources[i].rect));
+    }
+
+  if (!(glass_get_debug_flags () & GLASS_DEBUG_NO_CACHE) && cap->valid &&
+      cap->compose_key == key && graphene_rect_equal (&C, &cap->rect) &&
+      capture_scale == cap->capture_scale && blur_radius == cap->blur_radius &&
+      downscale == cap->downscale)
+    {
+      self->stats.compose_hits++;
+      return TRUE;
+    }
+
+  ensure_textures (cap, w, h);
+  glBindFramebuffer (GL_FRAMEBUFFER, cap->capture_fbo);
+  glViewport (0, 0, w, h);
+  glDisable (GL_SCISSOR_TEST);
+  glClearColor (0, 0, 0, 0);
+  glClear (GL_COLOR_BUFFER_BIT);
+
+  glBindVertexArray (self->vao);
+  glUseProgram (self->prog_copy);
+  glActiveTexture (GL_TEXTURE0);
+  glUniform1i (glGetUniformLocation (self->prog_copy, "u_src"), 0);
+  glEnable (GL_BLEND);
+  glBlendFunc (GL_ONE, GL_ONE_MINUS_SRC_ALPHA);   /* premultiplied OVER */
+  for (guint i = 0; i < n; i++)
+    draw_layer (self, sources[i].tex, &sources[i].rect, &C, capture_scale);
+  glDisable (GL_BLEND);
+  glBindFramebuffer (GL_FRAMEBUFFER, 0);
+
+  blur (self, cap, w, h, blur_radius * scale, downscale);
+
+  cap->rect = C;
+  cap->capture_scale = capture_scale;
+  cap->blur_radius = blur_radius;
+  cap->downscale = downscale;
+  cap->compose_key = key;
+  cap->valid = TRUE;
+  cap->gen++;
+  self->stats.composes++;
 
   return TRUE;
 }
@@ -825,6 +1244,55 @@ glass_capture_measure (GlassCapture          *cap,
                                  (panel->origin.y - cap->rect.origin.y) * s,
                                  panel->size.width * s, panel->size.height * s,
                                  MAX (2.0, cap->blur_radius * s), tint, out);
+}
+
+/* Fused shapes: the gap between two rounded rectangles, their inner boxes'
+ * distance less both radii (exact for circles, and for rectangles side by
+ * side). */
+static double
+shape_gap (const graphene_rect_t *a, double ra, const graphene_rect_t *b, double rb)
+{
+  double dx = fabs ((a->origin.x + a->size.width / 2.0) - (b->origin.x + b->size.width / 2.0)) -
+              MAX (a->size.width / 2.0 - ra, 0.0) - MAX (b->size.width / 2.0 - rb, 0.0);
+  double dy = fabs ((a->origin.y + a->size.height / 2.0) - (b->origin.y + b->size.height / 2.0)) -
+              MAX (a->size.height / 2.0 - ra, 0.0) - MAX (b->size.height / 2.0 - rb, 0.0);
+
+  dx = MAX (dx, 0.0);
+  dy = MAX (dy, 0.0);
+  return sqrt (dx * dx + dy * dy) - ra - rb;
+}
+
+/* The bridges of glass_shape.glsl, in device px (S per logical px): pairs
+ * closer than half the merge width, where the smooth union starts to join
+ * them. With s = 0 (touching) the bridge is their hull, joined with a hard
+ * min; towards s = 1 it is inset until it has gone (the thicker one's half
+ * width, and 2 px more so no edge of it is left), as the union's own neck
+ * parts. The join is softest half-way. */
+static guint
+fused_bridges (const PassKey *key, double S, float out[4 * GLASS_MAX_BRIDGES])
+{
+  double reach = key->merge_k / 2.0;
+  guint n = 0;
+
+  for (guint a = 0; a < key->n_shapes && reach > 0.0; a++)
+    for (guint b = a + 1; b < key->n_shapes && n < GLASS_MAX_BRIDGES; b++)
+      {
+        const graphene_rect_t *ra = &key->shapes[a], *rb = &key->shapes[b];
+        double gap = shape_gap (ra, key->radii[a], rb, key->radii[b]);
+        double u, s, thick;
+
+        if (gap >= reach)
+          continue;
+        u = CLAMP (gap / reach, 0.0, 1.0);
+        s = u * u * (3.0 - 2.0 * u);
+        thick = MAX (MIN (ra->size.width, ra->size.height), MIN (rb->size.width, rb->size.height)) / 2.0;
+        out[4 * n + 0] = (float) a;
+        out[4 * n + 1] = (float) b;
+        out[4 * n + 2] = (float) ((thick + 2.0) * s * S);
+        out[4 * n + 3] = (float) (2.0 * key->merge_k * s * (1.0 - s) * S);
+        n++;
+      }
+  return n;
 }
 
 /* The glass pass into a pool slot. Our context must be current. Everything
@@ -864,6 +1332,36 @@ run_glass_pass (GlassRenderer            *self,
                (float) ((P->origin.x - O->origin.x) * S), (float) ((P->origin.y - O->origin.y) * S),
                (float) (P->size.width * S), (float) (P->size.height * S));
   u1f (self, "corner_radius", radius * S);
+
+  /* Fused shapes (GlassGroup), in device px of the output. */
+  u1f (self, "glass_shape_count", key->n_shapes);
+  if (key->n_shapes > 0)
+    {
+      float shapes[4 * GLASS_MAX_SHAPES];
+      float radii[GLASS_MAX_SHAPES];
+
+      for (guint i = 0; i < key->n_shapes; i++)
+        {
+          const graphene_rect_t *r = &key->shapes[i];
+
+          shapes[4 * i + 0] = (float) ((r->origin.x - O->origin.x) * S);
+          shapes[4 * i + 1] = (float) ((r->origin.y - O->origin.y) * S);
+          shapes[4 * i + 2] = (float) (r->size.width * S);
+          shapes[4 * i + 3] = (float) (r->size.height * S);
+          radii[i] = (float) (key->radii[i] * S);
+        }
+      glUniform4fv (uniform (self, "glass_shapes"), key->n_shapes, shapes);
+      glUniform1fv (uniform (self, "glass_shape_radii"), key->n_shapes, radii);
+      u1f (self, "glass_merge_k", key->merge_k * S);
+    }
+  {
+    float bridges[4 * GLASS_MAX_BRIDGES];
+    guint n_bridges = key->n_shapes > 1 ? fused_bridges (key, S, bridges) : 0;
+
+    u1f (self, "glass_bridge_count", n_bridges);
+    if (n_bridges > 0)
+      glUniform4fv (uniform (self, "glass_bridges"), n_bridges, bridges);
+  }
 
   /* design.md §10.2: the values the reference read off its FBO size, as the
    * signed-off full-monitor figures; the lens at its logical size; no
@@ -913,6 +1411,16 @@ run_glass_pass (GlassRenderer            *self,
 
   glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
   glBindFramebuffer (GL_FRAMEBUFFER, 0);
+}
+
+/* Sends what the passes queued to the GPU. The output textures carry fences
+ * that GTK waits on in its own context, which only works once they are
+ * flushed; call it when a view or a standalone pane is done drawing. */
+void
+glass_renderer_flush (GlassRenderer *self)
+{
+  glass_renderer_make_current (self);
+  glFlush ();
 }
 
 gboolean
@@ -965,6 +1473,10 @@ glass_renderer_render_panel (GlassRenderer            *self,
   key.has_shadow = req->has_shadow;
   key.capture = cap;
   key.capture_gen = cap->gen;
+  key.n_shapes = MIN (req->n_shapes, GLASS_MAX_SHAPES);
+  memcpy (key.shapes, req->shapes, sizeof (graphene_rect_t) * key.n_shapes);
+  memcpy (key.radii, req->radii, sizeof (float) * key.n_shapes);
+  key.merge_k = key.n_shapes ? req->merge_k : 0.0f;
   key.supersample = !(debug & GLASS_DEBUG_NO_SUPERSAMPLE);
   key.measured_footprint = !(debug & GLASS_DEBUG_ESTIMATED_FOOTPRINT);
 
@@ -988,10 +1500,13 @@ glass_renderer_render_panel (GlassRenderer            *self,
     }
 
   t0 = g_get_monotonic_time ();
+  gpu_begin (key.n_shapes ? "pass-fused" : "pass", slot->w, slot->h);
   run_glass_pass (self, cap, slot, req, &key, shadow_room);
+  gpu_end ();
 
+  /* No flush here: glass_renderer_flush() sends the view's passes in one
+   * submission instead of one each (a kernel call per flush). */
   sync = glFenceSync (GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-  glFlush ();
 
   release = g_new0 (ReleaseData, 1);
   release->slot = slot;
@@ -1016,8 +1531,24 @@ glass_renderer_render_panel (GlassRenderer            *self,
   pr->last_texture = texture;
   pr->pass_key = key;
   pr->pass_valid = TRUE;
+  pr->output_gen++;
+  pr->output_tex = slot->tex;
 
   res->texture = texture;
   res->rect = O;
   return TRUE;
 }
+
+gboolean
+glass_panel_render_get_output (GlassPanelRender *pr,
+                               GlassLayerSource *out)
+{
+  if (!pr->pass_valid || pr->last_texture == NULL)
+    return FALSE;
+
+  out->tex = pr->output_tex;
+  out->rect = pr->pass_key.O;
+  out->id = ((guint64) GPOINTER_TO_SIZE (pr) << 20) ^ pr->output_gen;
+  return TRUE;
+}
+

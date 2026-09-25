@@ -1,10 +1,11 @@
 // Playground: a pane of glass you can drag over backgrounds that make the
 // glass work hard, with its material, shape and shadow (design.md §14).
 
+import Graphene from 'gi://Graphene';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
-import { bindInset, Canvas, PATTERNS, Pattern } from '../util.js';
+import { AnimationBar, bindInset, Canvas, PATTERNS, Pattern } from '../util.js';
 
 export class PlaygroundPage {
     readonly toolbar: Glass.ToolbarView;
@@ -14,6 +15,7 @@ export class PlaygroundPage {
     private stage: Glass.View;
     private background: Glass.ToggleGroup;
     private controls: Gtk.Box;
+    private animation: AnimationBar;
 
     constructor() {
         this.canvas = new Canvas();
@@ -86,29 +88,49 @@ export class PlaygroundPage {
 
         this.toolbar.set_top_edge_style(Glass.EdgeStyle.NONE);
         this.toolbar.set_bottom_edge_style(Glass.EdgeStyle.NONE);
+
+        // Play / pause and speed of the moving background, above the bar.
+        this.animation = new AnimationBar(this.canvas);
+        this.stage.add_overlay(this.animation.widget);
+        bindInset(this.toolbar, 'bottom-bar-height', this.animation.widget, 'margin-bottom', 12);
+
         this.canvas.setPattern('stripes');
     }
 
     setInsetSource(split: Glass.SplitView) {
         bindInset(split, 'content-inset', this.header, 'margin-start', 0);
         bindInset(split, 'content-inset', this.controls, 'margin-start', 0);
+        bindInset(split, 'content-inset', this.animation.widget, 'margin-start', 0);
     }
 
     setPattern(pattern: Pattern) {
         this.background.set_active_name(pattern);
     }
 
-    // Moves the pane with its margins: the view places it by them.
+    // Moves the pane with its margins: the view places it by them. The
+    // pointer is followed in the stage's coordinates: the drag's own offsets
+    // are in the pane's, which move with the pane, so an event that comes
+    // before the pane is laid out anew and one that comes after disagree,
+    // and the pane jumps between two places at a fraction of the speed.
     private makeDraggable(panel: Glass.Panel) {
         const drag = new Gtk.GestureDrag();
-        let x0 = 0, y0 = 0;
-        drag.connect('drag-begin', () => {
+        let x0 = 0, y0 = 0, px0 = 0, py0 = 0;
+        const onStage = (x: number, y: number): [number, number] => {
+            const [ok, p] = panel.compute_point(this.stage, new Graphene.Point({ x, y }));
+            return ok ? [p.x, p.y] : [x, y];
+        };
+        drag.connect('drag-begin', (_gesture, x: number, y: number) => {
             x0 = panel.get_margin_start();
             y0 = panel.get_margin_top();
+            [px0, py0] = onStage(x, y);
         });
-        drag.connect('drag-update', (_gesture, dx: number, dy: number) => {
-            panel.set_margin_start(Math.max(0, Math.round(x0 + dx)));
-            panel.set_margin_top(Math.max(0, Math.round(y0 + dy)));
+        drag.connect('drag-update', () => {
+            const [ok, x, y] = drag.get_point(null);
+            if (!ok)
+                return;
+            const [px, py] = onStage(x, y);
+            panel.set_margin_start(Math.max(0, Math.round(x0 + px - px0)));
+            panel.set_margin_top(Math.max(0, Math.round(y0 + py - py0)));
         });
         panel.add_controller(drag);
         panel.set_cursor_from_name('grab');

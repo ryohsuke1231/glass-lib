@@ -30,7 +30,8 @@
  * ## CSS nodes
  *
  * `GlassSplitView` has a CSS node with name `glasssplitview`. The sidebar is
- * a [class@Panel] with the style class `.sidebar`.
+ * a [class@Panel] with the style class `.glass-sidebar` (not `.sidebar`,
+ * which themes give an opaque background of their own).
  */
 
 #define SIDEBAR_MARGIN 8
@@ -300,7 +301,7 @@ glass_split_view_init (GlassSplitView *self)
   glass_panel_set_material (GLASS_PANEL (self->panel), GLASS_MATERIAL_THICK);
   glass_panel_set_corner_radius (GLASS_PANEL (self->panel), SIDEBAR_RADIUS);
   glass_panel_set_child (GLASS_PANEL (self->panel), self->clamp);
-  gtk_widget_add_css_class (self->panel, "sidebar");
+  gtk_widget_add_css_class (self->panel, "glass-sidebar");
   gtk_widget_set_valign (self->panel, GTK_ALIGN_FILL);
   gtk_widget_set_margin_start (self->panel, SIDEBAR_MARGIN);
   gtk_widget_set_margin_end (self->panel, SIDEBAR_MARGIN);

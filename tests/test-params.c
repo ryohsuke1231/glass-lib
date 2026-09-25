@@ -40,7 +40,8 @@ test_defaults (void)
   g_assert_true (isnan (glass_context_get_param (ctx, "no-such-key")));
 }
 
-/* Materials: the in-app values the user chose (crisp-soft, blur 2). */
+/* Materials: the in-app values the user chose (crisp-soft, blur 2, and the
+ * later max-z, sheen and shadow). */
 static void
 test_materials (void)
 {
@@ -50,7 +51,9 @@ test_materials (void)
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
   g_assert_cmpfloat (v[GLASS_PARAM_BLUR_RADIUS], ==, 2.0);
   g_assert_cmpfloat (v[GLASS_PARAM_PROFILE_SHAPE_N], ==, 7.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 14.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 50.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_SHEEN_INTENSITY], ==, 0.08);
+  g_assert_cmpfloat (v[GLASS_PARAM_SHADOW_INTENSITY], ==, 0.07);
   g_assert_cmpfloat (v[GLASS_PARAM_DISPLACEMENT_SCALE], ==, 45.0);
   g_assert_cmpfloat (v[GLASS_PARAM_RIM_WIDTH], ==, 2.0);
   g_assert_cmpfloat (v[GLASS_PARAM_SHADOW_RADIUS], ==, 16.0);
@@ -85,7 +88,7 @@ test_override (void)
   glass_context_reset_param (ctx, "max-z");
   g_assert_false (glass_context_is_param_set (ctx, "max-z"));
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 14.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 50.0);
 }
 
 static void

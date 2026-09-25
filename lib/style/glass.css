@@ -55,14 +55,31 @@ glasspanel button:not(.suggested-action):not(.destructive-action):not(.opaque):c
   color: inherit;
 }
 
-/* Lists and scrolled views on a sidebar are on the glass, not over it. */
-glasspanel.sidebar list,
-glasspanel.sidebar listview,
-glasspanel.sidebar gridview,
-glasspanel.sidebar columnview,
-glasspanel.sidebar viewport,
-glasspanel.sidebar scrolledwindow {
+/* Lists and scrolled views on a sidebar are on the glass, not over it.
+ * The class is .glass-sidebar, not .sidebar: themes paint .sidebar with an
+ * opaque background, which from USER priority covers the glass
+ * (docs/memo.md 地雷17). */
+glasspanel.glass-sidebar list,
+glasspanel.glass-sidebar listview,
+glasspanel.glass-sidebar gridview,
+glasspanel.glass-sidebar columnview,
+glasspanel.glass-sidebar viewport,
+glasspanel.glass-sidebar scrolledwindow {
   background: none;
+}
+
+/* Round by default (a theme at USER priority can still override this;
+ * GlassButtonGroup and GlassToggleGroup clip their items to pills). */
+glasspanel button {
+  border-radius: 9999px;
+}
+
+glasspanel.button-group {
+  padding: 3px;
+}
+
+glasspanel.button-group > box.pills {
+  border-spacing: 2px;
 }
 
 glasspanel button:focus-visible {
@@ -79,7 +96,7 @@ glasspanel.glass-fallback {
               0 6px 18px alpha(black, 0.18);
 }
 
-glasspanel.glass-fallback.sidebar {
+glasspanel.glass-fallback.glass-sidebar {
   background-color: color-mix(in srgb, var(--window-bg-color) 60%, transparent);
   backdrop-filter: blur(24px) saturate(1.4);
 }
@@ -112,6 +129,10 @@ glassheaderbar .title {
 
 glassheaderbar glasspanel.header-capsule {
   padding: 2px;
+}
+
+glassheaderbar glasspanel.header-capsule > box.pills {
+  border-spacing: 0;
 }
 
 glassheaderbar glasspanel.header-capsule button {
@@ -147,21 +168,22 @@ glasspanel.toggle-group button.active:hover {
   background: none;
 }
 
+/* The plate is glass on the group's glass; this is its tint. */
 glasspanel.toggle-group > pill {
-  color: rgb(255 255 255 / 70%);
+  color: rgb(255 255 255 / 34%);
 }
 
 glasspanel.toggle-group.glass-dark > pill {
-  color: rgb(255 255 255 / 20%);
+  color: rgb(255 255 255 / 18%);
 }
 
 @media (prefers-color-scheme: dark) {
   glasspanel.toggle-group > pill {
-    color: rgb(255 255 255 / 20%);
+    color: rgb(255 255 255 / 18%);
   }
 
   glasspanel.toggle-group.glass-light > pill {
-    color: rgb(255 255 255 / 70%);
+    color: rgb(255 255 255 / 34%);
   }
 }
 
@@ -183,3 +205,69 @@ glasspanel.glass-button > button:hover,
 glasspanel.glass-button > button:active {
   background: none;
 }
+
+/* ── Switch and slider: plain track, glass knob ── */
+
+glassswitch > glassview > track {
+  border-radius: 9999px;
+  background-color: alpha(currentColor, 0.18);
+  transition: background-color 200ms ease-out;
+}
+
+glassswitch.active > glassview > track {
+  background-color: var(--accent-bg-color);
+}
+
+glassswitch:focus-visible > glassview > track {
+  outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
+  outline-offset: 1px;
+}
+
+glassslider > glassview > rail {
+  color: alpha(currentColor, 0.18);
+}
+
+glassslider > glassview > rail > fill {
+  color: var(--accent-bg-color);
+}
+
+glasspanel.switch-knob.glass-fallback,
+glasspanel.slider-knob.glass-fallback {
+  background-color: white;
+  backdrop-filter: none;
+  box-shadow: 0 1px 3px alpha(black, 0.3);
+}
+
+/* ── Popovers, menus and dialogs of glass ── */
+
+/* Never drawn: the tint of a popover's glass. */
+popover.glass > backdrop {
+  color: var(--popover-bg-color);
+}
+
+popover.glass.menu > contents {
+  padding: 6px;
+}
+
+.glass-menu {
+  min-width: 180px;
+}
+
+.glass-menu > button.glass-menu-item {
+  padding: 6px 12px;
+  border-radius: 9px;
+  min-height: 24px;
+}
+
+.glass-menu > button.glass-menu-item:hover {
+  background: alpha(currentColor, 0.08);
+}
+
+.glass-menu > separator {
+  margin: 4px 6px;
+}
+
+glassdialogsurface > backdrop {
+  color: var(--dialog-bg-color);
+}
+

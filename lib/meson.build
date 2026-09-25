@@ -31,6 +31,13 @@ glass_public_headers = files(
   'glass-split-view.h',
   'glass-toggle-group.h',
   'glass-button.h',
+  'glass-button-group.h',
+  'glass-switch.h',
+  'glass-slider.h',
+  'glass-group.h',
+  'glass-popover.h',
+  'glass-menu-button.h',
+  'glass-dialog.h',
 )
 
 glass_public_sources = files(
@@ -43,10 +50,19 @@ glass_public_sources = files(
   'glass-split-view.c',
   'glass-toggle-group.c',
   'glass-button.c',
+  'glass-button-group.c',
+  'glass-switch.c',
+  'glass-slider.c',
+  'glass-group.c',
+  'glass-popover.c',
+  'glass-menu-button.c',
+  'glass-dialog.c',
 )
 
 glass_private_sources = files(
   'glass-style-node.c',
+  'glass-pill-box.c',
+  'glass-standalone.c',
   'render/glass-gl.c',
   'render/glass-renderer.c',
   'adaptive/glass-adaptive.c',
@@ -107,7 +123,7 @@ if get_option('introspection')
     nsversion: '1',
     identifier_prefix: 'Glass',
     symbol_prefix: 'glass',
-    includes: ['Gtk-4.0'],
+    includes: ['Gtk-4.0', 'Adw-1'],
     header: 'glass.h',
     export_packages: 'glass-lib-1',
     extra_args: ['-DGLASS_COMPILATION', '--quiet', '--warn-all'],

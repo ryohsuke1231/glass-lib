@@ -6,7 +6,7 @@ import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
-import { bindInset, Canvas, PATTERNS, Pattern } from '../util.js';
+import { AnimationBar, bindInset, Canvas, PATTERNS, Pattern } from '../util.js';
 
 // Group headings for the parameter list, in spec/params.json order.
 const GROUPS: [string, string[]][] = [
@@ -67,6 +67,8 @@ export class LabPage {
     readonly header: Glass.HeaderBar;
     private canvas: Canvas;
     private specimens: Glass.Panel[] = [];
+    private animation: AnimationBar;
+    private background: Glass.ToggleGroup;
 
     constructor() {
         const context = Glass.Context.get_default();
@@ -74,11 +76,10 @@ export class LabPage {
         const stage = new Glass.View({ content: this.canvas.widget });
 
         // Specimens: a capsule toolbar and a rounded card.
-        const capsule = new Gtk.Box({ spacing: 2, margin_start: 4, margin_end: 4, margin_top: 4, margin_bottom: 4 });
+        const capsule = new Glass.ButtonGroup({ halign: Gtk.Align.START, valign: Gtk.Align.START, margin_top: 110 });
         for (const icon of ['go-previous-symbolic', 'media-playback-start-symbolic', 'go-next-symbolic'])
             capsule.append(new Gtk.Button({ icon_name: icon }));
-        this.specimens.push(new Glass.Panel({ child: capsule, halign: Gtk.Align.START, valign: Gtk.Align.START,
-            margin_top: 110 }));
+        this.specimens.push(capsule);
         const card = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6, margin_top: 18,
             margin_bottom: 18, margin_start: 22, margin_end: 22 });
         card.append(new Gtk.Label({ label: '21°', css_classes: ['title-1'], xalign: 0 }));
@@ -98,7 +99,7 @@ export class LabPage {
             renderer.get_active_name() === 'fallback' ? Glass.RendererMode.FALLBACK : Glass.RendererMode.AUTO));
         list.append(renderer);
 
-        const reduce = new Gtk.Switch({ valign: Gtk.Align.CENTER });
+        const reduce = new Glass.Switch({ valign: Gtk.Align.CENTER });
         reduce.connect('notify::active', () => context.set_reduce_transparency(reduce.get_active()));
         const reduceRow = new Gtk.Box({ spacing: 8, margin_start: 12, margin_end: 12 });
         reduceRow.append(new Gtk.Label({ label: 'Reduce transparency', hexpand: true, xalign: 0 }));
@@ -111,6 +112,12 @@ export class LabPage {
         background.connect('notify::active-name', () =>
             this.canvas.setPattern(background.get_active_name() as Pattern));
         list.append(background);
+        this.background = background;
+
+        // Play / pause and speed of the moving background, on the inspector.
+        this.animation = new AnimationBar(this.canvas, false);
+        this.animation.widget.set_halign(Gtk.Align.CENTER);
+        list.append(this.animation.widget);
 
         for (const [group, keys] of GROUPS) {
             list.append(new Gtk.Label({ label: group, xalign: 0, css_classes: ['heading'], margin_start: 12, margin_top: 8 }));
@@ -138,7 +145,7 @@ export class LabPage {
             margin_end: 12,
             margin_bottom: 12,
         });
-        inspector.add_css_class('sidebar');
+        inspector.add_css_class('glass-sidebar');
         stage.add_overlay(inspector);
 
         this.toolbar = new Glass.ToolbarView({ content: stage });
@@ -151,6 +158,10 @@ export class LabPage {
 
         this.canvas.setPattern('photo');
         background.set_active_name('photo');
+    }
+
+    setPattern(pattern: Pattern) {
+        this.background.set_active_name(pattern);
     }
 
     setInsetSource(split: Glass.SplitView) {

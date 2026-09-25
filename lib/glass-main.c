@@ -35,6 +35,13 @@ glass_init (void)
   g_type_ensure (GLASS_TYPE_SPLIT_VIEW);
   g_type_ensure (GLASS_TYPE_TOGGLE_GROUP);
   g_type_ensure (GLASS_TYPE_BUTTON);
+  g_type_ensure (GLASS_TYPE_BUTTON_GROUP);
+  g_type_ensure (GLASS_TYPE_SWITCH);
+  g_type_ensure (GLASS_TYPE_SLIDER);
+  g_type_ensure (GLASS_TYPE_GROUP);
+  g_type_ensure (GLASS_TYPE_POPOVER);
+  g_type_ensure (GLASS_TYPE_MENU_BUTTON);
+  g_type_ensure (GLASS_TYPE_DIALOG);
   glass_context_get_default ();
 
   display = gdk_display_get_default ();
@@ -61,6 +68,8 @@ glass_get_debug_flags (void)
     { "no-supersample", GLASS_DEBUG_NO_SUPERSAMPLE },
     { "estimated-footprint", GLASS_DEBUG_ESTIMATED_FOOTPRINT },
     { "no-cache", GLASS_DEBUG_NO_CACHE },
+    { "window-capture", GLASS_DEBUG_WINDOW_CAPTURE },
+    { "gpu-time", GLASS_DEBUG_GPU_TIME },
   };
   static gsize flags;
 

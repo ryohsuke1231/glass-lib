@@ -17,6 +17,14 @@ vec4 glass_shade(vec2 uv) {
 
     float d = sdRoundRect(local_pos, box_size, corner_radius);
 
+    // Fused shapes (glass-lib's GlassGroup): the smooth union of several
+    // rounded rectangles instead of glass_rect. Off (0) in the reference.
+    bool fused = glass_shape_count > 0.5;
+    float fusedRadius = corner_radius;
+    if (fused) {
+        d = fusedSD(pixel_coord, fusedRadius);
+    }
+
     // Inside = 1, outside = 0, over +-edgeFeather. Written as the complement
     // of an increasing smoothstep: smoothstep() with edge0 > edge1 is
     // undefined, and some drivers evaluate it as branches that misclassify
@@ -44,7 +52,7 @@ vec4 glass_shade(vec2 uv) {
         max(corner_radius + gradient_step + smoothZoneEarly,
             edgeFeather * 4.0),
         max(ao_radius, rim_width));
-    if (early_exit_enabled > 0.5 && debug_view < 0.5 && -d >= interiorThreshold) {
+    if (early_exit_enabled > 0.5 && debug_view < 0.5 && !fused && -d >= interiorThreshold) {
         vec2 uvFlat = stabilizedUV(uv, uv);
 
         // The full path's four-tap pattern at its interior spread (0.75 px).
@@ -89,7 +97,7 @@ vec4 glass_shade(vec2 uv) {
     vec2 lightDir2D = vec2(cos(lightAngleRad), -sin(lightAngleRad));
     vec2 shadowDir   = -lightDir2D;
 
-    vec2 outwardDir = normalize(local_pos + vec2(1e-4));
+    vec2 outwardDir = fused ? fusedDir(pixel_coord) : normalize(local_pos + vec2(1e-4));
     float lightAlignment = max(dot(outwardDir, shadowDir), 0.0);
 
     // 85% on the lit side, 100% on the shadow side.
@@ -144,7 +152,18 @@ vec4 glass_shade(vec2 uv) {
 
     vec3 shadowColor = vec3(0.03, 0.04, 0.08);
 
-    vec2 gradH = heightGradient(local_pos, box_size, corner_radius, max_z);
+    // ── Early exit 3: outside the silhouette (glass-lib) ─────────────────
+    // Past the feather the coverage is exactly 0: everything below is
+    // multiplied by it, and what is left is the shadow. The same result as
+    // the full path, bit for bit, without its texture fetches - and the
+    // shadow's room around a small capsule is larger than the capsule.
+    if (early_exit_enabled > 0.5 && debug_view < 0.5 && insideMask <= 0.0) {
+        vec3 shadowRgb = shadowColor * shadowAlpha;
+        return vec4(max(shadowRgb + ditherLSB(pixel_coord) * shadowAlpha, 0.0), shadowAlpha);
+    }
+
+    vec2 gradH = fused ? heightGradientFused(pixel_coord, max_z)
+                       : heightGradient(local_pos, box_size, corner_radius, max_z);
     vec3 normal = getNormal(gradH);
 
     vec2 disp = getDisplacement(d, normal, resolution);
@@ -156,7 +175,8 @@ vec4 glass_shade(vec2 uv) {
     // (pulling D back to 0 at the edge would make the outermost pixels bend
     // the other way). The mapping may fold - that is what a thick glass edge
     // does - which costs sampling density, paid for by the footprint taps.
-    float bevelPx = max(min(corner_radius, min(box_size.x, box_size.y)), 1.0);
+    float bevelPx = fused ? max(fusedRadius, 1.0)
+                          : max(min(corner_radius, min(box_size.x, box_size.y)), 1.0);
     float depthPx = max(-d, 0.0);
     float edgeT = clamp(1.0 - depthPx / bevelPx, 0.0, 1.0);
 
@@ -222,14 +242,14 @@ vec4 glass_shade(vec2 uv) {
     // pixel here it is under a pixel across the whole footprint.
     if (fh > 0.0 && edge_taps_enabled > 0.5 && d < fh - 0.01 &&
         (dispLenPx > 0.5 || d > -fh)) {
-        vec2 dirOut = sdRoundRectDir(local_pos, box_size, corner_radius);
+        vec2 dirOut = fused ? fusedDir(pixel_coord) : sdRoundRectDir(local_pos, box_size, corner_radius);
         // The inside part, as offsets along dirOut: from the inner end of
         // the footprint to its outer end or to just short of the edge.
         float tA = -fh;
         float tB = min(fh, -d - 0.01);
         // Landing points relative to this sample's own, px.
-        vec2 landA = tA * dirOut + lensDisplacementPx(local_pos + tA * dirOut, box_size, resolution) - dispPx;
-        vec2 landB = tB * dirOut + lensDisplacementPx(local_pos + tB * dirOut, box_size, resolution) - dispPx;
+        vec2 landA = tA * dirOut + lensDisplacementPx(local_pos + tA * dirOut, box_size, box_center, resolution) - dispPx;
+        vec2 landB = tB * dirOut + lensDisplacementPx(local_pos + tB * dirOut, box_size, box_center, resolution) - dispPx;
 
         pathInside = (tB - tA) / (2.0 * fh);
         if (pathInside < 0.999 || length(landA) + length(landB) > LENS_PATH_TAP_TEXELS * texelPx) {
@@ -239,9 +259,9 @@ vec4 glass_shade(vec2 uv) {
 
             usePath = true;
             path0 = landA / resolution;
-            path1 = (t1 * dirOut + lensDisplacementPx(local_pos + t1 * dirOut, box_size, resolution) - dispPx) / resolution;
-            path2 = (t2 * dirOut + lensDisplacementPx(local_pos + t2 * dirOut, box_size, resolution) - dispPx) / resolution;
-            path3 = (t3 * dirOut + lensDisplacementPx(local_pos + t3 * dirOut, box_size, resolution) - dispPx) / resolution;
+            path1 = (t1 * dirOut + lensDisplacementPx(local_pos + t1 * dirOut, box_size, box_center, resolution) - dispPx) / resolution;
+            path2 = (t2 * dirOut + lensDisplacementPx(local_pos + t2 * dirOut, box_size, box_center, resolution) - dispPx) / resolution;
+            path3 = (t3 * dirOut + lensDisplacementPx(local_pos + t3 * dirOut, box_size, box_center, resolution) - dispPx) / resolution;
             path4 = landB / resolution;
             // The middle of the outside part, unrefracted.
             outsideUv = uv + dirOut * (0.5 * (tB + fh)) / resolution;
@@ -273,11 +293,8 @@ vec4 glass_shade(vec2 uv) {
             vec2 uvR = stabilizedUV(refractedUv + chromaVec, refractedUv);
             vec2 uvB = stabilizedUV(refractedUv - chromaVec, refractedUv);
 
-            refractedRgb = vec3(
-                sampleBackdropPath(uvR, path0, path1, path2, path3, path4, texel, resolution, texelPx).r,
-                sampleBackdropPath(uvG, path0, path1, path2, path3, path4, texel, resolution, texelPx).g,
-                sampleBackdropPath(uvB, path0, path1, path2, path3, path4, texel, resolution, texelPx).b
-            );
+            refractedRgb = sampleBackdropPathRGB(uvR, uvG, uvB, path0, path1, path2, path3, path4,
+                                                 texel, resolution, texelPx);
         } else {
             refractedRgb = sampleBackdropPath(uvG, path0, path1, path2, path3, path4, texel, resolution, texelPx);
         }
