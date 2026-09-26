@@ -104,8 +104,8 @@ glass_popover_snapshot (GtkWidget   *widget,
   gtk_snapshot_append_outset_shadow (snapshot, &shape, &(GdkRGBA) { 0, 0, 0.02f, 0.22f }, 0, 2, 0, 8);
 
   gtk_widget_get_color (self->bg_node, &bg);
-  if (!glass_standalone_draw (self->glass, widget, snapshot, backdrop, &box, RADIUS,
-                              GLASS_MATERIAL_THICK, &bg, FALSE))
+  if (!glass_standalone_draw (self->glass, widget, snapshot, backdrop, &box, (double[4]) { RADIUS, RADIUS, RADIUS, RADIUS },
+                              GLASS_MATERIAL_MENU, &bg, FALSE))
     goto plain;
   gsk_render_node_unref (backdrop);
 

@@ -32,6 +32,9 @@ typedef enum {
  * @GLASS_MATERIAL_CLEAR: over photos and video: less blur and tint
  * @GLASS_MATERIAL_THICK: large surfaces such as sidebars: heavily frosted,
  *   tinted with the window colour, with the theme's foreground colours
+ * @GLASS_MATERIAL_MENU: popovers and menus: frosted and tinted with the
+ *   popover colour, lighter than @GLASS_MATERIAL_THICK, with the theme's
+ *   foreground colours
  *
  * The kind of glass a [class@Panel] is made of.
  */
@@ -39,6 +42,7 @@ typedef enum {
   GLASS_MATERIAL_REGULAR,
   GLASS_MATERIAL_CLEAR,
   GLASS_MATERIAL_THICK,
+  GLASS_MATERIAL_MENU,
 } GlassMaterial;
 
 /**

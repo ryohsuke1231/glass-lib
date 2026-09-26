@@ -59,6 +59,10 @@ typedef struct {
   graphene_rect_t panel;           /* P, in view coordinates (fused: the bounds of the shapes) */
   double          scale;           /* surface scale */
   double          corner_radius;   /* logical px; < 0 = capsule */
+  /* Per corner (top-left, top-right, bottom-right, bottom-left), logical px;
+   * a negative one is corner_radius. Only with has_corner_radii. */
+  gboolean        has_corner_radii;
+  double          corner_radii[4];
   const double   *params;          /* resolved, [GLASS_N_PARAMS] */
   float           tint[4];         /* rgb, strength */
   gboolean        has_shadow;

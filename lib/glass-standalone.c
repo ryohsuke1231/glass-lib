@@ -58,7 +58,7 @@ glass_standalone_draw (GlassStandalone       *self,
                        GtkSnapshot           *snapshot,
                        GskRenderNode         *backdrop,
                        const graphene_rect_t *rect,
-                       double                 radius,
+                       const double           radii[4],
                        GlassMaterial          material,
                        const GdkRGBA         *theme_bg,
                        gboolean               shadow)
@@ -126,7 +126,9 @@ glass_standalone_draw (GlassStandalone       *self,
   req.view_rect = view_rect;
   req.panel = *rect;
   req.scale = scale;
-  req.corner_radius = radius;
+  req.corner_radius = radii[0];
+  req.has_corner_radii = radii[1] != radii[0] || radii[2] != radii[0] || radii[3] != radii[0];
+  memcpy (req.corner_radii, radii, sizeof req.corner_radii);
   req.params = params;
   req.has_shadow = shadow;
   if (!glass_renderer_render_panel (self->renderer, self->render, self->capture, &req, &res))

@@ -39,6 +39,17 @@ double             glass_panel_get_corner_radius (GlassPanel *self);
 void               glass_panel_set_corner_radius (GlassPanel *self,
                                                   double      radius);
 
+void               glass_panel_get_corner_radii  (GlassPanel *self,
+                                                  double     *top_left,
+                                                  double     *top_right,
+                                                  double     *bottom_right,
+                                                  double     *bottom_left);
+void               glass_panel_set_corner_radii  (GlassPanel *self,
+                                                  double      top_left,
+                                                  double      top_right,
+                                                  double      bottom_right,
+                                                  double      bottom_left);
+
 gboolean           glass_panel_get_tint          (GlassPanel *self,
                                                   GdkRGBA    *tint);
 void               glass_panel_set_tint          (GlassPanel    *self,
@@ -57,5 +68,9 @@ GlassAppearance    glass_panel_get_appearance    (GlassPanel *self);
 gboolean           glass_panel_get_interactive   (GlassPanel *self);
 void               glass_panel_set_interactive   (GlassPanel *self,
                                                   gboolean    interactive);
+
+const char        *glass_panel_get_morph_id      (GlassPanel *self);
+void               glass_panel_set_morph_id      (GlassPanel *self,
+                                                  const char *morph_id);
 
 G_END_DECLS

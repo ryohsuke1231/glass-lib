@@ -67,6 +67,15 @@ test_materials (void)
   g_assert_cmpfloat (v[GLASS_PARAM_BLUR_RADIUS], ==, 12.0);
   g_assert_true (glass_material_specs[GLASS_MATERIAL_THICK].tint_from_theme);
   g_assert_false (glass_material_specs[GLASS_MATERIAL_THICK].adaptive);
+
+  /* Menus: lighter than THICK, the theme's colours. */
+  g_assert_cmpint (GLASS_N_MATERIALS, ==, GLASS_MATERIAL_MENU + 1);
+  glass_context_resolve (ctx, GLASS_MATERIAL_MENU, v);
+  g_assert_cmpfloat (v[GLASS_PARAM_BLUR_RADIUS], ==, 8.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 50.0);
+  g_assert_cmpfloat (glass_material_specs[GLASS_MATERIAL_MENU].tint[3], ==, 0.45f);
+  g_assert_true (glass_material_specs[GLASS_MATERIAL_MENU].tint_from_theme);
+  g_assert_false (glass_material_specs[GLASS_MATERIAL_MENU].adaptive);
 }
 
 /* An explicit value beats every material; reset returns to them. */

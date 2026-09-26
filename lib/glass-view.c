@@ -138,6 +138,15 @@ glass_view_register_panel (GlassView  *self,
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
+GlassPanel *
+glass_view_get_panel (GlassView *self,
+                      guint      index)
+{
+  if (index >= self->entries->len)
+    return NULL;
+  return ((PanelEntry *) g_ptr_array_index (self->entries, index))->panel;
+}
+
 void
 glass_view_unregister_panel (GlassView  *self,
                              GlassPanel *panel)
@@ -376,6 +385,10 @@ typedef struct {
   graphene_rect_t  shapes[GLASS_MAX_SHAPES];
   float            radii[GLASS_MAX_SHAPES];
   PanelEntry      *members[GLASS_MAX_SHAPES];
+
+  /* Morphing or a ghost (design.md §6.8): its corners this frame. */
+  gboolean         shaped;
+  double           corners[4];
 } Item;
 
 typedef struct {
@@ -492,12 +505,34 @@ draw_item (GlassView             *self,
     .panel = item->P,
     .scale = scale,
     .corner_radius = glass_panel_get_corner_radius (item->entry->panel),
+    .has_corner_radii = !item->fuse_group && glass_panel_has_corner_radii (item->entry->panel),
     .params = item->params,
     .has_shadow = glass_panel_get_has_shadow (item->entry->panel),
     .n_shapes = item->fuse_group ? item->n_shapes : 0,
     .merge_k = item->fuse_group ? (float) glass_group_get_spacing (GLASS_GROUP (item->fuse_group)) : 0.0f,
   };
   GlassRenderResult res;
+
+  if (item->shaped && !item->fuse_group)
+    {
+      req.has_corner_radii = TRUE;
+      memcpy (req.corner_radii, item->corners, sizeof req.corner_radii);
+    }
+  else if (req.has_corner_radii)
+    glass_panel_get_corner_radii (item->entry->panel, &req.corner_radii[0], &req.corner_radii[1],
+                                  &req.corner_radii[2], &req.corner_radii[3]);
+
+  /* Where morphs to and from these panels start (design.md §6.8). */
+  for (guint m = 0; m < MAX (item->n_shapes, 1); m++)
+    {
+      if (item->n_shapes)
+        glass_panel_set_drawn (item->members[m]->panel, &item->shapes[m], item->radii[m]);
+      else
+        glass_panel_set_drawn (item->entry->panel, &item->P,
+                               item->shaped ? MAX (MAX (item->corners[0], item->corners[1]),
+                                                   MAX (item->corners[2], item->corners[3]))
+                                            : glass_panel_effective_radius (item->entry->panel, &item->P));
+    }
 
   memcpy (req.tint, item->tint, sizeof req.tint);
   memcpy (req.shapes, item->shapes, sizeof req.shapes);
@@ -559,6 +594,7 @@ plan_panels (GlassView             *self,
           PanelEntry *entry = g_ptr_array_index (self->entries, i);
           GtkWidget *panel = GTK_WIDGET (entry->panel);
           Item item = { .entry = entry };
+          double radius;
           double vs;
 
           if (!(panel == overlay || gtk_widget_is_ancestor (panel, overlay)))
@@ -566,22 +602,39 @@ plan_panels (GlassView             *self,
           if (!gtk_widget_get_mapped (panel))
             {
               glass_panel_set_output (entry->panel, NULL, NULL);
-              continue;
+              /* Hidden in a group: its glass, drawn into its neighbour
+               * (design.md §6.8). */
+              if (!glass_panel_get_ghost (entry->panel, self, &item.P, item.corners))
+                continue;
+              item.shaped = TRUE;
+              item.opacity = opacity_to (panel, widget);
             }
-          item.opacity = opacity_to (panel, widget);
+          else
+            {
+              graphene_rect_t target;
+
+              item.opacity = opacity_to (panel, widget);
+              if (item.opacity <= 0.0f)
+                continue;
+              if (!gtk_widget_compute_bounds (panel, widget, &item.P))
+                continue;
+              if (item.P.size.width < 1.0f || item.P.size.height < 1.0f)
+                continue;
+
+              /* The press bulge: the glass grows around its centre. */
+              vs = glass_panel_get_visual_scale (entry->panel);
+              if (vs != 1.0)
+                graphene_rect_inset (&item.P, -item.P.size.width * (float) (vs - 1.0) / 2.0f,
+                                     -item.P.size.height * (float) (vs - 1.0) / 2.0f);
+
+              /* A morph: the glass on its way here from its partner's. */
+              target = item.P;
+              item.shaped = glass_panel_get_morph (entry->panel, &target, &item.P, item.corners);
+            }
           if (item.opacity <= 0.0f)
             continue;
-          if (!gtk_widget_compute_bounds (panel, widget, &item.P))
-            continue;
-          if (item.P.size.width < 1.0f || item.P.size.height < 1.0f)
-            continue;
-
-          /* The press bulge: the glass grows around its centre. */
-          vs = glass_panel_get_visual_scale (entry->panel);
-          if (vs != 1.0)
-            graphene_rect_inset (&item.P, -item.P.size.width * (float) (vs - 1.0) / 2.0f,
-                                 -item.P.size.height * (float) (vs - 1.0) / 2.0f);
-
+          radius = item.shaped ? MAX (MAX (item.corners[0], item.corners[1]), MAX (item.corners[2], item.corners[3]))
+                               : glass_panel_effective_radius (entry->panel, &item.P);
           item.layer = panel_layer (self, panel);
 
           /* A GlassGroup's panels join one body of glass. */
@@ -600,7 +653,7 @@ plan_panels (GlassView             *self,
               if (leader && leader->n_shapes < GLASS_MAX_SHAPES)
                 {
                   leader->shapes[leader->n_shapes] = item.P;
-                  leader->radii[leader->n_shapes] = (float) glass_panel_effective_radius (entry->panel, &item.P);
+                  leader->radii[leader->n_shapes] = (float) radius;
                   leader->members[leader->n_shapes] = entry;
                   leader->n_shapes++;
                   graphene_rect_union (&leader->P, &item.P, &leader->P);
@@ -608,7 +661,7 @@ plan_panels (GlassView             *self,
                 }
               item.n_shapes = 1;
               item.shapes[0] = item.P;
-              item.radii[0] = (float) glass_panel_effective_radius (entry->panel, &item.P);
+              item.radii[0] = (float) radius;
               item.members[0] = entry;
             }
 

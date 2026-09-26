@@ -1,7 +1,9 @@
 # glass-lib 設計書
 
-- 版: **v0.6（Tier 2 を計画から外し、既定値とガラスの上のボタンを直した版）**
+- 版: **v0.7（タブバー・検索欄・モーフィング・材質 MENU・角ごとの半径を v1 に入れた版）**
 - 日付: 2026-09-26
+- v0.6 からの変更（ユーザーの提案、2026-09-26）: §19 の候補だった `GlassTabBar`・`GlassSearchEntry`・形のモーフィング（`GlassPanel:morph-id`）・材質 `MENU`・角ごとの半径を v1 に入れた（§6.8）。
+  Python（PyGObject）からの利用を確かめ、テスト（`tests/test-python.py`）にした（§16）
 - 状態: Phase 0（S1・S5）完了。Phase 2（ライブラリ本体）とウィンドウ部品群、§6.7 の部品、デモを実装（2026-09-25）
 - v0.5 からの変更（ユーザーの決定・指摘、2026-09-26）: 窓そのものが透けるガラス（Tier 2）と `ext-background-effect-v1` を glass-lib の計画から外した（§2.2）。
   `max_z` を 14 → 50、`sheen_intensity` を 0.32 → 0.08 に（3 つの材質の既定。§11.2）。ガラスの上のセグメント・ボタンの列・メニューボタンのボタンを枠なしにした（休止中に背景が付かない。§6.7、memo 地雷27）
@@ -106,6 +108,7 @@ v0.1 の「デスクトップが透けるガラス（Tier 2）」は、既存の
 | `GlassPanel` | ガラスの板。子を 1 つ持ち、アイコン・テキスト・ボタンなどを載せられる。カプセル型または角丸矩形 |
 | ウィンドウ部品群（§6.6） | `GlassToolbarView`（スクロール端の効果つき）、`GlassHeaderBar`、`GlassSplitView`（浮くサイドバー）、`GlassToggleGroup`（セグメント）、`GlassButton` |
 | 層・押下・融合と専用部品（§6.7） | ガラスの上のガラス（層）、押したときの膨らみ（`interactive`）、`GlassGroup`（近いガラスが融合する）、`GlassButtonGroup`、`GlassSwitch`、`GlassSlider`、`GlassPopover`・`GlassMenuButton`（メニュー）、`GlassDialog` |
+| タブバー・検索欄・モーフィングほか（§6.8） | `GlassTabBar`、`GlassSearchEntry`、形のモーフィング（`morph-id`、グループの出入り）、材質 `MENU`、角ごとの半径 |
 | `GlassContext` | ライブラリ全体の設定（レンダラの選択、透明度を下げる、光学パラメータ） |
 | Full レンダラ | 既存の `glass.frag` と同じ見た目（屈折・色収差・リム・影・AO）をアプリ内で描く |
 | フォールバック | GL が使えないとき、または `GlassView` の外に置かれた `GlassPanel` を、CSS の `backdrop-filter` ですりガラスとして描く |
@@ -116,12 +119,11 @@ v0.1 の「デスクトップが透けるガラス（Tier 2）」は、既存の
 
 ### 3.2 作らないもの（v1）
 
-- タブバー、検索欄などの専用部品（スイッチ・スライダー・セグメントは作った。§6.6・§6.7）
-- モーフィング（形が別の形へ変わっていくアニメーション。融合は作った）
 - 別のビューのガラス同士の屈折（層は 1 つのビューの中だけ。§6.7）
-- メニュー用の材質（MENU）、角ごとの半径
+- 中身の自動の余白（パネルに隠れる分は、v1 ではアプリが余白を付ける。§7.1）
 
 いずれも v2 以降の候補として §19 に理由と入口を残す。
+タブバー・検索欄・モーフィング・材質 `MENU`・角ごとの半径は、2026-09-26 のユーザーの提案で v1 に入れた（§6.8）。
 デスクトップが透けるガラス（Tier 2）と D-Bus サービス、GNOME 51 の `ext-background-effect-v1` 対応は、v2 でも作らない（§2.2）。**v1 の設計は、これらを後から足しても作り直しにならないようにする**（形状は配列で持つ、材質は enum で持つ、など）。
 
 ---
@@ -236,6 +238,9 @@ GtkWidget      *glass_panel_new                 (void);
 void            glass_panel_set_child           (GlassPanel *self, GtkWidget *child);
 void            glass_panel_set_material        (GlassPanel *self, GlassMaterial material);
 void            glass_panel_set_corner_radius   (GlassPanel *self, double radius);  /* -1 = カプセル */
+void            glass_panel_set_corner_radii    (GlassPanel *self, double top_left, double top_right,
+                                                 double bottom_right, double bottom_left);  /* 負 = corner-radius（§6.8） */
+void            glass_panel_set_morph_id        (GlassPanel *self, const char *morph_id);    /* §6.8 */
 void            glass_panel_set_tint            (GlassPanel *self, const GdkRGBA *tint); /* alpha = 強さ。NULL = 材質の既定 */
 void            glass_panel_set_has_shadow      (GlassPanel *self, gboolean has_shadow);
 void            glass_panel_set_adaptive        (GlassPanel *self, GlassAdaptiveMode mode);
@@ -247,7 +252,7 @@ GlassAppearance glass_panel_get_appearance      (GlassPanel *self);  /* 読み�
 | 型 | 値 | 意味 |
 |---|---|---|
 | `GlassRendererMode` | `AUTO` / `FULL` / `FALLBACK` | AUTO = GL が使えれば FULL |
-| `GlassMaterial` | `REGULAR` / `CLEAR` / `THICK` | §11.2。`THICK` は大きな板（サイドバー）用 |
+| `GlassMaterial` | `REGULAR` / `CLEAR` / `THICK` / `MENU` | §11.2。`THICK` は大きな板（サイドバー）用、`MENU` はポップオーバー・メニュー用（§6.8） |
 | `GlassEdgeStyle` | `NONE` / `SOFT` / `HARD` | スクロール端の効果（§6.6） |
 | `GlassAdaptiveMode` | `AUTO` / `PREFER_LIGHT` / `PREFER_DARK` / `OFF` | 判定が曖昧なときにどちらへ寄せるか。OFF = 切り替えない（テーマの色のまま） |
 | `GlassAppearance` | `UNKNOWN` / `LIGHT` / `DARK` | LIGHT = ガラスの下が明るい → 前景は暗い色 |
@@ -264,6 +269,8 @@ GlassAppearance glass_panel_get_appearance      (GlassPanel *self);  /* 読み�
 | `GlassPanel` | `child` | GtkWidget |
 | | `material` | `GlassMaterial`、`REGULAR` |
 | | `corner-radius` | double、`-1`（カプセル） |
+| | `top-left-radius`・`top-right-radius`・`bottom-right-radius`・`bottom-left-radius` | double、`-1`（`corner-radius` に従う。§6.8） |
+| | `morph-id` | string、NULL（§6.8） |
 | | `tint` | GdkRGBA（NULL = 材質の既定） |
 | | `has-shadow` | boolean、TRUE |
 | | `adaptive` | `GlassAdaptiveMode`、`AUTO` |
@@ -392,6 +399,41 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
   テーマが USER 優先度で枠のあるボタンに背景を塗ると、ライブラリの CSS では消せず、選ばれていない項目にホバーしていなくても薄いピルが出るため（ユーザーの指摘、memo 地雷27）。
 - CSS: ボタンの列は `.button-group`（中の行は `box.pills`）、スイッチ・スライダーのつまみは `.switch-knob`・`.slider-knob`（色はトラック `track`・レール `rail`・`fill` の `color`）、
   ポップオーバーは `popover.glass`（メニューのページは `.glass-menu`）、ダイアログは `dialog.glass`（ガラスの色は `glassdialogsurface > backdrop` の `color`）。
+
+### 6.8 タブバー・検索欄・モーフィング・材質 MENU・角ごとの半径（v1。2026-09-26 に v2 から前倒し）
+
+ユーザーの提案（2026-09-26）で、§19 の候補だったものを v1 に入れた。部品はどれも §6.7 までの仕組み（`GlassView` の 1 回の snapshot、層、融合）の上に作り、描画の仕組みは増やさない。
+意味は Apple の Liquid Glass（iOS 26・macOS Tahoe）の同名の部品に合わせる。
+
+- **角ごとの半径**: `GlassPanel` のプロパティ `top-left-radius`・`top-right-radius`・`bottom-right-radius`・`bottom-left-radius`（double、既定 -1 = `corner-radius` に従う）と、
+  まとめて設定する `glass_panel_set_corner_radii()`。各角の実際の半径は「その角の値 → `corner-radius` → カプセル（短い辺の半分）」で、どれも短い辺の半分までに切り詰める。
+  - Core: `glass_corner_mode` が 1 のときだけ、輪郭の SDF（`sdRoundRect` と方向）の半径を、画素のある象限の角の値にする（iq の `sdRoundBox` と同じ選び方）。
+    縁のレンズの帯の幅（高さの正規化・`bevelPx`・平らな内側の判定）は、**4 つの角の最大**を `corner_radius` として渡して全体で共通にする。象限ごとに帯の幅を変えると、辺の中央で高さが食い違う（継ぎ目が出る）ため。
+    `glass_corner_mode` が 0（既定、参照と同じ）なら計算は今のまま（ゴールデン 0/255 を維持）。
+  - `GlassGroup` の中（融合）では角ごとの半径は使わない（最大の半径の角丸矩形として融合する）。
+  - CSS: フォールバックと子の切り抜きは、角ごとの `border-radius` のクラスを実行時に作って付ける（今の `glass-radius-*` と同じ方式）。
+  - 使いどころ: 画面の下に付くシート（`GlassDialog` が libadwaita の bottom sheet になったとき: 上の角 15px、下の角 0。`dialog.bottom-sheet` クラスで判別）、窓の縁に沿う板。
+- **材質 `MENU`**（`GlassMaterial` に追加）: ポップオーバーとメニュー用。ぼかし 8px、ティントはテーマのポップオーバーの背景色 0.45（`THICK` の 12px・0.55 より透ける）、影 24px・0.07、Adaptive なし（テーマの色）。
+  `GlassPopover`（メニューも）はこれを使う。ダイアログは `THICK` のまま。値は初期案（C2 と同じくデモで見て決める）。
+- **`GlassTabBar`**: iOS のタブバー（libadwaita の `AdwViewSwitcherBar` に当たる）。`AdwViewStack`（`stack` プロパティ）のページごとに、アイコンと題名を縦に並べた項目を 1 つのガラスのカプセルに並べる。
+  選ばれたページの項目の下を、ガラスの上のガラスの板がスライドする（`GlassToggleGroup` と同じ仕組みを内部で使う）。選ばれた項目のアイコンと題名はアクセントの色
+  （色は項目の中の箱に付ける。テーマが USER 優先度でボタンの文字色を決めていると、ボタンに付けた色は負けるため。memo 地雷30）。
+  `AdwViewStackPage` の `visible`・`title`・`icon-name`・`needs-attention`（点を付ける）に追従する。項目は枠なしのボタン（地雷27）。
+- **`GlassSearchEntry`**: ガラスのカプセルの検索欄（`GlassPanel` の派生、`REGULAR`）。虫眼鏡のアイコン、文字（`GtkText`）、消去のボタン（文字があるときだけ）。
+  `GtkSearchEntry` は使わない: テーマが USER 優先度で `entry` に背景と角の半径を塗るので、ガラスの上に四角い箱が出る（地雷27 と同じ理由）。`GtkText` は背景を持たない。
+  `GtkEditable` を実装する（`GtkText` に委譲）。シグナルは `GtkSearchEntry` と同じ `search-changed`（`search-delay` ms 後、既定 150）・`activate`・`stop-search`（Esc）。
+  `placeholder-text`、`key-capture-widget`（その部品で打った文字をここに回す）。アクセシビリティの役割は `SEARCH_BOX`。
+- **モーフィング**（`GlassPanel:morph-id`、文字列）: ガラスの形が別の形へ変わっていく（Apple の `glassEffectID`）。
+  - **同じ `morph-id` のパネルの入れ替え**: パネルが表示されたとき、同じビューの中に同じ `morph-id` のパネルがあり、それが隠れた（または隠れるところ）なら、新しいパネルのガラスは**古いパネルが最後に描かれた形から**自分の形へ、ばねのアニメーションで変わる。
+    中身（子）は途中から現れる（不透明度 0 → 1）。古いパネルのガラスはそれ以上描かない（新しいパネルのガラスになった）。例: 検索のボタンが検索欄に変わる。
+  - **グループへの出入り**（`GlassGroup` の中、`morph-id` の一致がないとき）: 表示されたパネルは、グループの並びで最も近い（同じ近さなら前の）見えているパネルから**しずくが分かれるように**出てくる。
+    隠れたパネルのガラスは、しばらく中身なしで描き続け（幽霊）、隣のパネルに**吸い込まれるように**縮んで消える。融合（smooth union と橋）がそのまま効くので、液体のようにつながって分かれる。
+    幽霊のアニメーションはビューに付ける（libadwaita は map されていない部品のアニメーションを飛ばすため。memo 地雷29）。
+  - グループの外で `morph-id` の一致がなければ、今までどおり（すぐ現れて、すぐ消える）。
+  - 形は矩形と角の半径を補間する（ばね: 減衰 0.8・剛性 300、少し行き過ぎて戻る。幽霊は 260ms で縮む）。「動きを減らす」の設定（`gtk-enable-animations`）ではアニメーションしない（libadwaita のアニメーションの規則）。
+  - 補間はビューの snapshot の中で、そのフレームの割り当て（§5.3-2）とアニメーションの値から計算するので、中身とガラスは同じフレームで一致する（押したときの膨らみと同じ扱い）。
+  - 大きさの変化（ボタンの列が伸びるなど）は、ガラスが毎フレームの割り当てに追従するので、`GtkStack` の `interpolate-size` や `GtkRevealer` で割り当てをなめらかにすればそのまま形が変わる（別の仕組みは要らない）。
+- CSS: タブバーは `glasstabbar`（中のカプセルは `.tab-bar`、項目は `button.tab`）、検索欄は `glasspanel.search-entry`（文字は `text`）。
 
 ---
 
@@ -734,13 +776,14 @@ shaders/
 - **光学の設定はこれ以上増やさない**（既存拡張の方針 7）。`EDGE_LENS_FALLOFF`・`EDGE_LENS_REACH` は定数のまま。
 - 定義は `spec/params.json` に 1 か所で書き、C のヘッダをビルド時に生成する。
 
-### 11.2 材質（v1 は 2 種類）
+### 11.2 材質（v1 は 4 種類）
 
 | 材質 | 用途 | ぼかし半径 | ティント | 影（半径・強さ） | 取り込みの縮小 | 備考 |
 |---|---|---|---|---|---|---|
 | `REGULAR` | ツールバー、タイトル、ボタンの台 | 2px | 白 0.12 | 16px・0.07 | `blur-downscale` | ティントは既存拡張のドックの既定値と同じ。ぼかし（拡張のドックは 5）と影の半径は S1 でユーザーと比べて決めた。影の強さ 0.07 もユーザーの決定（2026-09-25） |
 | `CLEAR` | 写真・動画の上 | 1.5px | 白 0.04 | 16px・0.07 | 1（縮小しない） | ぼかしが弱いと縮小が見えるため等倍。Adaptive が mixed のときは暗幕（黒 0.25）を足す |
 | `THICK` | サイドバー（大きな板） | 12px | 窓の背景色 0.55（ライト/ダークに追従） | 24px・0.07 | `blur-downscale` | 大きな板は下の中身が場所ごとに違うので、前景色を切り替えず（Adaptive なし、テーマの色のまま）、濃いティントで読めるようにする |
+| `MENU` | ポップオーバー・メニュー（§6.8） | 8px | ポップオーバーの背景色 0.45（テーマに追従） | 24px・0.07 | `blur-downscale` | `THICK` より透ける。前景色はテーマのまま（Adaptive なし）。値は初期案（2026-09-26）で、デモで見て決める（C2） |
 
 - 🔒 **縁の値（アプリ内用）**: 拡張の光学の値は大きなガラス向けの絶対 px で、小さなアプリ内のガラスでは縁が太く濁る（ユーザーの指摘、`docs/memo.md` 地雷8・追記4）。
   アプリ内の材質は、縁に効く値（`edge_smoothing`・`rim_width`・`rim_power`・`ao_radius`・`ao_intensity`・`chroma_strength`・`profile_shape_n`・`displacement_scale`・`max_z`）を**材質自身の値**として持つ。
@@ -838,6 +881,7 @@ v1 の必須ではない（`GlassContext` のプロパティ `follow-shell-setti
 | **Photos** | 写真のグリッドが、上のタイトルのパネルと下のツールバーのパネル（アイコンのボタン）の下を流れる | 屈折、**同じフレームでの一致**、前景色の自動切り替え、キャッシュ |
 | **Playground** | ドラッグ・リサイズできるパネルを、切り替えられる背景（縞・市松・グラデーション・文字・写真・動くグラデーション）の上で動かす。材質・角の半径・ティント・影 | 形と材質の見え方、縁の屈折、端（ビューの端に接したとき） |
 | **Controls** | §6.7 の部品（スイッチ・スライダー・融合するボタン・ボタンの列・メニュー・ダイアログ）を、切り替えられる背景の上に置く。ボタンの隙間をスライダーで変えられる | 層（ガラスの上のガラス）、融合の形、つまみのレンズ |
+| **Tabs** | `AdwViewStack` の 3 ページ（写真・文章・色）の上に浮くタブバー。右下の検索ボタンが検索欄に変わる（`morph-id`）。検索は文章のページを絞り込む。1 つのタブに注意の点 | タブバーの板、検索欄、モーフィング |
 | **Lab** | 光学パラメータ（§11.1）のスライダー、デバッグビュー（形状/影・変位）、Full / フォールバックの切り替え、HUD（§8.8）、「見た目に応じたティント」の A/B | 画質と性能の比較、既存拡張との見比べ |
 
 - 動く背景（Moving）は、Playground・Controls・Lab で**再生／一時停止と速度**（0.25〜4 倍、対数の目盛り）を変えられる。操作部品はガラスのボタンと `GlassSlider`（Lab ではインスペクタの中）。
@@ -934,7 +978,8 @@ meson devenv -C build -w . gjs -m demo/dist/main.js
 | ぼかし | カーネルの係数を既存拡張の TS 実装と比較 | 係数が一致 |
 | Adaptive | `adaptive-vectors.json` を C で再生（`tests/test-adaptive.c`） | 全ベクタで一致 ✅ |
 | パラメータ | clamp・既定値・`list_params`・材質の解決（`tests/test-params.c`） | 表（§11.1）と一致 ✅ |
-| ウィジェット | 登録と解除、content 側・入れ子・レンダラ設定でのフォールバック、部品の報告値、ヘッダーのカプセルの表示（見える子がいる間だけ）、ボタンの列、スイッチ・スライダーの値と役割、グループの登録、メニューの組み立て、ダイアログの中身、ガラスの上のボタンが枠なしであること、下だけが変わったときの入れ子のビュー・ダイアログの描き直し（`tests/test-widgets.c`、14 件。ディスプレイが要る） | 警告なし ✅ |
+| ウィジェット | 登録と解除、content 側・入れ子・レンダラ設定でのフォールバック、部品の報告値、ヘッダーのカプセルの表示（見える子がいる間だけ）、ボタンの列、スイッチ・スライダーの値と役割、グループの登録、メニューの組み立て、ダイアログの中身、ガラスの上のボタンが枠なしであること、下だけが変わったときの入れ子のビュー・ダイアログの描き直し、角ごとの半径、モーフィング（グループへの出入りと `morph-id` の入れ替え）、タブバー（スタックと両方向に連動）、検索欄（`GtkEditable`・`search-changed`）（`tests/test-widgets.c`、19 件。ディスプレイが要る） | 警告なし ✅ |
+| Python | PyGObject から公開 API を一通り使う: out 引数（`get_param_range`・`get_tint`・`get_corner_radii`）、プロパティ、シグナル、インタフェース（`GtkEditable`）、Python でのサブクラス化、全部品を 1 つの窓に置いて連動を確かめる（`tests/test-python.py`。PyGObject とディスプレイが要る） | 失敗なし ✅ |
 | 性能 | デモの HUD、GPU busy%（既存の計測方法） | §8.8 の予算内 |
 | 手動 | チェックリスト: 1x / 1.25x / 2x、ライト/ダーク、ハイコントラスト、Vulkan / GL（`GSK_RENDERER=gl`）、X11、Flatpak | 文字が常に読める・ずれがない |
 
@@ -965,11 +1010,13 @@ S2（GSK だけで描く Lite）、S3（拡張機能での blit）、S6（GNOME 
 - ✅ ウィンドウ部品群（§6.6。2026-09-25 のユーザーの決定で v2 から前倒し）
 - ✅ §6.7 の部品（層・押下・融合・ボタンの列・スイッチ・スライダー・ポップオーバー／メニュー・ダイアログ。2026-09-25 のユーザーの提案で v2 から前倒し）
 - ✅ スクロール中の CPU: 3.3 → 3.0〜3.1ms/フレーム（§8.8）。予算の 3ms をわずかに超えるが、ユーザーの判断で現状のままとした（2026-09-25）。残りの案（ビューをまたぐ取り込みの共有）は §19 に保留
-- ⬜ 残り: フォールバックの Adaptive（§12.1 の小さな取り込み）、HiDPI（2x・分数スケール）と dGPU での確認、Python からの利用の確認
+- ✅ §6.8 の部品（タブバー・検索欄・モーフィング・材質 `MENU`・角ごとの半径。2026-09-26 のユーザーの提案で v2 から前倒し）
+- ✅ Python からの利用の確認（2026-09-26。`tests/test-python.py`。cairo で描く `GtkDrawingArea` をアプリが使うには、別に `python3-gi-cairo` が要る。glass-lib の問題ではない）
+- ⬜ 残り: フォールバックの Adaptive（§12.1 の小さな取り込み）、HiDPI（2x・分数スケール）と dGPU での確認
 
 ### Phase 3: デモ（M）— 最初の版を実装済み（2026-09-25）
 
-- ✅ Photos / Playground / Controls（§6.7 の部品）/ Lab
+- ✅ Photos / Playground / Controls（§6.7 の部品）/ Tabs（§6.8 の部品）/ Lab
 - ⬜ 「見た目に応じたティント」の A/B（C3）、材質の値を見比べて決める（C2）
 
 ### Phase 4: 仕上げ（M）
@@ -1003,9 +1050,8 @@ S2（GSK だけで描く Lite）、S3（拡張機能での blit）、S6（GNOME 
 | 候補 | 入口（v1 の何を拡張するか） |
 |---|---|
 | ~~ガラスの融合・押したときの膨らみ・ガラスの上のガラス・Switch・Slider・SegmentedControl~~ | ✅ v0.4 で v1 に入れた（§6.7） |
-| モーフィング（形が別の形へ変わっていく） | `GlassGroup` の形状配列を時間で補間する |
-| 専用部品の残り（TabBar, SearchEntry） | §6.7 の層とつまみの方式 |
-| MENU 材質、角ごとの半径、中身の自動の余白 | 材質の enum、Core の半径 vec4 |
+| ~~モーフィング、TabBar、SearchEntry、MENU 材質、角ごとの半径~~ | ✅ v0.7 で v1 に入れた（§6.8。ユーザーの提案、2026-09-26） |
+| 中身の自動の余白 | パネルに隠れる分の余白をビューが中身に伝える |
 | ~~Tier 2（窓が透けるガラス）・GNOME 51 の `ext-background-effect-v1`~~ | ❌ 計画から外した（§2.2。ユーザーの決定、2026-09-26） |
 | 既存拡張の設定への追従 | §11.3 |
 | 既存拡張が Core を使う（シェーダの一本化） | §10.2 の明示化で、拡張機能は今と同じ値を渡せば一致する |

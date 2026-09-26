@@ -124,6 +124,8 @@ typedef struct {
   graphene_rect_t P, O, C;
   double          scale;
   double          radius;
+  gboolean        has_corner_radii;
+  double          corner_radii[4];
   double          params[GLASS_N_PARAMS];
   float           tint[4];
   gboolean        has_shadow;
@@ -1331,6 +1333,30 @@ run_glass_pass (GlassRenderer            *self,
   glUniform4f (uniform (self, "glass_rect"),
                (float) ((P->origin.x - O->origin.x) * S), (float) ((P->origin.y - O->origin.y) * S),
                (float) (P->size.width * S), (float) (P->size.height * S));
+
+  /* Per-corner radii (glass_shape.glsl): the outline takes each corner's,
+   * the lens band the largest. Four equal ones are the plain path. */
+  {
+    float radii[4];
+    double half = MIN (P->size.width, P->size.height) / 2.0;
+    double largest = 0.0;
+    gboolean differ = FALSE;
+
+    for (int i = 0; i < 4; i++)
+      {
+        double r = key->has_corner_radii && key->corner_radii[i] >= 0.0 ? MIN (key->corner_radii[i], half) : radius;
+
+        radii[i] = (float) (r * S);
+        largest = MAX (largest, r);
+        differ |= r != radius;
+      }
+    u1f (self, "glass_corner_mode", differ ? 1.0 : 0.0);
+    if (differ)
+      {
+        glUniform4fv (uniform (self, "glass_corner_radii"), 1, radii);
+        radius = largest;
+      }
+  }
   u1f (self, "corner_radius", radius * S);
 
   /* Fused shapes (GlassGroup), in device px of the output. */
@@ -1468,6 +1494,9 @@ glass_renderer_render_panel (GlassRenderer            *self,
   key.C = cap->rect;
   key.scale = req->scale;
   key.radius = req->corner_radius;
+  key.has_corner_radii = req->has_corner_radii;
+  if (req->has_corner_radii)
+    memcpy (key.corner_radii, req->corner_radii, sizeof key.corner_radii);
   memcpy (key.params, params, sizeof key.params);
   memcpy (key.tint, req->tint, sizeof key.tint);
   key.has_shadow = req->has_shadow;

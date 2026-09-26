@@ -15,7 +15,9 @@ vec4 glass_shade(vec2 uv) {
     vec2 local_pos = pixel_coord - box_center;
     vec2 box_size = max(vec2(glass_rect.z, glass_rect.w) * 0.5, vec2(1.0));
 
-    float d = sdRoundRect(local_pos, box_size, corner_radius);
+    // corner_radius itself with glass_corner_mode 0 (the reference).
+    float outline_radius = outlineRadius(local_pos);
+    float d = sdRoundRect(local_pos, box_size, outline_radius);
 
     // Fused shapes (glass-lib's GlassGroup): the smooth union of several
     // rounded rectangles instead of glass_rect. Off (0) in the reference.
@@ -163,7 +165,7 @@ vec4 glass_shade(vec2 uv) {
     }
 
     vec2 gradH = fused ? heightGradientFused(pixel_coord, max_z)
-                       : heightGradient(local_pos, box_size, corner_radius, max_z);
+                       : heightGradient2(local_pos, box_size, outline_radius, corner_radius, max_z);
     vec3 normal = getNormal(gradH);
 
     vec2 disp = getDisplacement(d, normal, resolution);
@@ -242,7 +244,7 @@ vec4 glass_shade(vec2 uv) {
     // pixel here it is under a pixel across the whole footprint.
     if (fh > 0.0 && edge_taps_enabled > 0.5 && d < fh - 0.01 &&
         (dispLenPx > 0.5 || d > -fh)) {
-        vec2 dirOut = fused ? fusedDir(pixel_coord) : sdRoundRectDir(local_pos, box_size, corner_radius);
+        vec2 dirOut = fused ? fusedDir(pixel_coord) : sdRoundRectDir(local_pos, box_size, outline_radius);
         // The inside part, as offsets along dirOut: from the inner end of
         // the footprint to its outer end or to just short of the edge.
         float tA = -fh;

@@ -42,6 +42,7 @@ typedef struct {
   GtkWidget          *child;
   GlassMaterial       material;
   double              corner_radius;
+  double              corner_radii[4];  /* tl, tr, br, bl; -1 = corner_radius */
   GdkRGBA             tint;
   gboolean            tint_set;
   gboolean            has_shadow;
@@ -74,6 +75,28 @@ typedef struct {
   GPtrArray          *nested_views;    /* GlassViews inside, not owned (they
                                         * remove themselves when unrooted) */
 
+  /* Morphing (design.md §6.8). The glass as the view last drew it, in the
+   * view's coordinates: where a morph to or from this panel starts. */
+  char               *morph_id;
+  gboolean            has_drawn;
+  graphene_rect_t     drawn_rect;
+  double              drawn_radius;
+  gint64              hidden_at;        /* µs, the last unmap */
+  gint64              taken_at;         /* µs, when a partner took our glass */
+  /* Appearing: from morph_from to where the panel is. */
+  AdwAnimation       *morph_anim;
+  double              morph_t;          /* 0..1, with overshoot */
+  gboolean            morphing;
+  graphene_rect_t     morph_from;
+  double              morph_from_radius;
+  /* Hidden, still drawn: shrinking into ghost_into. */
+  AdwAnimation       *ghost_anim;
+  double              ghost_t;
+  gboolean            ghost;
+  graphene_rect_t     ghost_from;
+  double              ghost_from_radius;
+  GtkWidget          *ghost_into;       /* weak */
+
   double              param_default[GLASS_N_PARAMS];   /* NAN: none */
 } GlassPanelPrivate;
 
@@ -82,11 +105,16 @@ enum {
   PROP_CHILD,
   PROP_MATERIAL,
   PROP_CORNER_RADIUS,
+  PROP_TOP_LEFT_RADIUS,
+  PROP_TOP_RIGHT_RADIUS,
+  PROP_BOTTOM_RIGHT_RADIUS,
+  PROP_BOTTOM_LEFT_RADIUS,
   PROP_TINT,
   PROP_HAS_SHADOW,
   PROP_ADAPTIVE,
   PROP_APPEARANCE,
   PROP_INTERACTIVE,
+  PROP_MORPH_ID,
   N_PROPS
 };
 
@@ -114,7 +142,10 @@ update_shape_class (GlassPanel *self)
   /* The CSS shape is the glass's shape in every mode: it is what the CSS
    * fallback draws, and what the panel clips its child to (overflow is
    * hidden). Capsules are the stylesheet's default. */
-  if (priv->corner_radius >= 0.0)
+  if (glass_panel_has_corner_radii (self))
+    wanted = glass_style_corner_radii_class (gtk_widget_get_display (widget), priv->corner_radius,
+                                             priv->corner_radii);
+  else if (priv->corner_radius >= 0.0)
     wanted = glass_style_radius_class (gtk_widget_get_display (widget), priv->corner_radius);
 
   if (wanted == priv->shape_class)
@@ -126,7 +157,37 @@ update_shape_class (GlassPanel *self)
     gtk_widget_add_css_class (widget, wanted);
 }
 
+/* One corner's radius: 0 top left, 1 top right, 2 bottom right, 3 bottom
+ * left (the order of CSS border-radius). */
+static void
+set_corner (GlassPanel *self,
+            int         corner,
+            double      radius)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  radius = radius < 0.0 ? -1.0 : radius;
+  if (priv->corner_radii[corner] == radius)
+    return;
+  priv->corner_radii[corner] = radius;
+  update_shape_class (self);
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_TOP_LEFT_RADIUS + corner]);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+gboolean
+glass_panel_has_corner_radii (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  for (int i = 0; i < 4; i++)
+    if (priv->corner_radii[i] >= 0.0)
+      return TRUE;
+  return FALSE;
+}
+
 static void set_appearance (GlassPanel *self, GlassAppearance appearance);
+static void stop_ghost (GlassPanel *self);
 
 void
 glass_panel_set_mode (GlassPanel     *self,
@@ -208,6 +269,15 @@ glass_panel_unroot (GtkWidget *widget)
 {
   GlassPanel *self = GLASS_PANEL (widget);
   GlassPanelPrivate *priv = PRIV (self);
+
+  /* A morph's glass is in the view's coordinates: none of it carries over. */
+  stop_ghost (self);
+  if (priv->morphing)
+    {
+      priv->morphing = FALSE;
+      adw_animation_skip (priv->morph_anim);
+    }
+  priv->has_drawn = FALSE;
 
   if (priv->view)
     glass_view_unregister_panel (priv->view, self);
@@ -447,10 +517,17 @@ double
 glass_panel_effective_radius (GlassPanel            *self,
                               const graphene_rect_t *bounds)
 {
+  GlassPanelPrivate *priv = PRIV (self);
   double half = MIN (bounds->size.width, bounds->size.height) / 2.0;
-  double r = PRIV (self)->corner_radius;
+  double r = priv->corner_radius < 0.0 ? half : MIN (priv->corner_radius, half);
+  double largest = 0.0;
 
-  return r < 0.0 ? half : MIN (r, half);
+  if (!glass_panel_has_corner_radii (self))
+    return r;
+  /* Per corner: the largest (fused shapes have one radius each). */
+  for (int i = 0; i < 4; i++)
+    largest = MAX (largest, priv->corner_radii[i] >= 0.0 ? MIN (priv->corner_radii[i], half) : r);
+  return largest;
 }
 
 double
@@ -541,14 +618,358 @@ press_event (GtkEventControllerLegacy *controller,
   return GDK_EVENT_PROPAGATE;
 }
 
+/* ── Morphing (GlassPanel:morph-id, design.md §6.8) ─────────────────────────
+ * A panel that appears morphs from a partner's glass: a hidden panel with
+ * the same morph-id (its glass becomes ours), or else, in a GlassGroup, the
+ * neighbouring panel (a drop splitting off). A panel in a group that hides
+ * leaves a ghost: its glass, without the content, shrinking into its
+ * neighbour. The view reads both while it draws (glass_panel_get_morph(),
+ * glass_panel_get_ghost()); the animations only move a number. */
+
+/* Showing and hiding in one go (hide a button, show a field) happens in one
+ * main loop iteration; this much later it is no longer a swap. */
+#define MORPH_WINDOW_US (250 * 1000)
+#define GHOST_MS 260
+
+void
+glass_panel_resolve_corners (GlassPanel            *self,
+                             const graphene_rect_t *bounds,
+                             double                 out[4])
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  double half = MIN (bounds->size.width, bounds->size.height) / 2.0;
+  double r = priv->corner_radius < 0.0 ? half : MIN (priv->corner_radius, half);
+
+  for (int i = 0; i < 4; i++)
+    out[i] = priv->corner_radii[i] >= 0.0 ? MIN (priv->corner_radii[i], half) : r;
+}
+
+static GtkWidget *
+fuse_group (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  GtkWidget *group = gtk_widget_get_ancestor (GTK_WIDGET (self), GLASS_TYPE_GROUP);
+
+  return group && priv->view && gtk_widget_is_ancestor (group, GTK_WIDGET (priv->view)) ? group : NULL;
+}
+
+/* The group's panels in order (not those on them: another layer). */
+static void
+collect_panels (GtkWidget *widget,
+                GPtrArray *out)
+{
+  for (GtkWidget *child = gtk_widget_get_first_child (widget); child; child = gtk_widget_get_next_sibling (child))
+    {
+      if (GLASS_IS_PANEL (child))
+        g_ptr_array_add (out, child);
+      else
+        collect_panels (child, out);
+    }
+}
+
+/* The nearest shown panel before @self in its group, else after it. */
+static GlassPanel *
+group_neighbour (GlassPanel *self,
+                 GtkWidget  *group)
+{
+  g_autoptr (GPtrArray) panels = g_ptr_array_new ();
+  guint index;
+
+  collect_panels (group, panels);
+  if (!g_ptr_array_find (panels, self, &index))
+    return NULL;
+  for (guint k = 1; k < panels->len; k++)
+    {
+      for (int side = -1; side <= 1; side += 2)
+        {
+          gint64 j = (gint64) index + side * (gint64) k;
+          GlassPanel *other;
+
+          if (j < 0 || j >= panels->len)
+            continue;
+          other = g_ptr_array_index (panels, j);
+          if (gtk_widget_get_mapped (GTK_WIDGET (other)) && PRIV (other)->has_drawn && !PRIV (other)->ghost)
+            return other;
+        }
+    }
+  return NULL;
+}
+
+/* A panel of the same view with our morph-id whose glass we can take: one
+ * that has just hidden (or is fading as a ghost), else one still shown. */
+static GlassPanel *
+morph_partner (GlassPanel *self,
+               gint64      now)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  GlassPanel *shown = NULL;
+
+  if (priv->morph_id == NULL || priv->view == NULL)
+    return NULL;
+  for (guint i = 0; ; i++)
+    {
+      GlassPanel *other = glass_view_get_panel (priv->view, i);
+      GlassPanelPrivate *op;
+
+      if (other == NULL)
+        break;
+      op = PRIV (other);
+      if (other == self || !op->has_drawn || g_strcmp0 (op->morph_id, priv->morph_id) != 0)
+        continue;
+      if (!gtk_widget_get_mapped (GTK_WIDGET (other)))
+        {
+          if (op->ghost || now - op->hidden_at < MORPH_WINDOW_US)
+            return other;
+        }
+      else if (shown == NULL)
+        shown = other;
+    }
+  return shown;
+}
+
+static void
+morph_value (double value, gpointer data)
+{
+  GlassPanel *self = data;
+
+  PRIV (self)->morph_t = value;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+static void
+morph_done (AdwAnimation *animation, GlassPanel *self)
+{
+  PRIV (self)->morphing = FALSE;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+static void
+stop_ghost (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  priv->ghost = FALSE;
+  g_clear_weak_pointer (&priv->ghost_into);
+  if (priv->ghost_anim)
+    {
+      AdwAnimation *anim = g_steal_pointer (&priv->ghost_anim);
+
+      adw_animation_skip (anim);
+      g_object_unref (anim);
+    }
+  if (priv->view)
+    gtk_widget_queue_draw (GTK_WIDGET (priv->view));
+}
+
+static void
+ghost_value (double value, gpointer data)
+{
+  GlassPanel *self = data;
+  GlassPanelPrivate *priv = PRIV (self);
+
+  priv->ghost_t = value;
+  if (priv->view)
+    gtk_widget_queue_draw (GTK_WIDGET (priv->view));
+}
+
+static void
+ghost_done (AdwAnimation *animation, GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (priv->ghost_anim != animation)
+    return;
+  priv->ghost = FALSE;
+  g_clear_weak_pointer (&priv->ghost_into);
+  if (priv->view)
+    gtk_widget_queue_draw (GTK_WIDGET (priv->view));
+  /* The animation holds a reference to us: let it go. */
+  g_clear_object (&priv->ghost_anim);
+}
+
+static void
+begin_appear (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  gint64 now = g_get_monotonic_time ();
+  GlassPanel *source = NULL;
+  GtkWidget *group;
+
+  if (priv->view == NULL || priv->mode != GLASS_PANEL_MODE_VIEW)
+    return;
+
+  if (priv->ghost)
+    {
+      /* Shown again while fading: grow back out of where the ghost is. */
+      priv->morph_from = priv->drawn_rect;
+      priv->morph_from_radius = priv->drawn_radius;
+      stop_ghost (self);
+    }
+  else
+    {
+      source = morph_partner (self, now);
+      if (source)
+        {
+          PRIV (source)->taken_at = now;
+          if (PRIV (source)->ghost)
+            stop_ghost (source);
+        }
+      else if ((group = fuse_group (self)))
+        source = group_neighbour (self, group);
+      if (source == NULL)
+        return;
+      priv->morph_from = PRIV (source)->drawn_rect;
+      priv->morph_from_radius = PRIV (source)->drawn_radius;
+    }
+
+  if (priv->morph_anim == NULL)
+    {
+      AdwAnimationTarget *target = adw_callback_animation_target_new (morph_value, self, NULL);
+
+      priv->morph_anim = adw_spring_animation_new (GTK_WIDGET (self), 0.0, 1.0,
+                                                   adw_spring_params_new (0.8, 1.0, 300.0), target);
+      g_signal_connect (priv->morph_anim, "done", G_CALLBACK (morph_done), self);
+    }
+  priv->morphing = TRUE;
+  priv->morph_t = 0.0;
+  adw_animation_reset (priv->morph_anim);
+  adw_animation_play (priv->morph_anim);
+}
+
+static void
+begin_vanish (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  gint64 now = g_get_monotonic_time ();
+  AdwAnimationTarget *target;
+  GtkWidget *group;
+  GlassPanel *into;
+
+  priv->hidden_at = now;
+  if (priv->morphing)
+    {
+      priv->morphing = FALSE;
+      adw_animation_skip (priv->morph_anim);
+    }
+  if (!priv->has_drawn || priv->view == NULL || priv->mode != GLASS_PANEL_MODE_VIEW ||
+      now - priv->taken_at < MORPH_WINDOW_US ||
+      !gtk_widget_get_mapped (GTK_WIDGET (priv->view)) ||
+      (group = fuse_group (self)) == NULL || (into = group_neighbour (self, group)) == NULL)
+    return;
+
+  stop_ghost (self);
+  priv->ghost = TRUE;
+  priv->ghost_t = 0.0;
+  priv->ghost_from = priv->drawn_rect;
+  priv->ghost_from_radius = priv->drawn_radius;
+  g_set_weak_pointer (&priv->ghost_into, GTK_WIDGET (into));
+
+  /* On the view: libadwaita skips the animations of unmapped widgets. */
+  target = adw_callback_animation_target_new (ghost_value, g_object_ref (self), g_object_unref);
+  priv->ghost_anim = adw_timed_animation_new (GTK_WIDGET (priv->view), 0.0, 1.0, GHOST_MS, target);
+  adw_timed_animation_set_easing (ADW_TIMED_ANIMATION (priv->ghost_anim), ADW_EASE_IN_OUT_CUBIC);
+  g_signal_connect (priv->ghost_anim, "done", G_CALLBACK (ghost_done), self);
+  adw_animation_play (priv->ghost_anim);
+}
+
+static void
+lerp_corners (double from, const double to[4], double t, double out[4])
+{
+  for (int i = 0; i < 4; i++)
+    out[i] = MAX (from + (to[i] - from) * t, 0.0);
+}
+
+gboolean
+glass_panel_get_morph (GlassPanel            *self,
+                       const graphene_rect_t *target,
+                       graphene_rect_t       *rect,
+                       double                 corners[4])
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  double to[4];
+
+  if (!priv->morphing)
+    return FALSE;
+  graphene_rect_interpolate (&priv->morph_from, target, priv->morph_t, rect);
+  rect->size.width = MAX (rect->size.width, 1.0f);
+  rect->size.height = MAX (rect->size.height, 1.0f);
+  glass_panel_resolve_corners (self, target, to);
+  lerp_corners (priv->morph_from_radius, to, CLAMP (priv->morph_t, 0.0, 1.0), corners);
+  return TRUE;
+}
+
+gboolean
+glass_panel_get_ghost (GlassPanel      *self,
+                       GlassView       *view,
+                       graphene_rect_t *rect,
+                       double           corners[4])
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  graphene_rect_t into;
+  double to[4];
+
+  if (!priv->ghost)
+    return FALSE;
+  if (priv->ghost_into == NULL || !gtk_widget_get_mapped (priv->ghost_into) ||
+      !gtk_widget_compute_bounds (priv->ghost_into, GTK_WIDGET (view), &into))
+    {
+      stop_ghost (self);
+      return FALSE;
+    }
+  graphene_rect_interpolate (&priv->ghost_from, &into, priv->ghost_t, rect);
+  glass_panel_resolve_corners (GLASS_PANEL (priv->ghost_into), &into, to);
+  lerp_corners (priv->ghost_from_radius, to, priv->ghost_t, corners);
+  return TRUE;
+}
+
+void
+glass_panel_set_drawn (GlassPanel            *self,
+                       const graphene_rect_t *rect,
+                       double                 radius)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  priv->has_drawn = TRUE;
+  priv->drawn_rect = *rect;
+  priv->drawn_radius = radius;
+}
+
+/* The content fades in while the glass morphs into place. */
+static float
+content_opacity (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (!priv->morphing)
+    return 1.0f;
+  return (float) CLAMP ((priv->morph_t - 0.25) / 0.55, 0.0, 1.0);
+}
+
+static void
+glass_panel_map (GtkWidget *widget)
+{
+  GTK_WIDGET_CLASS (glass_panel_parent_class)->map (widget);
+  begin_appear (GLASS_PANEL (widget));
+}
+
+static void
+glass_panel_unmap (GtkWidget *widget)
+{
+  begin_vanish (GLASS_PANEL (widget));
+  GTK_WIDGET_CLASS (glass_panel_parent_class)->unmap (widget);
+}
+
 static void
 glass_panel_snapshot (GtkWidget   *widget,
                       GtkSnapshot *snapshot)
 {
   double vs = glass_panel_get_visual_scale (GLASS_PANEL (widget));
+  float opacity = content_opacity (GLASS_PANEL (widget));
   float cx = gtk_widget_get_width (widget) / 2.0f;
   float cy = gtk_widget_get_height (widget) / 2.0f;
 
+  if (opacity < 1.0f)
+    gtk_snapshot_push_opacity (snapshot, opacity);
   if (vs != 1.0)
     {
       gtk_snapshot_save (snapshot);
@@ -560,6 +981,8 @@ glass_panel_snapshot (GtkWidget   *widget,
     gtk_widget_snapshot_child (widget, child, snapshot);
   if (vs != 1.0)
     gtk_snapshot_restore (snapshot);
+  if (opacity < 1.0f)
+    gtk_snapshot_pop (snapshot);
 }
 
 /**
@@ -612,6 +1035,38 @@ glass_panel_set_interactive (GlassPanel *self,
       glass_panel_set_pressed (self, FALSE);
     }
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_INTERACTIVE]);
+}
+
+/**
+ * glass_panel_get_morph_id:
+ * @self: a panel
+ *
+ * Returns: (nullable): the morph ID
+ */
+const char *
+glass_panel_get_morph_id (GlassPanel *self)
+{
+  g_return_val_if_fail (GLASS_IS_PANEL (self), NULL);
+
+  return PRIV (self)->morph_id;
+}
+
+/**
+ * glass_panel_set_morph_id:
+ * @self: a panel
+ * @morph_id: (nullable): the ID it shares with the panels it morphs into
+ *   and out of
+ *
+ * Sets [property@Panel:morph-id].
+ */
+void
+glass_panel_set_morph_id (GlassPanel *self,
+                          const char *morph_id)
+{
+  g_return_if_fail (GLASS_IS_PANEL (self));
+
+  if (g_set_str (&PRIV (self)->morph_id, morph_id))
+    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_MORPH_ID]);
 }
 
 double
@@ -730,10 +1185,20 @@ glass_panel_dispose (GObject *object)
 
   g_clear_handle_id (&priv->settle_source, g_source_remove);
   g_clear_object (&priv->press_anim);
+  g_clear_object (&priv->morph_anim);
+  g_clear_weak_pointer (&priv->ghost_into);
   g_clear_pointer (&priv->child, gtk_widget_unparent);
   g_clear_pointer (&priv->nested_views, g_ptr_array_unref);
 
   G_OBJECT_CLASS (glass_panel_parent_class)->dispose (object);
+}
+
+static void
+glass_panel_finalize (GObject *object)
+{
+  g_free (PRIV (object)->morph_id);
+
+  G_OBJECT_CLASS (glass_panel_parent_class)->finalize (object);
 }
 
 static void
@@ -756,6 +1221,12 @@ glass_panel_get_property (GObject    *object,
     case PROP_CORNER_RADIUS:
       g_value_set_double (value, priv->corner_radius);
       break;
+    case PROP_TOP_LEFT_RADIUS:
+    case PROP_TOP_RIGHT_RADIUS:
+    case PROP_BOTTOM_RIGHT_RADIUS:
+    case PROP_BOTTOM_LEFT_RADIUS:
+      g_value_set_double (value, priv->corner_radii[prop_id - PROP_TOP_LEFT_RADIUS]);
+      break;
     case PROP_TINT:
       g_value_set_boxed (value, priv->tint_set ? &priv->tint : NULL);
       break;
@@ -770,6 +1241,9 @@ glass_panel_get_property (GObject    *object,
       break;
     case PROP_INTERACTIVE:
       g_value_set_boolean (value, priv->interactive);
+      break;
+    case PROP_MORPH_ID:
+      g_value_set_string (value, priv->morph_id);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -795,6 +1269,12 @@ glass_panel_set_property (GObject      *object,
     case PROP_CORNER_RADIUS:
       glass_panel_set_corner_radius (self, g_value_get_double (value));
       break;
+    case PROP_TOP_LEFT_RADIUS:
+    case PROP_TOP_RIGHT_RADIUS:
+    case PROP_BOTTOM_RIGHT_RADIUS:
+    case PROP_BOTTOM_LEFT_RADIUS:
+      set_corner (self, prop_id - PROP_TOP_LEFT_RADIUS, g_value_get_double (value));
+      break;
     case PROP_TINT:
       glass_panel_set_tint (self, g_value_get_boxed (value));
       break;
@@ -806,6 +1286,9 @@ glass_panel_set_property (GObject      *object,
       break;
     case PROP_INTERACTIVE:
       glass_panel_set_interactive (self, g_value_get_boolean (value));
+      break;
+    case PROP_MORPH_ID:
+      glass_panel_set_morph_id (self, g_value_get_string (value));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -819,6 +1302,7 @@ glass_panel_class_init (GlassPanelClass *klass)
   GtkWidgetClass *widget_class = GTK_WIDGET_CLASS (klass);
 
   object_class->dispose = glass_panel_dispose;
+  object_class->finalize = glass_panel_finalize;
   object_class->get_property = glass_panel_get_property;
   object_class->set_property = glass_panel_set_property;
 
@@ -829,6 +1313,8 @@ glass_panel_class_init (GlassPanelClass *klass)
   widget_class->snapshot = glass_panel_snapshot;
   widget_class->root = glass_panel_root;
   widget_class->unroot = glass_panel_unroot;
+  widget_class->map = glass_panel_map;
+  widget_class->unmap = glass_panel_unmap;
 
   /**
    * GlassPanel:child:
@@ -856,6 +1342,46 @@ glass_panel_class_init (GlassPanelClass *klass)
    */
   props[PROP_CORNER_RADIUS] =
     g_param_spec_double ("corner-radius", NULL, NULL, -1.0, G_MAXDOUBLE, -1.0,
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * GlassPanel:top-left-radius:
+   *
+   * The radius of the top left corner in px; a negative value (the
+   * default) is [property@Panel:corner-radius]'s.
+   */
+  props[PROP_TOP_LEFT_RADIUS] =
+    g_param_spec_double ("top-left-radius", NULL, NULL, -1.0, G_MAXDOUBLE, -1.0,
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * GlassPanel:top-right-radius:
+   *
+   * The radius of the top right corner in px; a negative value (the
+   * default) is [property@Panel:corner-radius]'s.
+   */
+  props[PROP_TOP_RIGHT_RADIUS] =
+    g_param_spec_double ("top-right-radius", NULL, NULL, -1.0, G_MAXDOUBLE, -1.0,
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * GlassPanel:bottom-right-radius:
+   *
+   * The radius of the bottom right corner in px; a negative value (the
+   * default) is [property@Panel:corner-radius]'s.
+   */
+  props[PROP_BOTTOM_RIGHT_RADIUS] =
+    g_param_spec_double ("bottom-right-radius", NULL, NULL, -1.0, G_MAXDOUBLE, -1.0,
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * GlassPanel:bottom-left-radius:
+   *
+   * The radius of the bottom left corner in px; a negative value (the
+   * default) is [property@Panel:corner-radius]'s.
+   */
+  props[PROP_BOTTOM_LEFT_RADIUS] =
+    g_param_spec_double ("bottom-left-radius", NULL, NULL, -1.0, G_MAXDOUBLE, -1.0,
                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
 
   /**
@@ -905,6 +1431,22 @@ glass_panel_class_init (GlassPanelClass *klass)
     g_param_spec_boolean ("interactive", NULL, NULL, FALSE,
                           G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
 
+  /**
+   * GlassPanel:morph-id:
+   *
+   * Panels of a view with the same morph ID are one piece of glass that
+   * changes shape: when one is shown just as another is hidden (a search
+   * button that becomes a search field), its glass morphs from the other's
+   * into its own, and its content fades in.
+   *
+   * In a [class@Group], panels morph without an ID too: one that is shown
+   * comes out of its neighbour like a drop, and one that is hidden is
+   * drawn into its neighbour.
+   */
+  props[PROP_MORPH_ID] =
+    g_param_spec_string ("morph-id", NULL, NULL, NULL,
+                         G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
   g_object_class_install_properties (object_class, N_PROPS, props);
 
   gtk_widget_class_set_css_name (widget_class, "glasspanel");
@@ -918,6 +1460,8 @@ glass_panel_init (GlassPanel *self)
 
   priv->material = GLASS_MATERIAL_REGULAR;
   priv->corner_radius = -1.0;
+  for (int i = 0; i < 4; i++)
+    priv->corner_radii[i] = -1.0;
   priv->has_shadow = TRUE;
   priv->adaptive = GLASS_ADAPTIVE_MODE_AUTO;
   priv->appearance = GLASS_APPEARANCE_UNKNOWN;
@@ -1082,6 +1626,67 @@ glass_panel_set_corner_radius (GlassPanel *self,
   update_shape_class (self);
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_CORNER_RADIUS]);
   gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+/**
+ * glass_panel_get_corner_radii:
+ * @self: a panel
+ * @top_left: (out) (optional): the top left corner's radius
+ * @top_right: (out) (optional): the top right corner's radius
+ * @bottom_right: (out) (optional): the bottom right corner's radius
+ * @bottom_left: (out) (optional): the bottom left corner's radius
+ *
+ * Gets the radius of each corner, as set: negative for a corner that has
+ * [property@Panel:corner-radius]'s.
+ */
+void
+glass_panel_get_corner_radii (GlassPanel *self,
+                              double     *top_left,
+                              double     *top_right,
+                              double     *bottom_right,
+                              double     *bottom_left)
+{
+  GlassPanelPrivate *priv;
+
+  g_return_if_fail (GLASS_IS_PANEL (self));
+
+  priv = PRIV (self);
+  if (top_left)
+    *top_left = priv->corner_radii[0];
+  if (top_right)
+    *top_right = priv->corner_radii[1];
+  if (bottom_right)
+    *bottom_right = priv->corner_radii[2];
+  if (bottom_left)
+    *bottom_left = priv->corner_radii[3];
+}
+
+/**
+ * glass_panel_set_corner_radii:
+ * @self: a panel
+ * @top_left: the top left corner's radius in px, or a negative value
+ * @top_right: the top right corner's radius in px, or a negative value
+ * @bottom_right: the bottom right corner's radius in px, or a negative value
+ * @bottom_left: the bottom left corner's radius in px, or a negative value
+ *
+ * Sets the radius of each corner. A negative value leaves that corner to
+ * [property@Panel:corner-radius]. Each is at most half the shorter side.
+ */
+void
+glass_panel_set_corner_radii (GlassPanel *self,
+                              double      top_left,
+                              double      top_right,
+                              double      bottom_right,
+                              double      bottom_left)
+{
+  g_return_if_fail (GLASS_IS_PANEL (self));
+
+  g_object_freeze_notify (G_OBJECT (self));
+  set_corner (self, 0, top_left);
+  set_corner (self, 1, top_right);
+  set_corner (self, 2, bottom_right);
+  set_corner (self, 3, bottom_left);
+  g_object_thaw_notify (G_OBJECT (self));
 }
 
 /**

@@ -38,6 +38,8 @@ glass_public_headers = files(
   'glass-popover.h',
   'glass-menu-button.h',
   'glass-dialog.h',
+  'glass-tab-bar.h',
+  'glass-search-entry.h',
 )
 
 glass_public_sources = files(
@@ -57,6 +59,8 @@ glass_public_sources = files(
   'glass-popover.c',
   'glass-menu-button.c',
   'glass-dialog.c',
+  'glass-tab-bar.c',
+  'glass-search-entry.c',
 )
 
 glass_private_sources = files(

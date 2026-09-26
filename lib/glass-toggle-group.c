@@ -62,6 +62,8 @@ static GParamSpec *props[N_PROPS];
 
 G_DEFINE_FINAL_TYPE (GlassToggleGroup, glass_toggle_group, GLASS_TYPE_PANEL)
 
+static void append_button (GlassToggleGroup *self, const char *name, GtkWidget *button);
+
 static gboolean
 active_rect (GlassToggleGroup *self, graphene_rect_t *out)
 {
@@ -396,11 +398,50 @@ glass_toggle_group_append (GlassToggleGroup *self,
   g_return_if_fail (label != NULL || icon_name != NULL);
 
   button = label ? gtk_button_new_with_label (label) : gtk_button_new_from_icon_name (icon_name);
+  if (!label && name)
+    gtk_widget_set_tooltip_text (button, name);
+  append_button (self, name, button);
+}
+
+/* Private (glass-private.h): a toggle showing @content (a tab's icon and
+ * title). */
+GtkWidget *
+glass_toggle_group_append_item (GlassToggleGroup *self,
+                                const char       *name,
+                                GtkWidget        *content)
+{
+  GtkWidget *button = gtk_button_new ();
+
+  gtk_button_set_child (GTK_BUTTON (button), content);
+  append_button (self, name, button);
+  return button;
+}
+
+/* Private: removes every toggle. */
+void
+glass_toggle_group_remove_all (GlassToggleGroup *self)
+{
+  while (self->buttons->len > 0)
+    {
+      GtkWidget *button = g_ptr_array_steal_index (self->buttons, self->buttons->len - 1);
+
+      glass_pill_box_remove (GLASS_PILL_BOX (self->box), button);
+      g_ptr_array_remove_index (self->names, self->names->len - 1);
+    }
+  self->active = 0;
+  self->have_from = FALSE;
+  gtk_widget_queue_allocate (GTK_WIDGET (self));
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_N_TOGGLES]);
+}
+
+static void
+append_button (GlassToggleGroup *self,
+               const char       *name,
+               GtkWidget        *button)
+{
   /* Frameless: a theme can paint framed buttons from USER priority, which
    * would put a pill under every toggle at rest (docs/memo.md 地雷27). */
   gtk_button_set_has_frame (GTK_BUTTON (button), FALSE);
-  if (!label && name)
-    gtk_widget_set_tooltip_text (button, name);
   gtk_widget_add_css_class (button, "toggle");
   mark (button, self->buttons->len == 0);
 

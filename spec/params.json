@@ -62,6 +62,14 @@
       "tint": [1.0, 1.0, 1.0, 0.55],
       "tint_from_theme": true,
       "adaptive": false
+    },
+    {
+      "name": "menu",
+      "edge": "crisp-soft",
+      "values": { "blur-radius": 8.0, "shadow-radius": 24.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
+      "tint": [1.0, 1.0, 1.0, 0.45],
+      "tint_from_theme": true,
+      "adaptive": false
     }
   ]
 }

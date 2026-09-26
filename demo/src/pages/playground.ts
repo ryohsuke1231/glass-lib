@@ -60,30 +60,45 @@ export class PlaygroundPage {
         this.background = background;
         this.toolbar.add_top_bar(this.header);
 
-        // Material, shape and shadow, each a glass control of its own.
-        const controls = new Gtk.Box({ spacing: 10, halign: Gtk.Align.CENTER, margin_bottom: 18, margin_top: 6 });
+        // Material, shape and shadow, each a glass control of its own: the
+        // material on one row, shape and shadow on the next.
+        const controls = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8, halign: Gtk.Align.CENTER,
+            margin_bottom: 18, margin_top: 6 });
         this.controls = controls;
+        const lower = new Gtk.Box({ spacing: 10, halign: Gtk.Align.CENTER });
         const material = new Glass.ToggleGroup();
         material.append('regular', 'Regular', null);
         material.append('clear', 'Clear', null);
         material.append('thick', 'Thick', null);
+        material.append('menu', 'Menu', null);
         material.connect('notify::active', () =>
             [this.panel, small].forEach(p => p.set_material(material.get_active() as Glass.Material)));
+        material.set_halign(Gtk.Align.CENTER);
         controls.append(material);
+        controls.append(lower);
 
         const shape = new Glass.ToggleGroup();
         shape.append('capsule', 'Capsule', null);
         shape.append('rounded', 'Rounded', null);
-        shape.connect('notify::active-name', () =>
-            this.panel.set_corner_radius(shape.get_active_name() === 'rounded' ? 18 : -1));
-        controls.append(shape);
+        shape.append('mixed', 'Mixed', null);
+        shape.connect('notify::active-name', () => {
+            // Mixed: a radius per corner, large on one diagonal, small on
+            // the other.
+            const name = shape.get_active_name();
+            this.panel.set_corner_radius(name === 'capsule' ? -1 : 18);
+            if (name === 'mixed')
+                this.panel.set_corner_radii(30, 6, 30, 6);
+            else
+                this.panel.set_corner_radii(-1, -1, -1, -1);
+        });
+        lower.append(shape);
 
         const shadow = new Glass.ToggleGroup();
         shadow.append('shadow', 'Shadow', null);
         shadow.append('none', 'No shadow', null);
         shadow.connect('notify::active-name', () =>
             [this.panel, small].forEach(p => p.set_has_shadow(shadow.get_active_name() === 'shadow')));
-        controls.append(shadow);
+        lower.append(shadow);
         this.toolbar.add_bottom_bar(controls);
 
         this.toolbar.set_top_edge_style(Glass.EdgeStyle.NONE);

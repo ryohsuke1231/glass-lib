@@ -42,6 +42,13 @@ void        glass_pill_box_prepend         (GlassPillBox *self,
 void        glass_pill_box_remove          (GlassPillBox *self,
                                             GtkWidget    *child);
 
+/* GlassToggleGroup, for GlassTabBar: a toggle showing @content (returns
+ * its button), and removing them all. */
+GtkWidget  *glass_toggle_group_append_item (GlassToggleGroup *self,
+                                            const char       *name,
+                                            GtkWidget        *content);
+void        glass_toggle_group_remove_all  (GlassToggleGroup *self);
+
 /* GlassButtonGroup: whether any of its widgets is visible. */
 gboolean    glass_button_group_has_visible_child (GlassButtonGroup *self);
 
@@ -49,6 +56,11 @@ void        glass_style_ensure        (GdkDisplay *display);
 /* A CSS class giving glasspanel this border-radius (for the CSS fallback). */
 const char *glass_style_radius_class  (GdkDisplay *display,
                                        double      radius);
+/* The same for a radius per corner (tl, tr, br, bl; negative: @radius's,
+ * and a negative @radius: a capsule's). */
+const char *glass_style_corner_radii_class (GdkDisplay   *display,
+                                            double        radius,
+                                            const double  radii[4]);
 
 /* ── Context ── */
 /* The value of every key for a material: explicit, material, default. */
@@ -124,8 +136,36 @@ void     glass_panel_resolve_params  (GlassPanel   *self,
  * by this factor around the centre. */
 double   glass_panel_get_visual_scale (GlassPanel *self);
 /* Drives the press by hand (a toggle group's plate is under its buttons). */
+/* Whether any corner has a radius of its own (GlassPanel:top-left-radius...). */
+gboolean glass_panel_has_corner_radii (GlassPanel *self);
+/* Each corner's radius at @bounds: tl, tr, br, bl, at most half the
+ * shorter side. */
+void     glass_panel_resolve_corners (GlassPanel            *self,
+                                      const graphene_rect_t *bounds,
+                                      double                 out[4]);
+
+/* Morphing (design.md §6.8). The view draws a morphing panel's glass
+ * between where the morph started and @target (its place this frame):
+ * TRUE with @rect and @corners if it is morphing. */
+gboolean glass_panel_get_morph      (GlassPanel            *self,
+                                     const graphene_rect_t *target,
+                                     graphene_rect_t       *rect,
+                                     double                 corners[4]);
+/* A hidden panel that is still drawn, shrinking into its neighbour: TRUE
+ * with its glass this frame, in @view's coordinates. */
+gboolean glass_panel_get_ghost      (GlassPanel            *self,
+                                     GlassView             *view,
+                                     graphene_rect_t       *rect,
+                                     double                 corners[4]);
+/* What the view drew for the panel this frame (morphs start from it). */
+void     glass_panel_set_drawn      (GlassPanel            *self,
+                                     const graphene_rect_t *rect,
+                                     double                 radius);
+/* The panels registered with @self, by index (NULL past the end). */
+GlassPanel *glass_view_get_panel    (GlassView *self,
+                                     guint      index);
 /* The corner radius the glass really has, px (a capsule's is half its
- * shorter side). */
+ * shorter side; with radii per corner, the largest). */
 double   glass_panel_effective_radius (GlassPanel            *self,
                                        const graphene_rect_t *bounds);
 void     glass_panel_set_pressed     (GlassPanel *self,
@@ -159,7 +199,7 @@ gboolean         glass_standalone_draw     (GlassStandalone       *self,
                                             GtkSnapshot           *snapshot,
                                             GskRenderNode         *backdrop,
                                             const graphene_rect_t *rect,
-                                            double                 radius,
+                                            const double           radii[4],   /* tl, tr, br, bl */
                                             GlassMaterial          material,
                                             const GdkRGBA         *theme_bg,
                                             gboolean               shadow);

@@ -48,10 +48,22 @@ export class ControlsPage {
         settings.append(row('Brightness', brightness));
         this.stage.append(new Glass.Panel({ child: settings, corner_radius: 22, width_request: 420 }));
 
-        // Buttons in a Glass.Group: closer than its spacing, they fuse.
+        // Buttons in a Glass.Group: closer than its spacing, they fuse. The
+        // last one shows two more, which come out of it like drops and go
+        // back into it (design.md §6.8).
         const drops = new Gtk.Box({ spacing: 8, halign: Gtk.Align.CENTER });
         for (const icon of ['media-skip-backward-symbolic', 'media-playback-start-symbolic', 'media-skip-forward-symbolic'])
             drops.append(Glass.Button.new_from_icon_name(icon));
+        const more = Glass.Button.new_from_icon_name('view-more-symbolic');
+        more.set_tooltip_text('More');
+        drops.append(more);
+        const extras = ['starred-symbolic', 'user-trash-symbolic'].map(icon => {
+            const button = Glass.Button.new_from_icon_name(icon);
+            button.set_visible(false);
+            drops.append(button);
+            return button;
+        });
+        more.connect('clicked', () => extras.forEach(b => b.set_visible(!b.get_visible())));
         const group = new Glass.Group({ child: drops, halign: Gtk.Align.CENTER });
         this.stage.append(group);
 

@@ -27,5 +27,7 @@
 #include "glass-popover.h"
 #include "glass-menu-button.h"
 #include "glass-dialog.h"
+#include "glass-tab-bar.h"
+#include "glass-search-entry.h"
 
 #undef GLASS_INSIDE

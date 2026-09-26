@@ -66,20 +66,28 @@ glass_dialog_surface_snapshot (GtkWidget   *widget,
   graphene_rect_t box = GRAPHENE_RECT_INIT (0, 0, gtk_widget_get_width (widget), gtk_widget_get_height (widget));
   graphene_rect_t where;
   GskRenderNode *backdrop = NULL;
+  double radii[4] = { SHEET_RADIUS, SHEET_RADIUS, SHEET_RADIUS, SHEET_RADIUS };
   GdkRGBA bg;
 
   if (behind && gtk_widget_compute_bounds (behind, widget, &where))
     backdrop = glass_standalone_backdrop (behind, &where.origin);
 
+  /* libadwaita's sheet: rounded all round when floating; along the bottom
+   * of the window, only the top corners are (dialog.bottom-sheet). */
+  if (dialog && gtk_widget_has_css_class (dialog, "bottom-sheet"))
+    radii[2] = radii[3] = 0.0;
+
   gtk_widget_get_color (self->bg_node, &bg);
   if (backdrop == NULL ||
-      !glass_standalone_draw (self->glass, widget, snapshot, backdrop, &box, SHEET_RADIUS,
+      !glass_standalone_draw (self->glass, widget, snapshot, backdrop, &box, radii,
                               GLASS_MATERIAL_THICK, &bg, FALSE))
     {
       /* No glass: the sheet's usual opaque background. */
       GskRoundedRect sheet;
 
-      gsk_rounded_rect_init_from_rect (&sheet, &box, SHEET_RADIUS);
+      gsk_rounded_rect_init (&sheet, &box,
+                             &GRAPHENE_SIZE_INIT (radii[0], radii[0]), &GRAPHENE_SIZE_INIT (radii[1], radii[1]),
+                             &GRAPHENE_SIZE_INIT (radii[2], radii[2]), &GRAPHENE_SIZE_INIT (radii[3], radii[3]));
       gtk_snapshot_push_rounded_clip (snapshot, &sheet);
       bg.alpha = 1.0f;
       gtk_snapshot_append_color (snapshot, &bg, &box);

@@ -271,3 +271,52 @@ glassdialogsurface > backdrop {
   color: var(--dialog-bg-color);
 }
 
+
+/* ── Tab bar (§6.8): icon over title, the page shown in the accent colour ── */
+
+glasspanel.toggle-group.tab-bar {
+  padding: 4px;
+}
+
+glasspanel.toggle-group.tab-bar button.tab {
+  min-height: 48px;
+  min-width: 64px;
+  padding: 0 12px;
+}
+
+glasspanel.toggle-group.tab-bar button.tab label {
+  font-size: 0.75em;
+  font-weight: 600;
+}
+
+/* On the item's box, not the button: a theme can set the colour of every
+ * button from USER priority (docs/memo.md 地雷27). */
+glasspanel.toggle-group.tab-bar button.tab.active > box {
+  color: var(--accent-color);
+}
+
+glasspanel.toggle-group.tab-bar .tab-dot {
+  min-width: 7px;
+  min-height: 7px;
+  margin: -1px -3px 0 0;
+  border-radius: 9999px;
+  background-color: var(--accent-bg-color);
+}
+
+/* ── Search field (§6.8) ── */
+
+glasspanel.search-entry {
+  min-height: 38px;
+  padding: 0 6px 0 14px;
+}
+
+glasspanel.search-entry:focus-within {
+  outline: 2px solid color-mix(in srgb, var(--accent-color) 50%, transparent);
+  outline-offset: -2px;
+}
+
+glasspanel.search-entry > box > button {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+}

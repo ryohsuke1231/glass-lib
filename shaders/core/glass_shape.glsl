@@ -29,20 +29,27 @@ float profileHeight(float t, float zScale) {
 // hard step at d = 0: a discontinuous height field makes the finite
 // difference in heightGradient() spike right at the boundary, which shows as
 // jagged displacement against busy backgrounds.
-float getHeight(vec2 p, vec2 b, float r, float zScale) {
-    float d = sdRoundRect(p, b, r);
+//
+// rOut is the outline's corner radius, rBand the width the height builds up
+// over; the reference has one radius for both (getHeight()).
+float getHeight2(vec2 p, vec2 b, float rOut, float rBand, float zScale) {
+    float d = sdRoundRect(p, b, rOut);
 
     float smoothZone = max(edge_smoothing, 1.0);
     if (d > smoothZone)
         return 0.0;
 
-    float t = normalizedDepth(d, b, r);
+    float t = normalizedDepth(d, b, rBand);
     float h = profileHeight(t, zScale);
 
     // smoothstep() needs edge0 < edge1 (undefined otherwise), hence the
     // complement instead of swapped edges.
     float fade = 1.0 - smoothstep(-smoothZone, smoothZone, d);
     return h * fade;
+}
+
+float getHeight(vec2 p, vec2 b, float r, float zScale) {
+    return getHeight2(p, b, r, r, zScale);
 }
 
 // Unit gradient of sdRoundRect() at p ("straight out of the shape"), in
@@ -64,14 +71,37 @@ vec2 sdRoundRectDir(vec2 p, vec2 b, float r) {
 // infinite slope at the edge (t = 0), and the finite difference over
 // gradient_step px is what keeps it bounded - the smoothing the look depends
 // on. That is also why gradient_step must not follow the surface size.
-vec2 heightGradient(vec2 p, vec2 b, float r, float zScale) {
-    vec2 dir = sdRoundRectDir(p, b, r);
+vec2 heightGradient2(vec2 p, vec2 b, float rOut, float rBand, float zScale) {
+    vec2 dir = sdRoundRectDir(p, b, rOut);
     float e = gradient_step;
 
-    float hOut = getHeight(p + dir * e, b, r, zScale);
-    float hIn  = getHeight(p - dir * e, b, r, zScale);
+    float hOut = getHeight2(p + dir * e, b, rOut, rBand, zScale);
+    float hIn  = getHeight2(p - dir * e, b, rOut, rBand, zScale);
 
     return dir * ((hOut - hIn) / (2.0 * e));
+}
+
+vec2 heightGradient(vec2 p, vec2 b, float r, float zScale) {
+    return heightGradient2(p, b, r, r, zScale);
+}
+
+// ── Per-corner radii (glass-lib; glass_corner_mode 1) ───────────────────
+//
+// The outline's corner radius in the quadrant p lies in (iq's sdRoundBox):
+// top-left, top-right, bottom-right, bottom-left, px of the surface. The
+// lens band keeps one width all round (corner_radius, which is then the
+// largest of the four): a band that changed with the quadrant would not
+// meet itself in the middle of a side. With mode 0 (the reference) the
+// outline radius is corner_radius everywhere, the same arithmetic as before.
+
+uniform float glass_corner_mode;
+uniform vec4  glass_corner_radii;
+
+float outlineRadius(vec2 p) {
+    if (glass_corner_mode < 0.5)
+        return corner_radius;
+    vec2 r = p.y < 0.0 ? glass_corner_radii.xy : glass_corner_radii.wz;
+    return p.x < 0.0 ? r.x : r.y;
 }
 
 vec3 getNormal(vec2 gradH) {

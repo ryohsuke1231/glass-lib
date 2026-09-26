@@ -500,6 +500,200 @@ test_dialog_redraw (void)
   gtk_window_destroy (GTK_WINDOW (window));
 }
 
+/* Radii per corner: set, read back, clamped for the glass, and the CSS
+ * shape (fallback and clipping) follows. */
+static void
+test_corner_radii (void)
+{
+  GtkWidget *panel = g_object_ref_sink (glass_panel_new ());
+  double tl, tr, br, bl, r[4];
+
+  g_assert_false (glass_panel_has_corner_radii (GLASS_PANEL (panel)));
+  glass_panel_set_corner_radius (GLASS_PANEL (panel), 12.0);
+  glass_panel_set_corner_radii (GLASS_PANEL (panel), 24.0, -5.0, 0.0, -1.0);
+  glass_panel_get_corner_radii (GLASS_PANEL (panel), &tl, &tr, &br, &bl);
+  g_assert_cmpfloat (tl, ==, 24.0);
+  g_assert_cmpfloat (tr, ==, -1.0);    /* negative: the panel's */
+  g_assert_cmpfloat (br, ==, 0.0);
+  g_assert_cmpfloat (bl, ==, -1.0);
+  g_assert_true (glass_panel_has_corner_radii (GLASS_PANEL (panel)));
+
+  glass_panel_resolve_corners (GLASS_PANEL (panel), &GRAPHENE_RECT_INIT (0, 0, 100, 40), r);
+  g_assert_cmpfloat (r[0], ==, 20.0);  /* half the shorter side */
+  g_assert_cmpfloat (r[1], ==, 12.0);
+  g_assert_cmpfloat (r[2], ==, 0.0);
+  g_assert_cmpfloat (r[3], ==, 12.0);
+  g_assert_cmpfloat (glass_panel_effective_radius (GLASS_PANEL (panel), &GRAPHENE_RECT_INIT (0, 0, 100, 40)), ==, 20.0);
+
+  g_object_get (panel, "bottom-right-radius", &br, NULL);
+  g_assert_cmpfloat (br, ==, 0.0);
+  g_object_set (panel, "top-left-radius", -1.0, "bottom-right-radius", -1.0, NULL);
+  g_assert_false (glass_panel_has_corner_radii (GLASS_PANEL (panel)));
+
+  g_object_unref (panel);
+}
+
+/* Morphing (design.md §6.8): in a group a panel shown comes out of its
+ * neighbour and one hidden leaves a ghost; a panel with a partner's
+ * morph-id takes its glass, and the partner leaves no ghost. */
+static void
+test_morph (void)
+{
+  GtkWidget *view = glass_view_new ();
+  GtkWidget *row = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+  GtkWidget *group = glass_group_new ();
+  GtkWidget *a = glass_button_new_from_icon_name ("go-previous-symbolic");
+  GtkWidget *b = glass_button_new_from_icon_name ("go-next-symbolic");
+  GtkWidget *button = glass_button_new_from_icon_name ("edit-find-symbolic");
+  GtkWidget *field = glass_search_entry_new ();
+  GtkWidget *column = gtk_box_new (GTK_ORIENTATION_VERTICAL, 20);
+  GtkWidget *window;
+  graphene_rect_t rect, target = GRAPHENE_RECT_INIT (0, 0, 40, 40);
+  double corners[4];
+  gboolean animated;
+
+  gtk_box_append (GTK_BOX (row), a);
+  gtk_box_append (GTK_BOX (row), b);
+  gtk_widget_set_visible (b, FALSE);
+  glass_group_set_child (GLASS_GROUP (group), row);
+  glass_panel_set_morph_id (GLASS_PANEL (button), "search");
+  glass_panel_set_morph_id (GLASS_PANEL (field), "search");
+  gtk_widget_set_visible (field, FALSE);
+  gtk_box_append (GTK_BOX (column), group);
+  gtk_box_append (GTK_BOX (column), button);
+  gtk_box_append (GTK_BOX (column), field);
+  gtk_widget_set_halign (column, GTK_ALIGN_START);
+  gtk_widget_set_valign (column, GTK_ALIGN_START);
+  glass_view_set_content (GLASS_VIEW (view), gtk_drawing_area_new ());
+  glass_view_add_overlay (GLASS_VIEW (view), column);
+  window = window_with (view);
+  gtk_window_present (GTK_WINDOW (window));
+  spin (500);
+  animated = adw_get_enable_animations (window);
+
+  /* Nothing moves at rest. */
+  g_assert_false (glass_panel_get_morph (GLASS_PANEL (a), &target, &rect, corners));
+
+  gtk_widget_set_visible (b, TRUE);
+  if (animated)
+    g_assert_true (glass_panel_get_morph (GLASS_PANEL (b), &target, &rect, corners));
+  spin (1200);
+  g_assert_false (glass_panel_get_morph (GLASS_PANEL (b), &target, &rect, corners));
+
+  gtk_widget_set_visible (b, FALSE);
+  if (animated)
+    g_assert_true (glass_panel_get_ghost (GLASS_PANEL (b), GLASS_VIEW (view), &rect, corners));
+  spin (800);
+  g_assert_false (glass_panel_get_ghost (GLASS_PANEL (b), GLASS_VIEW (view), &rect, corners));
+
+  /* The swap: outside a group, no ghost; the field morphs. */
+  gtk_widget_set_visible (button, FALSE);
+  gtk_widget_set_visible (field, TRUE);
+  g_assert_false (glass_panel_get_ghost (GLASS_PANEL (button), GLASS_VIEW (view), &rect, corners));
+  if (animated)
+    g_assert_true (glass_panel_get_morph (GLASS_PANEL (field), &target, &rect, corners));
+  spin (1200);
+  g_assert_false (glass_panel_get_morph (GLASS_PANEL (field), &target, &rect, corners));
+
+  gtk_window_destroy (GTK_WINDOW (window));
+}
+
+static void
+test_morph_id (void)
+{
+  GtkWidget *panel = g_object_ref_sink (glass_panel_new ());
+  int notified = 0;
+
+  g_assert_null (glass_panel_get_morph_id (GLASS_PANEL (panel)));
+  g_signal_connect (panel, "notify::morph-id", G_CALLBACK (count_notify), &notified);
+  glass_panel_set_morph_id (GLASS_PANEL (panel), "search");
+  glass_panel_set_morph_id (GLASS_PANEL (panel), "search");
+  g_assert_cmpstr (glass_panel_get_morph_id (GLASS_PANEL (panel)), ==, "search");
+  g_assert_cmpint (notified, ==, 1);
+
+  g_object_unref (panel);
+}
+
+/* The tab bar follows the stack's pages and their selection, both ways. */
+static void
+test_tab_bar (void)
+{
+  GtkWidget *stack = g_object_ref_sink (adw_view_stack_new ());
+  GtkWidget *bar = g_object_ref_sink (glass_tab_bar_new ());
+  AdwViewStackPage *hidden;
+  GtkWidget *group;
+
+  adw_view_stack_add_titled_with_icon (ADW_VIEW_STACK (stack), gtk_label_new ("1"), "one", "One", "go-home-symbolic");
+  adw_view_stack_add_titled_with_icon (ADW_VIEW_STACK (stack), gtk_label_new ("2"), "two", "Two", "go-next-symbolic");
+  hidden = adw_view_stack_add_titled_with_icon (ADW_VIEW_STACK (stack), gtk_label_new ("3"), "three", "Three",
+                                                "go-last-symbolic");
+  glass_tab_bar_set_stack (GLASS_TAB_BAR (bar), ADW_VIEW_STACK (stack));
+  g_assert_true (glass_tab_bar_get_stack (GLASS_TAB_BAR (bar)) == ADW_VIEW_STACK (stack));
+
+  group = gtk_widget_get_first_child (bar);
+  g_assert_true (GLASS_IS_TOGGLE_GROUP (group));
+  g_assert_cmpuint (glass_toggle_group_get_n_toggles (GLASS_TOGGLE_GROUP (group)), ==, 3);
+  g_assert_cmpint (count_buttons (group, TRUE), ==, 0);   /* frameless (地雷27) */
+
+  /* Hidden pages have no item. */
+  adw_view_stack_page_set_visible (hidden, FALSE);
+  g_assert_cmpuint (glass_toggle_group_get_n_toggles (GLASS_TOGGLE_GROUP (group)), ==, 2);
+
+  /* The stack drives the bar... */
+  adw_view_stack_set_visible_child_name (ADW_VIEW_STACK (stack), "two");
+  g_assert_cmpuint (glass_toggle_group_get_active (GLASS_TOGGLE_GROUP (group)), ==, 1);
+  /* ... and the bar the stack. */
+  glass_toggle_group_set_active (GLASS_TOGGLE_GROUP (group), 0);
+  g_assert_cmpstr (adw_view_stack_get_visible_child_name (ADW_VIEW_STACK (stack)), ==, "one");
+
+  glass_tab_bar_set_stack (GLASS_TAB_BAR (bar), NULL);
+  g_assert_cmpuint (glass_toggle_group_get_n_toggles (GLASS_TOGGLE_GROUP (group)), ==, 0);
+
+  g_object_unref (bar);
+  g_object_unref (stack);
+}
+
+static void
+count_signal (GtkWidget *widget, int *count)
+{
+  (*count)++;
+}
+
+static void
+test_search_entry (void)
+{
+  GtkWidget *entry = g_object_ref_sink (glass_search_entry_new ());
+  int changed = 0;
+
+  g_assert_true (GTK_IS_EDITABLE (entry));
+  g_assert_true (GLASS_IS_PANEL (entry));
+  g_assert_cmpint (gtk_accessible_get_accessible_role (GTK_ACCESSIBLE (entry)), ==, GTK_ACCESSIBLE_ROLE_SEARCH_BOX);
+  g_assert_cmpint (count_buttons (entry, TRUE), ==, 0);
+
+  glass_search_entry_set_placeholder_text (GLASS_SEARCH_ENTRY (entry), "Search");
+  g_assert_cmpstr (glass_search_entry_get_placeholder_text (GLASS_SEARCH_ENTRY (entry)), ==, "Search");
+
+  /* No delay: search-changed at once, and the text is the editable's. */
+  glass_search_entry_set_search_delay (GLASS_SEARCH_ENTRY (entry), 0);
+  g_signal_connect (entry, "search-changed", G_CALLBACK (count_signal), &changed);
+  gtk_editable_set_text (GTK_EDITABLE (entry), "glass");
+  g_assert_cmpstr (gtk_editable_get_text (GTK_EDITABLE (entry)), ==, "glass");
+  g_assert_cmpint (changed, >=, 1);
+
+  /* With a delay, the new text only after it. (set_text() empties the
+   * text first, and emptying is reported at once, like GtkSearchEntry.) */
+  glass_search_entry_set_search_delay (GLASS_SEARCH_ENTRY (entry), 50);
+  gtk_editable_set_text (GTK_EDITABLE (entry), "glass lib");
+  {
+    int before = changed;
+
+    spin (150);
+    g_assert_cmpint (changed, ==, before + 1);
+  }
+
+  g_object_unref (entry);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -522,6 +716,11 @@ main (int argc, char **argv)
   g_test_add_func ("/widgets/dialog", test_dialog);
   g_test_add_func ("/widgets/nested-view-redraw", test_nested_view_redraw);
   g_test_add_func ("/widgets/dialog-redraw", test_dialog_redraw);
+  g_test_add_func ("/widgets/corner-radii", test_corner_radii);
+  g_test_add_func ("/widgets/morph-id", test_morph_id);
+  g_test_add_func ("/widgets/morph", test_morph);
+  g_test_add_func ("/widgets/tab-bar", test_tab_bar);
+  g_test_add_func ("/widgets/search-entry", test_search_entry);
 
   return g_test_run ();
 }

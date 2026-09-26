@@ -67,3 +67,21 @@ test('widgets', executable('test-widgets',
   suite: 'lib',
   timeout: 60,
 )
+
+# The API from Python, through the typelib (design.md §16). Needs PyGObject
+# and a display; exits 77 = skipped without them.
+python3 = find_program('python3', required: false)
+if get_option('introspection') and python3.found()
+  python_env = environment()
+  python_env.set('G_DEBUG', 'fatal-criticals')
+  python_env.set('GLASS_RENDERER', '')
+  python_env.prepend('GI_TYPELIB_PATH', meson.project_build_root() / 'lib')
+  python_env.prepend('LD_LIBRARY_PATH', meson.project_build_root() / 'lib')
+  test('python', python3,
+    args: [files('test-python.py')],
+    depends: glass_gir,
+    env: python_env,
+    suite: 'lib',
+    timeout: 60,
+  )
+endif
