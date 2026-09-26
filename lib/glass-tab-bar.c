@@ -275,6 +275,8 @@ glass_tab_bar_init (GlassTabBar *self)
 /**
  * glass_tab_bar_new:
  *
+ * Creates a new tab bar.
+ *
  * Returns: a new tab bar
  */
 GtkWidget *
@@ -286,6 +288,8 @@ glass_tab_bar_new (void)
 /**
  * glass_tab_bar_get_stack:
  * @self: a tab bar
+ *
+ * Gets the stack.
  *
  * Returns: (transfer none) (nullable): the stack
  */

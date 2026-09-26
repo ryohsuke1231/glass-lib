@@ -200,6 +200,8 @@ glass_menu_button_init (GlassMenuButton *self)
 /**
  * glass_menu_button_new:
  *
+ * Creates a new menu button.
+ *
  * Returns: a new menu button
  */
 GtkWidget *
@@ -211,6 +213,8 @@ glass_menu_button_new (void)
 /**
  * glass_menu_button_get_icon_name:
  * @self: a menu button
+ *
+ * Gets the icon.
  *
  * Returns: (nullable): the icon
  */
@@ -243,6 +247,8 @@ glass_menu_button_set_icon_name (GlassMenuButton *self,
  * glass_menu_button_get_label:
  * @self: a menu button
  *
+ * Gets the text.
+ *
  * Returns: (nullable): the text
  */
 const char *
@@ -273,6 +279,8 @@ glass_menu_button_set_label (GlassMenuButton *self,
 /**
  * glass_menu_button_get_menu_model:
  * @self: a menu button
+ *
+ * Gets the menu.
  *
  * Returns: (transfer none) (nullable): the menu
  */
@@ -306,6 +314,8 @@ glass_menu_button_set_menu_model (GlassMenuButton *self,
 /**
  * glass_menu_button_get_popover:
  * @self: a menu button
+ *
+ * Gets the popover.
  *
  * Returns: (transfer none) (nullable): the popover
  */

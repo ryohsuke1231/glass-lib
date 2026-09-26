@@ -65,6 +65,18 @@ struct _GlassView {
 
   gint64          hud_last_us;
   char           *hud_text;
+
+  /* The adaptive colours under the CSS fallback (design.md §12.1): the
+   * backdrop and the panels of the last snapshot, sampled small, at most
+   * SAMPLE_INTERVAL_US apart and only when something changed. */
+  GskRenderNode  *sample_node;
+  GArray         *sample_panels;     /* Sample */
+  GskRenderNode  *sample_leaf;       /* what sample_node shows (the key) */
+  guint64         sample_hash;       /* ... where, and where the panels are */
+  GskRenderNode  *sampled_leaf;      /* the same for the last sample taken */
+  guint64         sampled_hash;
+  guint           sample_source;
+  gint64          sample_last_us;
 };
 
 enum {
@@ -666,7 +678,7 @@ plan_panels (GlassView             *self,
             }
 
           glass_panel_resolve_params (entry->panel, context, item.params);
-          glass_panel_get_tint_rgba (entry->panel, theme_bg, item.tint);
+          glass_panel_get_tint_rgba (entry->panel, item.params, theme_bg, item.tint);
           if (reduce)
             adjust_for_reduce_transparency (item.params, item.tint);
           max_layer = MAX (max_layer, item.layer);
@@ -899,6 +911,186 @@ draw_hud (GlassView *self, GtkSnapshot *snapshot)
   g_object_unref (layout);
 }
 
+/* ── Adaptive colours under the CSS fallback (design.md §12.1) ─────────────
+ * Without our renderer there is no capture to measure, so the view samples
+ * the backdrop of its last snapshot itself: the panels' rectangles (read in
+ * that snapshot, §5.3-2), rendered small in one render_texture() by the
+ * window's renderer, outside the snapshot, at most 10 times a second and
+ * only when the content or the panels moved. The panels' foreground is not
+ * in the backdrop (§5.3-3), so their colour cannot feed back. */
+
+#define SAMPLE_INTERVAL_US  (G_USEC_PER_SEC / 10)
+#define SAMPLE_SCALE        0.25f     /* of a logical px */
+#define SAMPLE_MAX_PX       256.0f
+/* glasspanel.glass-fallback in glass.css: its blur and its tint. */
+#define FALLBACK_BLUR_PX    12.0
+static const float fallback_tint[4] = { 1.0f, 1.0f, 1.0f, 0.18f };
+
+typedef struct {
+  GlassPanel      *panel;    /* owned */
+  graphene_rect_t  rect;
+} Sample;
+
+static void
+sample_clear (Sample *sample)
+{
+  g_clear_object (&sample->panel);
+}
+
+static void
+stop_sampling (GlassView *self)
+{
+  g_clear_handle_id (&self->sample_source, g_source_remove);
+  g_clear_pointer (&self->sample_node, gsk_render_node_unref);
+  g_clear_pointer (&self->sample_panels, g_array_unref);
+  g_clear_pointer (&self->sample_leaf, gsk_render_node_unref);
+  g_clear_pointer (&self->sampled_leaf, gsk_render_node_unref);
+}
+
+static guint64
+hash_bytes (guint64 hash, gconstpointer data, gsize size)
+{
+  const guint8 *p = data;
+
+  /* FNV-1a */
+  for (gsize i = 0; i < size; i++)
+    hash = (hash ^ p[i]) * 0x100000001b3ull;
+  return hash;
+}
+
+static gboolean
+sample_fallback (gpointer data)
+{
+  GlassView *self = data;
+  GtkNative *native = gtk_widget_get_native (GTK_WIDGET (self));
+  GskRenderer *renderer = native ? gtk_native_get_renderer (native) : NULL;
+  g_autoptr (GArray) panels = g_steal_pointer (&self->sample_panels);
+  GskRenderNode *backdrop = g_steal_pointer (&self->sample_node);
+  GskRenderNode *clip, *node;
+  GskTransform *transform;
+  GdkTexture *texture;
+  GdkTextureDownloader *downloader;
+  g_autofree guint8 *pixels = NULL;
+  graphene_rect_t u;
+  float k;
+  int w, h;
+
+  self->sample_source = 0;
+  if (backdrop == NULL || panels == NULL || renderer == NULL || self->full)
+    goto out;
+
+  u = g_array_index (panels, Sample, 0).rect;
+  for (guint i = 1; i < panels->len; i++)
+    graphene_rect_union (&u, &g_array_index (panels, Sample, i).rect, &u);
+  k = MIN (SAMPLE_SCALE, SAMPLE_MAX_PX / MAX (u.size.width, u.size.height));
+  w = MAX (1, (int) ceilf (u.size.width * k));
+  h = MAX (1, (int) ceilf (u.size.height * k));
+
+  clip = gsk_clip_node_new (backdrop, &u);
+  transform = gsk_transform_scale (NULL, k, k);
+  transform = gsk_transform_translate (transform, &GRAPHENE_POINT_INIT (-u.origin.x, -u.origin.y));
+  node = gsk_transform_node_new (clip, transform);
+  gsk_transform_unref (transform);
+  gsk_render_node_unref (clip);
+  texture = gsk_renderer_render_texture (renderer, node, &GRAPHENE_RECT_INIT (0, 0, w, h));
+  gsk_render_node_unref (node);
+  if (texture == NULL)
+    goto out;
+
+  w = gdk_texture_get_width (texture);
+  h = gdk_texture_get_height (texture);
+  pixels = g_malloc ((gsize) w * h * 4);
+  downloader = gdk_texture_downloader_new (texture);
+  gdk_texture_downloader_set_format (downloader, GDK_MEMORY_R8G8B8A8_PREMULTIPLIED);
+  gdk_texture_downloader_download_into (downloader, pixels, (gsize) w * 4);
+  gdk_texture_downloader_free (downloader);
+  g_object_unref (texture);
+
+  for (guint i = 0; i < panels->len; i++)
+    {
+      Sample *s = &g_array_index (panels, Sample, i);
+      GlassLumaStats luma;
+
+      if (glass_adaptive_measure (pixels, (gsize) w * 4, w, h,
+                                  (s->rect.origin.x - u.origin.x) * k, (s->rect.origin.y - u.origin.y) * k,
+                                  s->rect.size.width * k, s->rect.size.height * k,
+                                  MAX (1.0, FALLBACK_BLUR_PX * k), fallback_tint, &luma))
+        glass_panel_push_luma (s->panel, &luma);
+    }
+
+  self->sample_last_us = g_get_monotonic_time ();
+  g_clear_pointer (&self->sampled_leaf, gsk_render_node_unref);
+  self->sampled_leaf = g_steal_pointer (&self->sample_leaf);
+  self->sampled_hash = self->sample_hash;
+
+out:
+  g_clear_pointer (&backdrop, gsk_render_node_unref);
+  g_clear_pointer (&self->sample_leaf, gsk_render_node_unref);
+  return G_SOURCE_REMOVE;
+}
+
+/* In the snapshot, with the CSS fallback: keeps what to sample. */
+static void
+queue_fallback_sample (GlassView             *self,
+                       GskRenderNode         *backdrop,
+                       GskRenderNode         *content_node,
+                       guint                  key_extra,
+                       const graphene_rect_t *view_rect)
+{
+  GtkWidget *widget = GTK_WIDGET (self);
+  g_autoptr (GArray) panels = NULL;
+  GskRenderNode *leaf = NULL;
+  float dx = 0.0f, dy = 0.0f;
+  guint64 hash = 0xcbf29ce484222325ull;
+  gint64 delay;
+
+  /* A view inside a panel has no backdrop of its own to measure (it is the
+   * panel's glass), nor has a knob's; high contrast is opaque. */
+  if (inside_panel (self) || self->backdrop_capture_only ||
+      glass_context_get_high_contrast (glass_context_get_default ()))
+    return;
+
+  panels = g_array_new (FALSE, TRUE, sizeof (Sample));
+  g_array_set_clear_func (panels, (GDestroyNotify) sample_clear);
+  for (guint i = 0; i < self->entries->len; i++)
+    {
+      GlassPanel *panel = ((PanelEntry *) g_ptr_array_index (self->entries, i))->panel;
+      Sample s = { 0 };
+
+      if (!glass_panel_uses_adaptive (panel) || !gtk_widget_get_mapped (GTK_WIDGET (panel)) ||
+          !gtk_widget_compute_bounds (GTK_WIDGET (panel), widget, &s.rect) ||
+          !graphene_rect_intersection (&s.rect, view_rect, &s.rect))
+        continue;
+      s.panel = g_object_ref (panel);
+      g_array_append_val (panels, s);
+      hash = hash_bytes (hash, &s.rect, sizeof s.rect);
+    }
+  if (panels->len == 0)
+    return;
+
+  if (content_node)
+    leaf = glass_unwrap_node (content_node, &dx, &dy);
+  hash = hash_bytes (hash, &dx, sizeof dx);
+  hash = hash_bytes (hash, &dy, sizeof dy);
+  hash = hash_bytes (hash, &key_extra, sizeof key_extra);
+  if (leaf == self->sampled_leaf && hash == self->sampled_hash)
+    return;   /* nothing moved since the last sample */
+
+  g_clear_pointer (&self->sample_node, gsk_render_node_unref);
+  self->sample_node = gsk_render_node_ref (backdrop);
+  g_clear_pointer (&self->sample_panels, g_array_unref);
+  self->sample_panels = g_steal_pointer (&panels);
+  g_clear_pointer (&self->sample_leaf, gsk_render_node_unref);
+  self->sample_leaf = leaf ? gsk_render_node_ref (leaf) : NULL;
+  self->sample_hash = hash;
+
+  if (self->sample_source == 0)
+    {
+      delay = self->sample_last_us + SAMPLE_INTERVAL_US - g_get_monotonic_time ();
+      self->sample_source = g_timeout_add (MAX (delay, 0) / 1000, sample_fallback, self);
+    }
+}
+
 static guint
 hash_backdrop (GlassView *self, const GdkRGBA *bg, float w, float h)
 {
@@ -955,8 +1147,11 @@ glass_view_snapshot (GtkWidget   *widget,
   backdrop = gsk_container_node_new (nodes, n_nodes);
   gtk_snapshot_append_node (snapshot, backdrop);
 
-  /* 2. The glass bodies. */
-  if (self->full && self->renderer && self->entries->len > 0)
+  /* 2. The glass bodies; with the CSS fallback, the panels draw themselves
+   * and we only sample what is under them, for their colours. */
+  if (!self->full && self->entries->len > 0)
+    queue_fallback_sample (self, backdrop, content_node, hash_backdrop (self, &bg, width, height), &view_rect);
+  else if (self->full && self->renderer && self->entries->len > 0)
     {
       GskRenderNode *seen = gsk_render_node_ref (backdrop);
 
@@ -1111,6 +1306,7 @@ glass_view_unroot (GtkWidget *widget)
   if (self->under_panel)
     glass_panel_remove_nested_view (self->under_panel, self);
   self->under_panel = NULL;
+  stop_sampling (self);
   GTK_WIDGET_CLASS (glass_view_parent_class)->unroot (widget);
 }
 
@@ -1121,6 +1317,7 @@ glass_view_dispose (GObject *object)
 {
   GlassView *self = GLASS_VIEW (object);
 
+  stop_sampling (self);
   release_renderer (self);
   for (guint i = 0; i < self->captures->len; i++)
     glass_capture_free (g_ptr_array_index (self->captures, i), NULL);
@@ -1298,6 +1495,8 @@ glass_view_buildable_init (GtkBuildableIface *iface)
 /**
  * glass_view_new:
  *
+ * Creates a new view.
+ *
  * Returns: a new view
  */
 GtkWidget *
@@ -1309,6 +1508,8 @@ glass_view_new (void)
 /**
  * glass_view_get_content:
  * @self: a view
+ *
+ * Gets the content.
  *
  * Returns: (transfer none) (nullable): the content
  */
@@ -1414,6 +1615,9 @@ glass_view_set_backdrop_color (GlassView     *self,
  * @self: a view
  * @color: (out): the colour in use
  *
+ * Gets the colour painted under the content: the one set, or the window
+ * background.
+ *
  * Returns: %TRUE if the colour was set with
  *   [method@View.set_backdrop_color], %FALSE if it is automatic
  */
@@ -1430,6 +1634,9 @@ glass_view_get_backdrop_color (GlassView *self,
 /**
  * glass_view_get_active_renderer:
  * @self: a view
+ *
+ * Gets how the view's glass is drawn right now: by the full renderer, or by
+ * the CSS fallback (no OpenGL, the fallback chosen, high contrast).
  *
  * Returns: %GLASS_RENDERER_MODE_FULL or %GLASS_RENDERER_MODE_FALLBACK: how
  *   this view's glass is drawn right now

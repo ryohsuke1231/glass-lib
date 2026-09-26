@@ -71,7 +71,6 @@ glass_standalone_draw (GlassStandalone       *self,
   GlassRenderRequest req = { 0 };
   GlassRenderResult res;
   double params[GLASS_N_PARAMS];
-  const GlassMaterialSpec *m = &glass_material_specs[CLAMP ((int) material, 0, GLASS_N_MATERIALS - 1)];
   double scale;
   float dx, dy;
 
@@ -95,13 +94,7 @@ glass_standalone_draw (GlassStandalone       *self,
 
   scale = gdk_surface_get_scale (gtk_native_get_surface (native));
   glass_context_resolve (context, material, params);
-  memcpy (req.tint, m->tint, sizeof req.tint);
-  if (m->tint_from_theme && theme_bg)
-    {
-      req.tint[0] = theme_bg->red;
-      req.tint[1] = theme_bg->green;
-      req.tint[2] = theme_bg->blue;
-    }
+  glass_context_resolve_tint (context, material, params[GLASS_PARAM_TINT_STRENGTH], theme_bg, req.tint);
   if (glass_context_get_reduce_transparency (context))
     {
       params[GLASS_PARAM_DISPLACEMENT_SCALE] = 0.0;

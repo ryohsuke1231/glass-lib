@@ -377,6 +377,8 @@ glass_header_bar_buildable_init (GtkBuildableIface *iface)
 /**
  * glass_header_bar_new:
  *
+ * Creates a new header bar.
+ *
  * Returns: a new header bar
  */
 GtkWidget *
@@ -457,6 +459,8 @@ glass_header_bar_remove (GlassHeaderBar *self,
  * glass_header_bar_get_title_widget:
  * @self: a header bar
  *
+ * Gets the title widget.
+ *
  * Returns: (transfer none) (nullable): the title widget
  */
 GtkWidget *
@@ -493,6 +497,8 @@ glass_header_bar_set_title_widget (GlassHeaderBar *self,
  * glass_header_bar_get_show_title:
  * @self: a header bar
  *
+ * Gets whether the title is shown.
+ *
  * Returns: whether the title is shown
  */
 gboolean
@@ -527,6 +533,8 @@ glass_header_bar_set_show_title (GlassHeaderBar *self,
 /**
  * glass_header_bar_get_show_start_title_buttons:
  * @self: a header bar
+ *
+ * Gets whether the start window controls are shown.
  *
  * Returns: whether the start window controls are shown
  */
@@ -563,6 +571,8 @@ glass_header_bar_set_show_start_title_buttons (GlassHeaderBar *self,
  * glass_header_bar_get_show_end_title_buttons:
  * @self: a header bar
  *
+ * Gets whether the end window controls are shown.
+ *
  * Returns: whether the end window controls are shown
  */
 gboolean
@@ -597,6 +607,8 @@ glass_header_bar_set_show_end_title_buttons (GlassHeaderBar *self,
 /**
  * glass_header_bar_get_decoration_layout:
  * @self: a header bar
+ *
+ * Gets the window controls' layout.
  *
  * Returns: (nullable): the window controls' layout
  */

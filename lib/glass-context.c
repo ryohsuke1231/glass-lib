@@ -6,16 +6,24 @@
 
 #include <adwaita.h>
 #include <math.h>
+#include <string.h>
 
 /**
  * GlassContext:
  *
  * The library-wide settings: which renderer draws the glass, whether
- * transparency is reduced, and the optical parameters.
+ * transparency is reduced, the optical parameters and the tint.
  *
- * A parameter's value comes from the first of: a value set with
+ * A parameter's value comes from the first of: a value set on the panel
+ * with [method@Panel.set_param], a value set here with
  * [method@Context.set_param], the value of the panel's [enum@Material],
- * the default (the GNOME Shell extension's).
+ * the default (the GNOME Shell extension's). Setting a value here is how
+ * an app (or the demo's Lab) tunes every piece of glass at once.
+ *
+ * The tint is a colour the glass mixes in: the `tint-strength` parameter
+ * says how much, [property@Context:tint-color] which colour (by default
+ * the material's). A panel's own [property@Panel:tint] takes precedence
+ * over both.
  */
 struct _GlassContext {
   GObject           parent_instance;
@@ -26,6 +34,8 @@ struct _GlassContext {
   gboolean          high_contrast;
   gboolean          is_set[GLASS_N_PARAMS];
   double            values[GLASS_N_PARAMS];
+  GdkRGBA           tint_color;
+  gboolean          tint_color_set;
   guint             generation;
 };
 
@@ -33,6 +43,7 @@ enum {
   PROP_0,
   PROP_RENDERER,
   PROP_REDUCE_TRANSPARENCY,
+  PROP_TINT_COLOR,
   N_PROPS
 };
 
@@ -82,6 +93,9 @@ glass_context_get_property (GObject    *object,
     case PROP_REDUCE_TRANSPARENCY:
       g_value_set_boolean (value, self->reduce_transparency);
       break;
+    case PROP_TINT_COLOR:
+      g_value_set_boxed (value, self->tint_color_set ? &self->tint_color : NULL);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
@@ -102,6 +116,9 @@ glass_context_set_property (GObject      *object,
       break;
     case PROP_REDUCE_TRANSPARENCY:
       glass_context_set_reduce_transparency (self, g_value_get_boolean (value));
+      break;
+    case PROP_TINT_COLOR:
+      glass_context_set_tint_color (self, g_value_get_boxed (value));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -135,6 +152,20 @@ glass_context_class_init (GlassContextClass *klass)
   props[PROP_REDUCE_TRANSPARENCY] =
     g_param_spec_boolean ("reduce-transparency", NULL, NULL, FALSE,
                           G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
+  /**
+   * GlassContext:tint-color:
+   *
+   * The colour every panel's glass is tinted with, unless the panel has a
+   * [property@Panel:tint] of its own; %NULL for each material's colour
+   * (white, or the theme's window or popover background).
+   *
+   * Only red, green and blue are used: how much of it the glass mixes in
+   * is the `tint-strength` parameter.
+   */
+  props[PROP_TINT_COLOR] =
+    g_param_spec_boxed ("tint-color", NULL, NULL, GDK_TYPE_RGBA,
+                        G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (object_class, N_PROPS, props);
 
@@ -178,6 +209,9 @@ glass_context_init (GlassContext *self)
 /**
  * glass_context_get_default:
  *
+ * Gets the library's settings: there is one context, shared by every
+ * window and view.
+ *
  * Returns: (transfer none): the context
  */
 GlassContext *
@@ -194,6 +228,8 @@ glass_context_get_default (void)
 /**
  * glass_context_get_renderer:
  * @self: a context
+ *
+ * Gets the renderer setting.
  *
  * Returns: the renderer setting
  */
@@ -239,6 +275,8 @@ glass_context_get_wanted_renderer (GlassContext *self)
  * glass_context_get_reduce_transparency:
  * @self: a context
  *
+ * Gets whether transparency is reduced.
+ *
  * Returns: whether transparency is reduced
  */
 gboolean
@@ -270,6 +308,61 @@ glass_context_set_reduce_transparency (GlassContext *self,
   changed (self);
 }
 
+/**
+ * glass_context_get_tint_color:
+ * @self: a context
+ * @color: (out) (optional): the colour, if set
+ *
+ * Gets the tint colour set with [method@Context.set_tint_color].
+ *
+ * Returns: %TRUE if a tint colour is set, %FALSE if each material uses its
+ *   own
+ */
+gboolean
+glass_context_get_tint_color (GlassContext *self,
+                              GdkRGBA      *color)
+{
+  g_return_val_if_fail (GLASS_IS_CONTEXT (self), FALSE);
+
+  if (color && self->tint_color_set)
+    *color = self->tint_color;
+  return self->tint_color_set;
+}
+
+/**
+ * glass_context_set_tint_color:
+ * @self: a context
+ * @color: (nullable): the colour (its alpha is not used), or %NULL for
+ *   each material's
+ *
+ * Sets the colour every panel's glass is tinted with, unless the panel has
+ * a [property@Panel:tint] of its own. How much of it the glass mixes in is
+ * the `tint-strength` parameter.
+ */
+void
+glass_context_set_tint_color (GlassContext  *self,
+                              const GdkRGBA *color)
+{
+  GdkRGBA opaque;
+
+  g_return_if_fail (GLASS_IS_CONTEXT (self));
+
+  if (color)
+    {
+      opaque = *color;
+      opaque.alpha = 1.0f;
+    }
+  if (color == NULL && !self->tint_color_set)
+    return;
+  if (color && self->tint_color_set && gdk_rgba_equal (&opaque, &self->tint_color))
+    return;
+  self->tint_color_set = color != NULL;
+  if (color)
+    self->tint_color = opaque;
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_TINT_COLOR]);
+  changed (self);
+}
+
 static int
 find_param (const char *key)
 {
@@ -281,38 +374,25 @@ find_param (const char *key)
   return -1;
 }
 
-/**
- * glass_context_set_param:
- * @self: a context
- * @key: a parameter, one of [method@Context.list_params]
- * @value: its value
- *
- * Sets an optical parameter for every panel, whatever its material. Values
- * outside the parameter's range are clamped, with a warning.
- *
- * Returns: %FALSE if @key is not a parameter
- */
-gboolean
-glass_context_set_param (GlassContext *self,
-                         const char   *key,
-                         double        value)
+int
+glass_param_check (const char *func,
+                   const char *key,
+                   double      value,
+                   double     *out)
 {
   const GlassParamSpec *spec;
-  int i;
+  int i = find_param (key);
 
-  g_return_val_if_fail (GLASS_IS_CONTEXT (self), FALSE);
-
-  i = find_param (key);
   if (i < 0)
     {
-      g_warning ("glass_context_set_param: no parameter %s", key ? key : "(null)");
-      return FALSE;
+      g_warning ("%s: no parameter %s", func, key ? key : "(null)");
+      return -1;
     }
   spec = &glass_param_specs[i];
 
   if (!isfinite (value) || value < spec->min || value > spec->max)
     {
-      g_warning ("glass_context_set_param: %s = %g is outside %g..%g", key, value, spec->min, spec->max);
+      g_warning ("%s: %s = %g is outside %g..%g", func, key, value, spec->min, spec->max);
       value = isfinite (value) ? CLAMP (value, spec->min, spec->max) : spec->default_value;
     }
   if (spec->values)
@@ -325,6 +405,41 @@ glass_context_set_param (GlassContext *self,
           best = spec->values[j];
       value = best;
     }
+
+  *out = value;
+  return i;
+}
+
+int
+glass_param_find (const char *key)
+{
+  return find_param (key);
+}
+
+/**
+ * glass_context_set_param:
+ * @self: a context
+ * @key: a parameter, one of [method@Context.list_params]
+ * @value: its value
+ *
+ * Sets a parameter for every panel, whatever its material (a panel's own
+ * value, [method@Panel.set_param], still wins). Values outside the
+ * parameter's range are clamped, with a warning.
+ *
+ * Returns: %FALSE if @key is not a parameter
+ */
+gboolean
+glass_context_set_param (GlassContext *self,
+                         const char   *key,
+                         double        value)
+{
+  int i;
+
+  g_return_val_if_fail (GLASS_IS_CONTEXT (self), FALSE);
+
+  i = glass_param_check ("glass_context_set_param", key, value, &value);
+  if (i < 0)
+    return FALSE;
 
   if (self->is_set[i] && self->values[i] == value)
     return TRUE;
@@ -339,6 +454,9 @@ glass_context_set_param (GlassContext *self,
  * glass_context_get_param:
  * @self: a context
  * @key: a parameter
+ *
+ * Gets the value set with [method@Context.set_param], or the default; NaN if
+ * @key is not a parameter.
  *
  * Returns: the value set with [method@Context.set_param], or the default;
  *   NaN if @key is not a parameter
@@ -359,6 +477,9 @@ glass_context_get_param (GlassContext *self,
  * glass_context_is_param_set:
  * @self: a context
  * @key: a parameter
+ *
+ * Gets whether @key was set with [method@Context.set_param] (and so
+ * overrides the materials' values).
  *
  * Returns: whether @key was set with [method@Context.set_param] (and so
  *   overrides the materials' values)
@@ -381,9 +502,13 @@ glass_context_is_param_set (GlassContext *self,
  * @material: a material
  * @key: a parameter
  *
- * Returns: the value panels of @material use: the one set with
- *   [method@Context.set_param], else the material's, else the default;
- *   NaN if @key is not a parameter
+ * Gets the value panels of @material use (unless they have their own): the
+ * one set with [method@Context.set_param], else the material's, else the
+ * default; NaN if @key is not a parameter.
+ *
+ * Returns: the value panels of @material use (unless they have their own):
+ *   the one set with [method@Context.set_param], else the material's, else
+ *   the default; NaN if @key is not a parameter
  */
 double
 glass_context_get_effective_param (GlassContext  *self,
@@ -429,6 +554,8 @@ glass_context_reset_param (GlassContext *self,
  * glass_context_list_params:
  * @self: a context
  *
+ * Gets the parameters' keys.
+ *
  * Returns: (transfer none) (array zero-terminated=1): the parameters' keys
  */
 const char * const *
@@ -444,6 +571,8 @@ glass_context_list_params (GlassContext *self)
  * @min: (out) (optional): the smallest value
  * @max: (out) (optional): the largest value
  * @default_value: (out) (optional): the default (the GNOME Shell extension's)
+ *
+ * Gets the range of a parameter's values and its default.
  *
  * Returns: %FALSE if @key is not a parameter
  */
@@ -490,4 +619,30 @@ gboolean
 glass_context_get_high_contrast (GlassContext *self)
 {
   return self->high_contrast;
+}
+
+void
+glass_context_resolve_tint (GlassContext  *self,
+                            GlassMaterial  material,
+                            double         strength,
+                            const GdkRGBA *theme_bg,
+                            float          out[4])
+{
+  const GlassMaterialSpec *m = &glass_material_specs[CLAMP ((int) material, 0, GLASS_N_MATERIALS - 1)];
+
+  if (self->tint_color_set)
+    {
+      out[0] = self->tint_color.red;
+      out[1] = self->tint_color.green;
+      out[2] = self->tint_color.blue;
+    }
+  else if (m->tint_from_theme && theme_bg)
+    {
+      out[0] = theme_bg->red;
+      out[1] = theme_bg->green;
+      out[2] = theme_bg->blue;
+    }
+  else
+    memcpy (out, m->tint, sizeof m->tint);
+  out[3] = (float) strength;
 }

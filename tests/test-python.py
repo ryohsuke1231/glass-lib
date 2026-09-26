@@ -6,6 +6,7 @@
 #
 # SPDX-License-Identifier: MIT
 
+import math
 import sys
 
 try:
@@ -48,7 +49,15 @@ def context():
     expect('max-z' in keys and 'blur-radius' in keys, f'list_params: {keys}')
     ok, lo, hi, default = ctx.get_param_range('shadow-intensity')
     expect(ok and (lo, hi, default) == (0.0, 1.0, 0.55), f'get_param_range: {ok} {lo} {hi} {default}')
-    expect(ctx.get_effective_param(Glass.Material.REGULAR, 'max-z') == 50.0, 'get_effective_param')
+    expect(ctx.get_effective_param(Glass.Material.REGULAR, 'max-z') == 35.0, 'get_effective_param')
+    expect(abs(ctx.get_effective_param(Glass.Material.THICK, 'tint-strength') - 0.55) < 1e-9, 'tint-strength')
+    pink = Gdk.RGBA()
+    pink.parse('#ff66aa')
+    ctx.props.tint_color = pink
+    ok, got = ctx.get_tint_color()
+    expect(ok and abs(got.green - 0.4) < 1e-6, f'get_tint_color: {ok} {got}')
+    ctx.set_tint_color(None)
+    expect(ctx.props.tint_color is None and not ctx.get_tint_color()[0], 'tint-color back to the materials')
     changed = []
     handler = ctx.connect('changed', lambda *_: changed.append(1))
     expect(ctx.set_param('max-z', 30.0), 'set_param')
@@ -78,6 +87,14 @@ def panel():
     expect(ok and abs(got.alpha - 0.3) < 1e-6, f'get_tint: {ok} {got}')
     p.set_tint(None)
     expect(p.props.tint is None, 'tint back to the material')
+    ok, got = p.get_tint()
+    expect(not ok and abs(got.alpha - 0.04) < 1e-6, f'get_tint (CLEAR): {ok} {got}')
+    expect(p.set_param('displacement-scale', 90.0), 'panel set_param')
+    expect(p.is_param_set('displacement-scale') and p.get_param('displacement-scale') == 90.0, 'panel get_param')
+    expect(p.get_effective_param('displacement-scale') == 90.0, 'panel get_effective_param')
+    p.reset_param('displacement-scale')
+    expect(p.get_effective_param('displacement-scale') == 45.0, 'panel reset_param')
+    expect(math.isnan(p.get_param('displacement-scale')), 'panel get_param when not set')
     p.set_corner_radii(24, -1, 0, -1)
     expect(p.get_corner_radii() == (24.0, -1.0, 0.0, -1.0), f'get_corner_radii: {p.get_corner_radii()}')
     expect(p.props.top_left_radius == 24.0, 'top-left-radius')

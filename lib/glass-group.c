@@ -131,6 +131,8 @@ glass_group_init (GlassGroup *self)
 /**
  * glass_group_new:
  *
+ * Creates a new group.
+ *
  * Returns: a new group
  */
 GtkWidget *
@@ -142,6 +144,8 @@ glass_group_new (void)
 /**
  * glass_group_get_child:
  * @self: a group
+ *
+ * Gets the child.
  *
  * Returns: (transfer none) (nullable): the child
  */
@@ -180,6 +184,8 @@ glass_group_set_child (GlassGroup *self,
 /**
  * glass_group_get_spacing:
  * @self: a group
+ *
+ * Gets the merge distance in px.
  *
  * Returns: the merge distance in px
  */

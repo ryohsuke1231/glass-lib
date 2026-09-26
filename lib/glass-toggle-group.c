@@ -340,7 +340,7 @@ glass_toggle_group_init (GlassToggleGroup *self)
   self->box = glass_pill_box_new ();
   glass_pill_box_set_homogeneous (GLASS_PILL_BOX (self->box), TRUE);
   glass_panel_set_child (GLASS_PANEL (self), self->box);
-  gtk_widget_add_css_class (GTK_WIDGET (self), "toggle-group");
+  glass_panel_add_own_class (GLASS_PANEL (self), "toggle-group");
 
   /* The plate: glass on our glass, under the buttons (drawn first). */
   self->plate = glass_panel_new ();
@@ -368,6 +368,8 @@ glass_toggle_group_init (GlassToggleGroup *self)
 
 /**
  * glass_toggle_group_new:
+ *
+ * Creates a new toggle group.
  *
  * Returns: a new toggle group
  */
@@ -462,6 +464,8 @@ append_button (GlassToggleGroup *self,
  * glass_toggle_group_get_n_toggles:
  * @self: a toggle group
  *
+ * Gets how many toggles there are.
+ *
  * Returns: how many toggles there are
  */
 guint
@@ -475,6 +479,8 @@ glass_toggle_group_get_n_toggles (GlassToggleGroup *self)
 /**
  * glass_toggle_group_get_active:
  * @self: a toggle group
+ *
+ * Gets the index of the active toggle.
  *
  * Returns: the index of the active toggle
  */
@@ -505,6 +511,8 @@ glass_toggle_group_set_active (GlassToggleGroup *self,
 /**
  * glass_toggle_group_get_active_name:
  * @self: a toggle group
+ *
+ * Gets the name of the active toggle.
  *
  * Returns: (nullable): the name of the active toggle
  */

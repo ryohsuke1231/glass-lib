@@ -344,6 +344,8 @@ glass_split_view_buildable_init (GtkBuildableIface *iface)
 /**
  * glass_split_view_new:
  *
+ * Creates a new split view.
+ *
  * Returns: a new split view
  */
 GtkWidget *
@@ -355,6 +357,8 @@ glass_split_view_new (void)
 /**
  * glass_split_view_get_sidebar:
  * @self: a split view
+ *
+ * Gets the sidebar.
  *
  * Returns: (transfer none) (nullable): the sidebar
  */
@@ -390,6 +394,8 @@ glass_split_view_set_sidebar (GlassSplitView *self,
  * glass_split_view_get_content:
  * @self: a split view
  *
+ * Gets the content.
+ *
  * Returns: (transfer none) (nullable): the content
  */
 GtkWidget *
@@ -422,6 +428,8 @@ glass_split_view_set_content (GlassSplitView *self,
 /**
  * glass_split_view_get_show_sidebar:
  * @self: a split view
+ *
+ * Gets whether the sidebar is shown.
  *
  * Returns: whether the sidebar is shown
  */
@@ -462,6 +470,8 @@ glass_split_view_set_show_sidebar (GlassSplitView *self,
  * glass_split_view_get_sidebar_position:
  * @self: a split view
  *
+ * Gets the sidebar's side.
+ *
  * Returns: the sidebar's side
  */
 GtkPackType
@@ -495,6 +505,8 @@ glass_split_view_set_sidebar_position (GlassSplitView *self,
 /**
  * glass_split_view_get_sidebar_width:
  * @self: a split view
+ *
+ * Gets the sidebar's width in px.
  *
  * Returns: the sidebar's width in px
  */
@@ -530,6 +542,8 @@ glass_split_view_set_sidebar_width (GlassSplitView *self,
 /**
  * glass_split_view_get_content_inset:
  * @self: a split view
+ *
+ * Gets how much of the content the sidebar covers, in px.
  *
  * Returns: how much of the content the sidebar covers, in px
  */

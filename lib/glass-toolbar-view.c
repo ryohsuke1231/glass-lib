@@ -298,6 +298,8 @@ glass_toolbar_view_buildable_init (GtkBuildableIface *iface)
 /**
  * glass_toolbar_view_new:
  *
+ * Creates a new toolbar view.
+ *
  * Returns: a new toolbar view
  */
 GtkWidget *
@@ -309,6 +311,8 @@ glass_toolbar_view_new (void)
 /**
  * glass_toolbar_view_get_content:
  * @self: a toolbar view
+ *
+ * Gets the content.
  *
  * Returns: (transfer none) (nullable): the content
  */
@@ -399,6 +403,8 @@ glass_toolbar_view_remove (GlassToolbarView *self,
  * glass_toolbar_view_get_top_edge_style:
  * @self: a toolbar view
  *
+ * Gets the scroll edge effect under the top bars.
+ *
  * Returns: the scroll edge effect under the top bars
  */
 GlassEdgeStyle
@@ -432,6 +438,8 @@ glass_toolbar_view_set_top_edge_style (GlassToolbarView *self,
 /**
  * glass_toolbar_view_get_bottom_edge_style:
  * @self: a toolbar view
+ *
+ * Gets the scroll edge effect under the bottom bars.
  *
  * Returns: the scroll edge effect under the bottom bars
  */
@@ -467,6 +475,8 @@ glass_toolbar_view_set_bottom_edge_style (GlassToolbarView *self,
  * glass_toolbar_view_get_top_bar_height:
  * @self: a toolbar view
  *
+ * Gets how much of the top of the content the bars cover, in px.
+ *
  * Returns: how much of the top of the content the bars cover, in px
  */
 int
@@ -480,6 +490,8 @@ glass_toolbar_view_get_top_bar_height (GlassToolbarView *self)
 /**
  * glass_toolbar_view_get_bottom_bar_height:
  * @self: a toolbar view
+ *
+ * Gets how much of the bottom of the content the bars cover, in px.
  *
  * Returns: how much of the bottom of the content the bars cover, in px
  */

@@ -83,12 +83,14 @@ glass_button_group_init (GlassButtonGroup *self)
 {
   self->row = glass_pill_box_new ();
   glass_panel_set_child (GLASS_PANEL (self), self->row);
-  gtk_widget_add_css_class (GTK_WIDGET (self), "button-group");
+  glass_panel_add_own_class (GLASS_PANEL (self), "button-group");
   glass_panel_set_interactive (GLASS_PANEL (self), TRUE);
 }
 
 /**
  * glass_button_group_new:
+ *
+ * Creates a new, empty button group.
  *
  * Returns: a new, empty button group
  */
@@ -154,6 +156,8 @@ glass_button_group_remove (GlassButtonGroup *self,
 /**
  * glass_button_group_is_empty:
  * @self: a button group
+ *
+ * Gets whether the group has no items.
  *
  * Returns: whether the group has no items
  */

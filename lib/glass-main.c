@@ -54,6 +54,8 @@ glass_init (void)
 /**
  * glass_is_initialized:
  *
+ * Gets whether [func@init] was called.
+ *
  * Returns: whether [func@init] was called
  */
 gboolean

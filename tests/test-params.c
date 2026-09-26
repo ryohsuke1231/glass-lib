@@ -41,7 +41,7 @@ test_defaults (void)
 }
 
 /* Materials: the in-app values the user chose (crisp-soft, blur 2, and the
- * later max-z, sheen and shadow). */
+ * later max-z, profile, rim direction, sheen and shadow). */
 static void
 test_materials (void)
 {
@@ -50,8 +50,10 @@ test_materials (void)
 
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
   g_assert_cmpfloat (v[GLASS_PARAM_BLUR_RADIUS], ==, 2.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_PROFILE_SHAPE_N], ==, 7.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 50.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_PROFILE_SHAPE_N], ==, 2.4);
+  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 35.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_RIM_DIRECTIONAL_POWER], ==, 1.6);
+  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.12);
   g_assert_cmpfloat (v[GLASS_PARAM_SHEEN_INTENSITY], ==, 0.08);
   g_assert_cmpfloat (v[GLASS_PARAM_SHADOW_INTENSITY], ==, 0.07);
   g_assert_cmpfloat (v[GLASS_PARAM_DISPLACEMENT_SCALE], ==, 45.0);
@@ -62,9 +64,11 @@ test_materials (void)
 
   glass_context_resolve (ctx, GLASS_MATERIAL_CLEAR, v);
   g_assert_cmpfloat (v[GLASS_PARAM_BLUR_DOWNSCALE], ==, 1.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.04);
 
   glass_context_resolve (ctx, GLASS_MATERIAL_THICK, v);
   g_assert_cmpfloat (v[GLASS_PARAM_BLUR_RADIUS], ==, 12.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.55);
   g_assert_true (glass_material_specs[GLASS_MATERIAL_THICK].tint_from_theme);
   g_assert_false (glass_material_specs[GLASS_MATERIAL_THICK].adaptive);
 
@@ -72,8 +76,8 @@ test_materials (void)
   g_assert_cmpint (GLASS_N_MATERIALS, ==, GLASS_MATERIAL_MENU + 1);
   glass_context_resolve (ctx, GLASS_MATERIAL_MENU, v);
   g_assert_cmpfloat (v[GLASS_PARAM_BLUR_RADIUS], ==, 8.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 50.0);
-  g_assert_cmpfloat (glass_material_specs[GLASS_MATERIAL_MENU].tint[3], ==, 0.45f);
+  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 35.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.45);
   g_assert_true (glass_material_specs[GLASS_MATERIAL_MENU].tint_from_theme);
   g_assert_false (glass_material_specs[GLASS_MATERIAL_MENU].adaptive);
 }
@@ -97,7 +101,49 @@ test_override (void)
   glass_context_reset_param (ctx, "max-z");
   g_assert_false (glass_context_is_param_set (ctx, "max-z"));
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 50.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 35.0);
+}
+
+/* The tint: the context's colour (else the material's, or the theme's for
+ * those tinted from it) with the tint-strength in effect. */
+static void
+test_tint (void)
+{
+  GlassContext *ctx = glass_context_get_default ();
+  GdkRGBA theme = { 0.2f, 0.3f, 0.4f, 1.0f };
+  GdkRGBA pink = { 1.0f, 0.4f, 0.6f, 0.3f };   /* alpha is not used */
+  GdkRGBA got;
+  double v[GLASS_N_PARAMS];
+  float t[4];
+  guint gen;
+
+  glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
+  glass_context_resolve_tint (ctx, GLASS_MATERIAL_REGULAR, v[GLASS_PARAM_TINT_STRENGTH], &theme, t);
+  g_assert_cmpfloat (t[0], ==, 1.0f);
+  g_assert_cmpfloat (t[3], ==, 0.12f);
+  glass_context_resolve_tint (ctx, GLASS_MATERIAL_THICK, 0.55, &theme, t);
+  g_assert_cmpfloat (t[0], ==, 0.2f);
+  g_assert_cmpfloat (t[2], ==, 0.4f);
+
+  g_assert_false (glass_context_get_tint_color (ctx, NULL));
+  gen = glass_context_get_generation (ctx);
+  glass_context_set_tint_color (ctx, &pink);
+  g_assert_cmpuint (glass_context_get_generation (ctx), >, gen);
+  g_assert_true (glass_context_get_tint_color (ctx, &got));
+  g_assert_cmpfloat (got.green, ==, 0.4f);
+  g_assert_cmpfloat (got.alpha, ==, 1.0f);
+  glass_context_resolve_tint (ctx, GLASS_MATERIAL_THICK, 0.55, &theme, t);
+  g_assert_cmpfloat (t[0], ==, 1.0f);
+  g_assert_cmpfloat (t[1], ==, 0.4f);
+  g_assert_cmpfloat (t[3], ==, 0.55f);
+
+  glass_context_set_param (ctx, "tint-strength", 0.3);
+  glass_context_resolve (ctx, GLASS_MATERIAL_THICK, v);
+  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.3);
+
+  glass_context_reset_param (ctx, "tint-strength");
+  glass_context_set_tint_color (ctx, NULL);
+  g_assert_false (glass_context_get_tint_color (ctx, NULL));
 }
 
 static void
@@ -138,6 +184,7 @@ main (int argc, char **argv)
   g_test_add_func ("/params/defaults", test_defaults);
   g_test_add_func ("/params/materials", test_materials);
   g_test_add_func ("/params/override", test_override);
+  g_test_add_func ("/params/tint", test_tint);
   g_test_add_func ("/params/clamp", test_clamp);
   g_test_add_func ("/params/values", test_values);
 

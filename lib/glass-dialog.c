@@ -292,6 +292,8 @@ glass_dialog_init (GlassDialog *self)
 /**
  * glass_dialog_new:
  *
+ * Creates a new dialog of glass.
+ *
  * Returns: a new dialog of glass
  */
 GtkWidget *
@@ -303,6 +305,8 @@ glass_dialog_new (void)
 /**
  * glass_dialog_get_content:
  * @self: a dialog
+ *
+ * Gets the content.
  *
  * Returns: (transfer none) (nullable): the content
  */

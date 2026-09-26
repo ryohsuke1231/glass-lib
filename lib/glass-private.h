@@ -63,10 +63,26 @@ const char *glass_style_corner_radii_class (GdkDisplay   *display,
                                             const double  radii[4]);
 
 /* ── Context ── */
+/* The index of @key, -1 if it is not a parameter. */
+int      glass_param_find            (const char *key);
+/* Checks a value for @key as set_param does (warns as @func, clamps, snaps
+ * to the allowed values): its index with the value in @out, or -1. */
+int      glass_param_check           (const char *func,
+                                      const char *key,
+                                      double      value,
+                                      double     *out);
 /* The value of every key for a material: explicit, material, default. */
 void     glass_context_resolve       (GlassContext *self,
                                       GlassMaterial material,
                                       double        out[GLASS_N_PARAMS]);
+/* A material's tint (rgb, @strength): the context's colour if set, else the
+ * material's (@theme_bg, the theme's window or popover colour, for those
+ * tinted from the theme). */
+void     glass_context_resolve_tint  (GlassContext  *self,
+                                      GlassMaterial  material,
+                                      double         strength,
+                                      const GdkRGBA *theme_bg,
+                                      float          out[4]);
 /* Bumped by every change that affects drawing. */
 guint    glass_context_get_generation (GlassContext *self);
 gboolean glass_context_get_high_contrast (GlassContext *self);
@@ -104,6 +120,11 @@ void     glass_view_set_overlay_offset (GlassView *self,
 
 void     glass_panel_set_mode        (GlassPanel     *self,
                                       GlassPanelMode  mode);
+/* A style class a part relies on (.glass-button): unlike
+ * gtk_widget_add_css_class(), it comes back when the app replaces the
+ * classes (css-classes). The panel's own (shape, mode, colours) do too. */
+void     glass_panel_add_own_class   (GlassPanel *self,
+                                      const char *name);
 GlassPanelMode glass_panel_get_mode  (GlassPanel *self);
 /* Called from the view's snapshot: stores the sample, applies it later. */
 void     glass_panel_push_luma       (GlassPanel           *self,
@@ -127,8 +148,9 @@ void     glass_panel_remove_nested_view (GlassPanel *self,
 void     glass_panel_set_param_default (GlassPanel  *self,
                                         GlassParamId param,
                                         double       value);
-/* glass_context_resolve() for this panel: the explicit value, then the
- * panel's own, then the material's, then the default (design.md §11.2). */
+/* glass_context_resolve() for this panel: the app's value for the panel
+ * (glass_panel_set_param), then the context's, then the widget's own, then
+ * the material's, then the default (design.md §11.2). */
 void     glass_panel_resolve_params  (GlassPanel   *self,
                                       GlassContext *context,
                                       double        out[GLASS_N_PARAMS]);
@@ -179,8 +201,10 @@ double   glass_panel_get_press       (GlassPanel *self);
 double   glass_panel_get_highlight   (GlassPanel *self);
 void     glass_panel_set_highlight   (GlassPanel *self,
                                       double      highlight);
-/* The panel's effective tint (rgb, strength) and whether it adapts. */
+/* The panel's effective tint (rgb, strength; @params resolved for it, for
+ * the strength) and whether it adapts. */
 void     glass_panel_get_tint_rgba   (GlassPanel    *self,
+                                      const double   params[GLASS_N_PARAMS],
                                       const GdkRGBA *theme_bg,
                                       float          out[4]);
 gboolean glass_panel_uses_adaptive   (GlassPanel *self);

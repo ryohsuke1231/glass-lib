@@ -8,11 +8,45 @@
 #error "Only <glass.h> can be included directly."
 #endif
 
+/**
+ * GLASS_MAJOR_VERSION:
+ *
+ * The major version of glass-lib the code is compiled against.
+ */
 #define GLASS_MAJOR_VERSION (@GLASS_MAJOR_VERSION@)
+
+/**
+ * GLASS_MINOR_VERSION:
+ *
+ * The minor version of glass-lib the code is compiled against.
+ */
 #define GLASS_MINOR_VERSION (@GLASS_MINOR_VERSION@)
+
+/**
+ * GLASS_MICRO_VERSION:
+ *
+ * The micro version of glass-lib the code is compiled against.
+ */
 #define GLASS_MICRO_VERSION (@GLASS_MICRO_VERSION@)
+
+/**
+ * GLASS_VERSION_S:
+ *
+ * The version of glass-lib the code is compiled against, as a string
+ * ("major.minor.micro").
+ */
 #define GLASS_VERSION_S "@GLASS_VERSION@"
 
+/**
+ * GLASS_CHECK_VERSION:
+ * @major: a major version
+ * @minor: a minor version
+ * @micro: a micro version
+ *
+ * Checks the version of glass-lib the code is compiled against.
+ *
+ * Returns: %TRUE if it is @major.@minor.@micro or newer
+ */
 #define GLASS_CHECK_VERSION(major, minor, micro) \
   (GLASS_MAJOR_VERSION > (major) || \
    (GLASS_MAJOR_VERSION == (major) && GLASS_MINOR_VERSION > (minor)) || \

@@ -384,6 +384,8 @@ glass_slider_init (GlassSlider *self)
  * glass_slider_new:
  * @adjustment: (nullable): the value and its range
  *
+ * Creates a new slider.
+ *
  * Returns: a new slider
  */
 GtkWidget *
@@ -398,6 +400,8 @@ glass_slider_new (GtkAdjustment *adjustment)
  * @max: the largest value
  * @step: the step of the arrow keys
  *
+ * Creates a new slider at @min.
+ *
  * Returns: a new slider at @min
  */
 GtkWidget *
@@ -411,6 +415,8 @@ glass_slider_new_with_range (double min,
 /**
  * glass_slider_get_adjustment:
  * @self: a slider
+ *
+ * Gets the adjustment.
  *
  * Returns: (transfer none): the adjustment
  */
@@ -454,6 +460,8 @@ glass_slider_set_adjustment (GlassSlider   *self,
 /**
  * glass_slider_get_value:
  * @self: a slider
+ *
+ * Gets the value.
  *
  * Returns: the value
  */

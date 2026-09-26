@@ -72,8 +72,8 @@ def main():
     w('  const char *name;')
     w('  gboolean    has[GLASS_N_PARAMS];     /* the keys this material sets */')
     w('  double      values[GLASS_N_PARAMS];')
-    w('  float       tint[4];                 /* rgb, alpha = strength */')
-    w('  gboolean    tint_from_theme;         /* rgb = the window background colour */')
+    w('  float       tint[3];                 /* rgb; the strength is the tint-strength key */')
+    w('  gboolean    tint_from_theme;         /* rgb = the theme colour (window, popover) */')
     w('  gboolean    adaptive;                /* FALSE: the foreground follows the theme */')
     w('} GlassMaterialSpec;')
     w('')
@@ -86,6 +86,8 @@ def main():
         for k in values:
             if k not in keys:
                 sys.exit(f'material {m["name"]}: unknown key {k}')
+        if len(m['tint']) != 3:
+            sys.exit(f'material {m["name"]}: tint is rgb (the strength is tint-strength)')
         w('  {')
         w(f'    .name = "{m["name"]}",')
         w('    .has = { ' + ', '.join(f'[{c_ident(k)}] = TRUE' for k in values) + ' },')

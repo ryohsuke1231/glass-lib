@@ -5,8 +5,10 @@
     "params: key (glass_context_set_param), uniform (shaders/core/glass_params.glsl), default = the",
     "extension's gschema default, min/max = the extension's prefs.js slider range, px = a length in",
     "logical px (multiplied by the surface scale when drawn), values = the only allowed values if set.",
-    "materials: in GlassMaterial order. Each sets only the keys it overrides (design §11.2: explicit",
-    "context value, then the material's, then the default)."
+    "tint-strength is how much of the tint colour the glass mixes in; the colour itself is the material's",
+    "(tint, or the theme's with tint_from_theme), the context's tint-color, or the panel's tint.",
+    "materials: in GlassMaterial order. Each sets only the keys it overrides (design §11.2: the panel's",
+    "value, then the context's, then the material's, then the default); tint = its colour (rgb)."
   ],
   "params": [
     { "key": "max-z",                     "uniform": "max_z",                     "default": 25.0, "min": 0.0, "max": 100.0, "px": true,  "extension_key": "glass-max-z" },
@@ -29,45 +31,47 @@
     { "key": "ao-intensity",              "uniform": "ao_intensity",              "default": 0.25, "min": 0.0, "max": 1.0,   "px": false, "extension_key": "glass-ao-intensity" },
     { "key": "ao-radius",                 "uniform": "ao_radius",                 "default": 7.5,  "min": 0.0, "max": 50.0,  "px": true,  "extension_key": "glass-ao-radius" },
     { "key": "blur-radius",               "uniform": null,                        "default": 5.0,  "min": 0.0, "max": 30.0,  "px": true,  "extension_key": "dock-blur-radius" },
+    { "key": "tint-strength",             "uniform": null,                        "default": 0.12, "min": 0.0, "max": 1.0,   "px": false, "extension_key": "dock-tint-strength" },
     { "key": "blur-downscale",            "uniform": null,                        "default": 2.0,  "min": 1.0, "max": 4.0,   "px": false, "extension_key": "glass-blur-downscale", "values": [1.0, 2.0, 4.0] }
   ],
   "edge_presets": {
-    "_comment": "The in-app edge values the user chose in S1 (crisp-soft, 2026-09-25; docs/memo.md 追記5); max-z 14 -> 50 (the user, 2026-09-26).",
+    "_comment": "The in-app edge values the user chose in S1 (crisp-soft, 2026-09-25; docs/memo.md 追記5); later changed by the user: max-z 14 -> 50 (2026-09-26) -> 35, profile-shape-n 7 -> 2.4 and rim-directional-power 1.6 (2026-09-26, tuned in the Lab).",
     "crisp-soft": {
       "edge-smoothing": 0.75, "rim-width": 2.0, "rim-power": 9.0, "ao-radius": 3.0, "ao-intensity": 0.10,
-      "chroma-strength": 0.8, "profile-shape-n": 7.0, "max-z": 50.0, "displacement-scale": 45.0
+      "chroma-strength": 0.8, "profile-shape-n": 2.4, "max-z": 35.0, "displacement-scale": 45.0,
+      "rim-directional-power": 1.6
     }
   },
   "materials": [
     {
       "name": "regular",
       "edge": "crisp-soft",
-      "values": { "blur-radius": 2.0, "shadow-radius": 16.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
-      "tint": [1.0, 1.0, 1.0, 0.12],
+      "values": { "tint-strength": 0.12, "blur-radius": 2.0, "shadow-radius": 16.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
+      "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": false,
       "adaptive": true
     },
     {
       "name": "clear",
       "edge": "crisp-soft",
-      "values": { "blur-radius": 1.5, "blur-downscale": 1.0, "shadow-radius": 16.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
-      "tint": [1.0, 1.0, 1.0, 0.04],
+      "values": { "tint-strength": 0.04, "blur-radius": 1.5, "blur-downscale": 1.0, "shadow-radius": 16.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
+      "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": false,
       "adaptive": true
     },
     {
       "name": "thick",
       "edge": "crisp-soft",
-      "values": { "blur-radius": 12.0, "shadow-radius": 24.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
-      "tint": [1.0, 1.0, 1.0, 0.55],
+      "values": { "tint-strength": 0.55, "blur-radius": 12.0, "shadow-radius": 24.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
+      "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": true,
       "adaptive": false
     },
     {
       "name": "menu",
       "edge": "crisp-soft",
-      "values": { "blur-radius": 8.0, "shadow-radius": 24.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
-      "tint": [1.0, 1.0, 1.0, 0.45],
+      "values": { "tint-strength": 0.45, "blur-radius": 8.0, "shadow-radius": 24.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
+      "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": true,
       "adaptive": false
     }

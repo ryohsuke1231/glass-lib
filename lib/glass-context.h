@@ -27,6 +27,11 @@ gboolean            glass_context_get_reduce_transparency  (GlassContext *self);
 void                glass_context_set_reduce_transparency  (GlassContext *self,
                                                             gboolean      reduce);
 
+gboolean            glass_context_get_tint_color           (GlassContext *self,
+                                                            GdkRGBA      *color);
+void                glass_context_set_tint_color           (GlassContext  *self,
+                                                            const GdkRGBA *color);
+
 gboolean            glass_context_set_param                (GlassContext *self,
                                                             const char   *key,
                                                             double        value);

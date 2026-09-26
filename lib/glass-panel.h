@@ -55,6 +55,18 @@ gboolean           glass_panel_get_tint          (GlassPanel *self,
 void               glass_panel_set_tint          (GlassPanel    *self,
                                                   const GdkRGBA *tint);
 
+gboolean           glass_panel_set_param         (GlassPanel *self,
+                                                  const char *key,
+                                                  double      value);
+double             glass_panel_get_param         (GlassPanel *self,
+                                                  const char *key);
+gboolean           glass_panel_is_param_set      (GlassPanel *self,
+                                                  const char *key);
+void               glass_panel_reset_param       (GlassPanel *self,
+                                                  const char *key);
+double             glass_panel_get_effective_param (GlassPanel *self,
+                                                    const char *key);
+
 gboolean           glass_panel_get_has_shadow    (GlassPanel *self);
 void               glass_panel_set_has_shadow    (GlassPanel *self,
                                                   gboolean    has_shadow);

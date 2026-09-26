@@ -45,6 +45,15 @@ glasspanel button:not(.suggested-action):not(.destructive-action):not(.opaque) {
   color: inherit;
 }
 
+/* The adaptive colour reaches what is in those buttons. A theme can set the
+ * button's own colour from USER priority, which no library CSS out-ranks,
+ * but not its content's (docs/memo.md 地雷30, 地雷32); the variable is the
+ * nearest panel's, so nested panels keep their own. */
+glasspanel.glass-light button:not(.suggested-action):not(.destructive-action):not(.opaque) > *,
+glasspanel.glass-dark button:not(.suggested-action):not(.destructive-action):not(.opaque) > * {
+  color: var(--glass-fg-color);
+}
+
 glasspanel button:not(.suggested-action):not(.destructive-action):not(.opaque):hover {
   background: alpha(currentColor, 0.08);
 }

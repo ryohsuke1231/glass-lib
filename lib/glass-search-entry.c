@@ -346,7 +346,7 @@ glass_search_entry_init (GlassSearchEntry *self)
   gtk_box_append (GTK_BOX (box), self->text);
   gtk_box_append (GTK_BOX (box), self->clear);
   glass_panel_set_child (GLASS_PANEL (self), box);
-  gtk_widget_add_css_class (GTK_WIDGET (self), "search-entry");
+  glass_panel_add_own_class (GLASS_PANEL (self), "search-entry");
 
   gtk_editable_init_delegate (GTK_EDITABLE (self));
   g_signal_connect (self->text, "changed", G_CALLBACK (text_changed), self);
@@ -366,6 +366,8 @@ glass_search_entry_init (GlassSearchEntry *self)
 /**
  * glass_search_entry_new:
  *
+ * Creates a new search field.
+ *
  * Returns: a new search field
  */
 GtkWidget *
@@ -377,6 +379,8 @@ glass_search_entry_new (void)
 /**
  * glass_search_entry_get_placeholder_text:
  * @self: a search field
+ *
+ * Gets the placeholder text.
  *
  * Returns: (nullable): the placeholder text
  */
@@ -411,6 +415,8 @@ glass_search_entry_set_placeholder_text (GlassSearchEntry *self,
  * glass_search_entry_get_search_delay:
  * @self: a search field
  *
+ * Gets the delay of [signal@SearchEntry::search-changed], ms.
+ *
  * Returns: the delay of [signal@SearchEntry::search-changed], ms
  */
 guint
@@ -444,6 +450,8 @@ glass_search_entry_set_search_delay (GlassSearchEntry *self,
 /**
  * glass_search_entry_get_key_capture_widget:
  * @self: a search field
+ *
+ * Gets the key capture widget.
  *
  * Returns: (transfer none) (nullable): the key capture widget
  */

@@ -323,6 +323,8 @@ glass_switch_init (GlassSwitch *self)
 /**
  * glass_switch_new:
  *
+ * Creates a new switch, off.
+ *
  * Returns: a new switch, off
  */
 GtkWidget *
@@ -334,6 +336,8 @@ glass_switch_new (void)
 /**
  * glass_switch_get_active:
  * @self: a switch
+ *
+ * Gets whether the switch is on.
  *
  * Returns: whether the switch is on
  */

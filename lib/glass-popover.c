@@ -225,6 +225,8 @@ glass_popover_init (GlassPopover *self)
 /**
  * glass_popover_new:
  *
+ * Creates a new popover of glass.
+ *
  * Returns: a new popover of glass
  */
 GtkWidget *
@@ -360,6 +362,10 @@ back_to_main (GtkPopover *popover,
 /**
  * glass_popover_new_from_model:
  * @model: a menu
+ *
+ * Creates a new popover of glass holding a menu built from @model: its items
+ * activate their actions (with their targets) and close the popover;
+ * sections are separated by lines; submenus open as pages.
  *
  * Returns: a new popover of glass holding a menu built from @model: its
  *   items activate their actions (with their targets) and close the

@@ -212,7 +212,7 @@ glass_button_init (GlassButton *self)
   self->button = gtk_button_new ();
   gtk_widget_add_css_class (self->button, "flat");
   glass_panel_set_child (GLASS_PANEL (self), self->button);
-  gtk_widget_add_css_class (GTK_WIDGET (self), "glass-button");
+  glass_panel_add_own_class (GLASS_PANEL (self), "glass-button");
   update_shape (self);
 
   g_signal_connect_object (self->button, "clicked", G_CALLBACK (clicked), self, 0);
@@ -224,6 +224,8 @@ glass_button_init (GlassButton *self)
 /**
  * glass_button_new_from_icon_name:
  * @icon_name: the icon
+ *
+ * Creates a new round glass button.
  *
  * Returns: a new round glass button
  */
@@ -237,6 +239,8 @@ glass_button_new_from_icon_name (const char *icon_name)
  * glass_button_new_with_label:
  * @label: the text
  *
+ * Creates a new glass capsule button.
+ *
  * Returns: a new glass capsule button
  */
 GtkWidget *
@@ -248,6 +252,8 @@ glass_button_new_with_label (const char *label)
 /**
  * glass_button_get_icon_name:
  * @self: a button
+ *
+ * Gets the icon.
  *
  * Returns: (nullable): the icon
  */
@@ -282,6 +288,8 @@ glass_button_set_icon_name (GlassButton *self,
 /**
  * glass_button_get_label:
  * @self: a button
+ *
+ * Gets the text.
  *
  * Returns: (nullable): the text
  */

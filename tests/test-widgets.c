@@ -90,6 +90,127 @@ test_fallback_setting (void)
   spin (50);
 }
 
+/* With the CSS fallback the view samples the backdrop itself: the colours
+ * still follow what is under the panel (design.md §12.1). */
+static void
+test_fallback_adaptive (void)
+{
+  GlassContext *ctx = glass_context_get_default ();
+  GtkWidget *view = glass_view_new ();
+  GtkWidget *panel = glass_panel_new ();
+  GtkWidget *window;
+  GdkRGBA white = { 1, 1, 1, 1 }, black = { 0, 0, 0, 1 };
+
+  glass_context_set_renderer (ctx, GLASS_RENDERER_MODE_FALLBACK);
+  gtk_widget_set_size_request (panel, 120, 40);
+  gtk_widget_set_halign (panel, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (panel, GTK_ALIGN_CENTER);
+  glass_panel_set_child (GLASS_PANEL (panel), gtk_label_new ("Aa"));
+  glass_view_set_backdrop_color (GLASS_VIEW (view), &white);
+  glass_view_add_overlay (GLASS_VIEW (view), panel);
+  window = window_with (view);
+  gtk_window_present (GTK_WINDOW (window));
+  spin (900);
+
+  g_assert_true (gtk_widget_has_css_class (panel, "glass-fallback"));
+  g_assert_cmpint (glass_panel_get_appearance (GLASS_PANEL (panel)), ==, GLASS_APPEARANCE_LIGHT);
+  g_assert_true (gtk_widget_has_css_class (panel, "glass-light"));
+
+  glass_view_set_backdrop_color (GLASS_VIEW (view), &black);
+  spin (1200);
+  g_assert_cmpint (glass_panel_get_appearance (GLASS_PANEL (panel)), ==, GLASS_APPEARANCE_DARK);
+  g_assert_true (gtk_widget_has_css_class (panel, "glass-dark"));
+  g_assert_false (gtk_widget_has_css_class (panel, "glass-light"));
+
+  /* Off: the theme's colours. */
+  glass_panel_set_adaptive (GLASS_PANEL (panel), GLASS_ADAPTIVE_MODE_OFF);
+  g_assert_cmpint (glass_panel_get_appearance (GLASS_PANEL (panel)), ==, GLASS_APPEARANCE_UNKNOWN);
+
+  glass_context_set_renderer (ctx, GLASS_RENDERER_MODE_AUTO);
+  gtk_window_destroy (GTK_WINDOW (window));
+  spin (50);
+}
+
+/* An app replacing the classes (css_classes in a GJS or Python constructor)
+ * keeps its own and gets ours back: the shape (else the child is clipped
+ * to a capsule), the mode and the part's own class. */
+static void
+test_css_classes (void)
+{
+  GtkWidget *button = g_object_ref_sink (glass_button_new_from_icon_name ("edit-find-symbolic"));
+  const char *mine[] = { "mine", NULL };
+
+  glass_panel_set_corner_radius (GLASS_PANEL (button), 22.0);
+  g_assert_true (gtk_widget_has_css_class (button, "glass-radius-220"));
+  gtk_widget_set_css_classes (button, mine);
+  g_assert_true (gtk_widget_has_css_class (button, "mine"));
+  g_assert_true (gtk_widget_has_css_class (button, "glass-radius-220"));
+  g_assert_true (gtk_widget_has_css_class (button, "glass-button"));
+
+  /* Our own changes are not undone by it. */
+  glass_panel_set_corner_radius (GLASS_PANEL (button), 10.0);
+  g_assert_true (gtk_widget_has_css_class (button, "glass-radius-100"));
+  g_assert_false (gtk_widget_has_css_class (button, "glass-radius-220"));
+
+  g_object_unref (button);
+}
+
+/* A panel's own values win over the context's, which win over the
+ * material's (design.md §11.2); the tint follows the same order. */
+static void
+test_panel_params (void)
+{
+  GlassContext *ctx = glass_context_get_default ();
+  GlassPanel *panel = GLASS_PANEL (g_object_ref_sink (glass_panel_new ()));
+  GdkRGBA tint, blue = { 0.1f, 0.2f, 0.9f, 1.0f }, red = { 0.9f, 0.1f, 0.1f, 0.5f };
+
+  g_assert_cmpfloat (glass_panel_get_effective_param (panel, "max-z"), ==, 35.0);
+  glass_context_set_param (ctx, "max-z", 30.0);
+  g_assert_cmpfloat (glass_panel_get_effective_param (panel, "max-z"), ==, 30.0);
+  g_assert_true (glass_panel_set_param (panel, "max-z", 60.0));
+  g_assert_true (glass_panel_is_param_set (panel, "max-z"));
+  g_assert_cmpfloat (glass_panel_get_param (panel, "max-z"), ==, 60.0);
+  g_assert_cmpfloat (glass_panel_get_effective_param (panel, "max-z"), ==, 60.0);
+  glass_panel_reset_param (panel, "max-z");
+  g_assert_false (glass_panel_is_param_set (panel, "max-z"));
+  g_assert_true (isnan (glass_panel_get_param (panel, "max-z")));
+  g_assert_cmpfloat (glass_panel_get_effective_param (panel, "max-z"), ==, 30.0);
+  glass_context_reset_param (ctx, "max-z");
+
+  /* Checked like the context's. */
+  glass_panel_set_param (panel, "blur-downscale", 3.2);
+  g_assert_cmpfloat (glass_panel_get_param (panel, "blur-downscale"), ==, 4.0);
+  g_test_expect_message ("glass", G_LOG_LEVEL_WARNING, "*outside*");
+  glass_panel_set_param (panel, "ior", 9.0);
+  g_test_assert_expected_messages ();
+  g_assert_cmpfloat (glass_panel_get_param (panel, "ior"), ==, 4.0);
+  g_test_expect_message ("glass", G_LOG_LEVEL_WARNING, "*no parameter*");
+  g_assert_false (glass_panel_set_param (panel, "no-such-key", 1.0));
+  g_test_assert_expected_messages ();
+
+  /* The tint: the material's white 0.12, the context's strength and
+   * colour, the panel's strength, and the panel's own tint over all. */
+  g_assert_false (glass_panel_get_tint (panel, &tint));
+  g_assert_cmpfloat (tint.red, ==, 1.0f);
+  g_assert_cmpfloat (tint.alpha, ==, 0.12f);
+  glass_context_set_param (ctx, "tint-strength", 0.3);
+  glass_context_set_tint_color (ctx, &blue);
+  glass_panel_get_tint (panel, &tint);
+  g_assert_cmpfloat (tint.blue, ==, 0.9f);
+  g_assert_cmpfloat (tint.alpha, ==, 0.3f);
+  glass_panel_set_param (panel, "tint-strength", 0.6);
+  glass_panel_get_tint (panel, &tint);
+  g_assert_cmpfloat (tint.alpha, ==, 0.6f);
+  glass_panel_set_tint (panel, &red);
+  g_assert_true (glass_panel_get_tint (panel, &tint));
+  g_assert_cmpfloat (tint.red, ==, 0.9f);
+  g_assert_cmpfloat (tint.alpha, ==, 0.5f);
+
+  glass_context_reset_param (ctx, "tint-strength");
+  glass_context_set_tint_color (ctx, NULL);
+  g_object_unref (panel);
+}
+
 /* The buttons under @widget with a frame (or without). */
 static int
 count_buttons (GtkWidget *widget, gboolean framed)
@@ -704,6 +825,9 @@ main (int argc, char **argv)
 
   g_test_add_func ("/widgets/registration", test_registration);
   g_test_add_func ("/widgets/fallback-setting", test_fallback_setting);
+  g_test_add_func ("/widgets/fallback-adaptive", test_fallback_adaptive);
+  g_test_add_func ("/widgets/panel-params", test_panel_params);
+  g_test_add_func ("/widgets/css-classes", test_css_classes);
   g_test_add_func ("/widgets/toggle-group", test_toggle_group);
   g_test_add_func ("/widgets/toolbar-view", test_toolbar_view);
   g_test_add_func ("/widgets/split-view", test_split_view);

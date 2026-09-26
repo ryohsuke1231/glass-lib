@@ -51,7 +51,10 @@ typedef struct {
 
   GlassView          *view;             /* registered with, not owned */
   GlassPanelMode      mode;
+  gboolean            high_contrast;    /* has .glass-high-contrast */
   const char         *shape_class;      /* the CSS radius class in use */
+  GPtrArray          *own_classes;      /* interned: a part's classes (.glass-button) */
+  guint               changing_classes; /* > 0: our own changes, not the app's */
 
   GlassAdaptiveState  astate;
   GlassLumaStats      last_luma;
@@ -89,6 +92,7 @@ typedef struct {
   gboolean            morphing;
   graphene_rect_t     morph_from;
   double              morph_from_radius;
+  GtkWidget          *morph_source;     /* weak: a shown source, read in the first frame */
   /* Hidden, still drawn: shrinking into ghost_into. */
   AdwAnimation       *ghost_anim;
   double              ghost_t;
@@ -97,7 +101,8 @@ typedef struct {
   double              ghost_from_radius;
   GtkWidget          *ghost_into;       /* weak */
 
-  double              param_default[GLASS_N_PARAMS];   /* NAN: none */
+  double              param_value[GLASS_N_PARAMS];     /* the app's (set_param); NAN: none */
+  double              param_default[GLASS_N_PARAMS];   /* the widget's own; NAN: none */
 } GlassPanelPrivate;
 
 enum {
@@ -150,11 +155,13 @@ update_shape_class (GlassPanel *self)
 
   if (wanted == priv->shape_class)
     return;
+  priv->changing_classes++;
   if (priv->shape_class)
     gtk_widget_remove_css_class (widget, priv->shape_class);
   priv->shape_class = wanted;
   if (wanted)
     gtk_widget_add_css_class (widget, wanted);
+  priv->changing_classes--;
 }
 
 /* One corner's radius: 0 top left, 1 top right, 2 bottom right, 3 bottom
@@ -189,6 +196,18 @@ glass_panel_has_corner_radii (GlassPanel *self)
 static void set_appearance (GlassPanel *self, GlassAppearance appearance);
 static void stop_ghost (GlassPanel *self);
 
+/* Whether a view measures what is under the panel: its glass, or its CSS
+ * fallback (the view samples that itself); not in high contrast (opaque). */
+static gboolean
+is_measured (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (priv->view == NULL || glass_context_get_high_contrast (glass_context_get_default ()))
+    return FALSE;
+  return priv->mode == GLASS_PANEL_MODE_VIEW || priv->mode == GLASS_PANEL_MODE_FALLBACK;
+}
+
 void
 glass_panel_set_mode (GlassPanel     *self,
                       GlassPanelMode  mode)
@@ -202,6 +221,7 @@ glass_panel_set_mode (GlassPanel     *self,
   if (mode != GLASS_PANEL_MODE_VIEW)
     priv->has_output = FALSE;
 
+  priv->changing_classes++;
   gtk_widget_remove_css_class (widget, "glass-fallback");
   gtk_widget_remove_css_class (widget, "glass-nested");
   gtk_widget_remove_css_class (widget, "glass-high-contrast");
@@ -214,15 +234,18 @@ glass_panel_set_mode (GlassPanel     *self,
     gtk_widget_add_css_class (widget, "glass-fallback");
   else if (mode == GLASS_PANEL_MODE_NESTED)
     gtk_widget_add_css_class (widget, "glass-nested");
-  if (hc && mode != GLASS_PANEL_MODE_NESTED)
+  priv->high_contrast = hc && mode != GLASS_PANEL_MODE_NESTED;
+  if (priv->high_contrast)
     gtk_widget_add_css_class (widget, "glass-high-contrast");
 
   priv->mode = mode;
   update_shape_class (self);
+  priv->changing_classes--;
 
-  /* Only a panel the view draws is measured; the others keep the theme's
-   * colours (the fallback's own sampling is design.md §12.1, not done yet). */
-  if (mode != GLASS_PANEL_MODE_VIEW || hc)
+  /* Only the panels of a view are measured (with the CSS fallback too, by
+   * the view's own small samples: design.md §12.1); the others keep the
+   * theme's colours. */
+  if (!is_measured (self))
     set_appearance (self, GLASS_APPEARANCE_UNKNOWN);
 }
 
@@ -230,6 +253,64 @@ GlassPanelMode
 glass_panel_get_mode (GlassPanel *self)
 {
   return PRIV (self)->mode;
+}
+
+/* An app that sets css-classes (GJS and Python constructors do, with
+ * `css_classes: [...]`) replaces every class, ours too: the shape class
+ * would go, and the child would be clipped to a capsule. Put ours back. */
+static void
+restore_classes (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  GtkWidget *widget = GTK_WIDGET (self);
+  const char *wanted[8];
+  guint n = 0;
+
+  if (priv->changing_classes > 0)
+    return;
+  priv->changing_classes++;
+
+  if (priv->shape_class)
+    wanted[n++] = priv->shape_class;
+  if (priv->mode == GLASS_PANEL_MODE_FALLBACK)
+    wanted[n++] = "glass-fallback";
+  else if (priv->mode == GLASS_PANEL_MODE_NESTED)
+    wanted[n++] = "glass-nested";
+  if (priv->high_contrast)
+    wanted[n++] = "glass-high-contrast";
+  if (priv->appearance == GLASS_APPEARANCE_LIGHT)
+    wanted[n++] = "glass-light";
+  else if (priv->appearance == GLASS_APPEARANCE_DARK)
+    wanted[n++] = "glass-dark";
+
+  for (guint i = 0; i < n; i++)
+    if (!gtk_widget_has_css_class (widget, wanted[i]))
+      gtk_widget_add_css_class (widget, wanted[i]);
+  for (guint i = 0; priv->own_classes && i < priv->own_classes->len; i++)
+    if (!gtk_widget_has_css_class (widget, g_ptr_array_index (priv->own_classes, i)))
+      gtk_widget_add_css_class (widget, g_ptr_array_index (priv->own_classes, i));
+
+  priv->changing_classes--;
+}
+
+static void
+css_classes_changed (GlassPanel *self)
+{
+  restore_classes (self);
+}
+
+void
+glass_panel_add_own_class (GlassPanel *self,
+                           const char *name)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  const char *interned = g_intern_string (name);
+
+  if (priv->own_classes == NULL)
+    priv->own_classes = g_ptr_array_new ();
+  if (!g_ptr_array_find (priv->own_classes, interned, NULL))
+    g_ptr_array_add (priv->own_classes, (gpointer) interned);
+  gtk_widget_add_css_class (GTK_WIDGET (self), interned);
 }
 
 static void
@@ -272,6 +353,7 @@ glass_panel_unroot (GtkWidget *widget)
 
   /* A morph's glass is in the view's coordinates: none of it carries over. */
   stop_ghost (self);
+  g_clear_weak_pointer (&priv->morph_source);
   if (priv->morphing)
     {
       priv->morphing = FALSE;
@@ -306,12 +388,14 @@ set_appearance (GlassPanel      *self,
   if (priv->appearance == appearance)
     return;
 
+  priv->changing_classes++;
   gtk_widget_remove_css_class (widget, "glass-light");
   gtk_widget_remove_css_class (widget, "glass-dark");
   if (appearance == GLASS_APPEARANCE_LIGHT)
     gtk_widget_add_css_class (widget, "glass-light");
   else if (appearance == GLASS_APPEARANCE_DARK)
     gtk_widget_add_css_class (widget, "glass-dark");
+  priv->changing_classes--;
 
   priv->appearance = appearance;
   if (appearance == GLASS_APPEARANCE_UNKNOWN)
@@ -366,7 +450,7 @@ settle (gpointer data)
   GlassPanelPrivate *priv = PRIV (self);
 
   priv->settle_source = 0;
-  if (!priv->have_luma || !glass_panel_uses_adaptive (self) || priv->mode != GLASS_PANEL_MODE_VIEW)
+  if (!priv->have_luma || !glass_panel_uses_adaptive (self) || !is_measured (self))
     return G_SOURCE_REMOVE;
 
   set_appearance (self, decide (self, g_get_monotonic_time ()));
@@ -383,7 +467,7 @@ apply_pending (GtkWidget     *widget,
   GlassPanelPrivate *priv = PRIV (self);
 
   priv->apply_tick = 0;
-  if (glass_panel_uses_adaptive (self) && priv->mode == GLASS_PANEL_MODE_VIEW)
+  if (glass_panel_uses_adaptive (self) && is_measured (self))
     set_appearance (self, priv->pending);
   arm_settle (self);
   return G_SOURCE_REMOVE;
@@ -490,8 +574,12 @@ glass_panel_resolve_params (GlassPanel   *self,
 
   glass_context_resolve (context, priv->material, out);
   for (int i = 0; i < GLASS_N_PARAMS; i++)
-    if (!isnan (priv->param_default[i]) && !glass_context_is_param_set (context, glass_param_specs[i].key))
-      out[i] = priv->param_default[i];
+    {
+      if (!isnan (priv->param_value[i]))
+        out[i] = priv->param_value[i];
+      else if (!isnan (priv->param_default[i]) && !glass_context_is_param_set (context, glass_param_specs[i].key))
+        out[i] = priv->param_default[i];
+    }
 }
 
 gboolean
@@ -667,7 +755,9 @@ collect_panels (GtkWidget *widget,
     }
 }
 
-/* The nearest shown panel before @self in its group, else after it. */
+/* The nearest shown panel before @self in its group, else after it; not one
+ * that is appearing itself (shown in the same go: they all come out of the
+ * glass that was there). */
 static GlassPanel *
 group_neighbour (GlassPanel *self,
                  GtkWidget  *group)
@@ -688,7 +778,8 @@ group_neighbour (GlassPanel *self,
           if (j < 0 || j >= panels->len)
             continue;
           other = g_ptr_array_index (panels, j);
-          if (gtk_widget_get_mapped (GTK_WIDGET (other)) && PRIV (other)->has_drawn && !PRIV (other)->ghost)
+          if (gtk_widget_get_mapped (GTK_WIDGET (other)) && PRIV (other)->has_drawn &&
+              !PRIV (other)->ghost && !PRIV (other)->morphing)
             return other;
         }
     }
@@ -820,6 +911,10 @@ begin_appear (GlassPanel *self)
         return;
       priv->morph_from = PRIV (source)->drawn_rect;
       priv->morph_from_radius = PRIV (source)->drawn_radius;
+      /* A source still shown may move in this very frame (a centred row
+       * grows): its place is read in the first snapshot (§5.3-2). */
+      if (gtk_widget_get_mapped (GTK_WIDGET (source)))
+        g_set_weak_pointer (&priv->morph_source, GTK_WIDGET (source));
     }
 
   if (priv->morph_anim == NULL)
@@ -846,6 +941,7 @@ begin_vanish (GlassPanel *self)
   GlassPanel *into;
 
   priv->hidden_at = now;
+  g_clear_weak_pointer (&priv->morph_source);
   if (priv->morphing)
     {
       priv->morphing = FALSE;
@@ -890,6 +986,18 @@ glass_panel_get_morph (GlassPanel            *self,
 
   if (!priv->morphing)
     return FALSE;
+  if (priv->morph_source)
+    {
+      graphene_rect_t from;
+
+      if (priv->view && gtk_widget_get_mapped (priv->morph_source) &&
+          gtk_widget_compute_bounds (priv->morph_source, GTK_WIDGET (priv->view), &from))
+        {
+          priv->morph_from = from;
+          priv->morph_from_radius = glass_panel_effective_radius (GLASS_PANEL (priv->morph_source), &from);
+        }
+      g_clear_weak_pointer (&priv->morph_source);
+    }
   graphene_rect_interpolate (&priv->morph_from, target, priv->morph_t, rect);
   rect->size.width = MAX (rect->size.width, 1.0f);
   rect->size.height = MAX (rect->size.height, 1.0f);
@@ -989,6 +1097,8 @@ glass_panel_snapshot (GtkWidget   *widget,
  * glass_panel_get_interactive:
  * @self: a panel
  *
+ * Gets whether the glass reacts to presses.
+ *
  * Returns: whether the glass reacts to presses
  */
 gboolean
@@ -1041,6 +1151,8 @@ glass_panel_set_interactive (GlassPanel *self,
  * glass_panel_get_morph_id:
  * @self: a panel
  *
+ * Gets the morph ID.
+ *
  * Returns: (nullable): the morph ID
  */
 const char *
@@ -1090,12 +1202,14 @@ glass_panel_set_highlight (GlassPanel *self,
 
 void
 glass_panel_get_tint_rgba (GlassPanel    *self,
+                           const double   params[GLASS_N_PARAMS],
                            const GdkRGBA *theme_bg,
                            float          out[4])
 {
   GlassPanelPrivate *priv = PRIV (self);
-  const GlassMaterialSpec *m = &glass_material_specs[priv->material];
 
+  /* The panel's own tint, else the context's colour or the material's,
+   * with the tint-strength in effect (design.md §11.2). */
   if (priv->tint_set)
     {
       out[0] = priv->tint.red;
@@ -1104,15 +1218,8 @@ glass_panel_get_tint_rgba (GlassPanel    *self,
       out[3] = priv->tint.alpha;
     }
   else
-    {
-      memcpy (out, m->tint, sizeof m->tint);
-      if (m->tint_from_theme && theme_bg)
-        {
-          out[0] = theme_bg->red;
-          out[1] = theme_bg->green;
-          out[2] = theme_bg->blue;
-        }
-    }
+    glass_context_resolve_tint (glass_context_get_default (), priv->material,
+                                params[GLASS_PARAM_TINT_STRENGTH], theme_bg, out);
 
   /* Pressed: a little more of a lighter tint. */
   if (MAX (priv->highlight, priv->press) > 0.0)
@@ -1186,9 +1293,11 @@ glass_panel_dispose (GObject *object)
   g_clear_handle_id (&priv->settle_source, g_source_remove);
   g_clear_object (&priv->press_anim);
   g_clear_object (&priv->morph_anim);
+  g_clear_weak_pointer (&priv->morph_source);
   g_clear_weak_pointer (&priv->ghost_into);
   g_clear_pointer (&priv->child, gtk_widget_unparent);
   g_clear_pointer (&priv->nested_views, g_ptr_array_unref);
+  g_clear_pointer (&priv->own_classes, g_ptr_array_unref);
 
   G_OBJECT_CLASS (glass_panel_parent_class)->dispose (object);
 }
@@ -1407,7 +1516,8 @@ glass_panel_class_init (GlassPanelClass *klass)
    * GlassPanel:adaptive:
    *
    * How the colour of what is on the glass follows what is under it.
-   * [enum@Material.THICK] never adapts.
+   * The %GLASS_MATERIAL_THICK and %GLASS_MATERIAL_MENU materials never
+   * adapt: they keep the theme's colours.
    */
   props[PROP_ADAPTIVE] =
     g_param_spec_enum ("adaptive", NULL, NULL, GLASS_TYPE_ADAPTIVE_MODE, GLASS_ADAPTIVE_MODE_AUTO,
@@ -1468,10 +1578,11 @@ glass_panel_init (GlassPanel *self)
   priv->press_grow_px = 6.0;
   priv->press_max_extra = 0.16;
   for (int i = 0; i < GLASS_N_PARAMS; i++)
-    priv->param_default[i] = NAN;
+    priv->param_value[i] = priv->param_default[i] = NAN;
   glass_adaptive_state_init (&priv->astate);
 
   gtk_widget_set_overflow (GTK_WIDGET (self), GTK_OVERFLOW_HIDDEN);
+  g_signal_connect (self, "notify::css-classes", G_CALLBACK (css_classes_changed), NULL);
 }
 
 static void
@@ -1498,6 +1609,8 @@ glass_panel_buildable_init (GtkBuildableIface *iface)
 /**
  * glass_panel_new:
  *
+ * Creates a new panel.
+ *
  * Returns: a new panel
  */
 GtkWidget *
@@ -1509,6 +1622,8 @@ glass_panel_new (void)
 /**
  * glass_panel_get_child:
  * @self: a panel
+ *
+ * Gets the child.
  *
  * Returns: (transfer none) (nullable): the child
  */
@@ -1553,6 +1668,8 @@ glass_panel_set_child (GlassPanel *self,
  * glass_panel_get_material:
  * @self: a panel
  *
+ * Gets the material.
+ *
  * Returns: the material
  */
 GlassMaterial
@@ -1592,6 +1709,8 @@ glass_panel_set_material (GlassPanel    *self,
 /**
  * glass_panel_get_corner_radius:
  * @self: a panel
+ *
+ * Gets the corner radius; negative for a capsule.
  *
  * Returns: the corner radius; negative for a capsule
  */
@@ -1692,15 +1811,21 @@ glass_panel_set_corner_radii (GlassPanel *self,
 /**
  * glass_panel_get_tint:
  * @self: a panel
- * @tint: (out): the tint in use
+ * @tint: (out): the tint in use, its alpha being how much
  *
- * Returns: %TRUE if the tint was set, %FALSE if it is the material's
+ * Gets the tint: the one set on the panel, or else the context's
+ * [property@Context:tint-color] (or the material's colour) with the
+ * `tint-strength` in effect. The materials tinted with the theme's colour
+ * give white here, as the colour is only known when drawing.
+ *
+ * Returns: %TRUE if the tint was set on the panel
  */
 gboolean
 glass_panel_get_tint (GlassPanel *self,
                       GdkRGBA    *tint)
 {
   GlassPanelPrivate *priv;
+  double params[GLASS_N_PARAMS];
   float rgba[4];
 
   g_return_val_if_fail (GLASS_IS_PANEL (self), FALSE);
@@ -1710,7 +1835,9 @@ glass_panel_get_tint (GlassPanel *self,
     *tint = priv->tint;
   else
     {
-      memcpy (rgba, glass_material_specs[priv->material].tint, sizeof rgba);
+      glass_panel_resolve_params (self, glass_context_get_default (), params);
+      glass_context_resolve_tint (glass_context_get_default (), priv->material,
+                                  params[GLASS_PARAM_TINT_STRENGTH], NULL, rgba);
       *tint = (GdkRGBA) { rgba[0], rgba[1], rgba[2], rgba[3] };
     }
   return priv->tint_set;
@@ -1720,9 +1847,11 @@ glass_panel_get_tint (GlassPanel *self,
  * glass_panel_set_tint:
  * @self: a panel
  * @tint: (nullable): the tint, its alpha being how much; %NULL for the
- *   material's
+ *   context's or the material's
  *
- * Sets the colour mixed into the glass.
+ * Sets the colour mixed into the glass, and how much of it. It takes
+ * precedence over [property@Context:tint-color] and the `tint-strength`
+ * parameter.
  */
 void
 glass_panel_set_tint (GlassPanel    *self,
@@ -1745,8 +1874,144 @@ glass_panel_set_tint (GlassPanel    *self,
 }
 
 /**
+ * glass_panel_set_param:
+ * @self: a panel
+ * @key: a parameter, one of [method@Context.list_params]
+ * @value: its value
+ *
+ * Sets a parameter for this panel's glass only: it takes precedence over
+ * the value set on the [class@Context] and over the material's. Values
+ * outside the parameter's range are clamped, with a warning.
+ *
+ * Use it for glass that should look different from the rest (a large card
+ * with a stronger lens, a panel without blur); for all glass at once, use
+ * [method@Context.set_param].
+ *
+ * Returns: %FALSE if @key is not a parameter
+ */
+gboolean
+glass_panel_set_param (GlassPanel *self,
+                       const char *key,
+                       double      value)
+{
+  GlassPanelPrivate *priv;
+  int i;
+
+  g_return_val_if_fail (GLASS_IS_PANEL (self), FALSE);
+
+  i = glass_param_check ("glass_panel_set_param", key, value, &value);
+  if (i < 0)
+    return FALSE;
+  priv = PRIV (self);
+  if (priv->param_value[i] == value)
+    return TRUE;
+  priv->param_value[i] = value;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+  return TRUE;
+}
+
+/**
+ * glass_panel_get_param:
+ * @self: a panel
+ * @key: a parameter
+ *
+ * Gets the value set with [method@Panel.set_param]; NaN if none is set or
+ * @key is not a parameter.
+ *
+ * Returns: the value set with [method@Panel.set_param]; NaN if none is set
+ *   or @key is not a parameter
+ */
+double
+glass_panel_get_param (GlassPanel *self,
+                       const char *key)
+{
+  int i;
+
+  g_return_val_if_fail (GLASS_IS_PANEL (self), NAN);
+
+  i = glass_param_find (key);
+  return i < 0 ? NAN : PRIV (self)->param_value[i];
+}
+
+/**
+ * glass_panel_is_param_set:
+ * @self: a panel
+ * @key: a parameter
+ *
+ * Gets whether @key was set with [method@Panel.set_param].
+ *
+ * Returns: whether @key was set with [method@Panel.set_param]
+ */
+gboolean
+glass_panel_is_param_set (GlassPanel *self,
+                          const char *key)
+{
+  int i;
+
+  g_return_val_if_fail (GLASS_IS_PANEL (self), FALSE);
+
+  i = glass_param_find (key);
+  return i >= 0 && !isnan (PRIV (self)->param_value[i]);
+}
+
+/**
+ * glass_panel_reset_param:
+ * @self: a panel
+ * @key: a parameter
+ *
+ * Returns @key to the context's or the material's value.
+ */
+void
+glass_panel_reset_param (GlassPanel *self,
+                         const char *key)
+{
+  GlassPanelPrivate *priv;
+  int i;
+
+  g_return_if_fail (GLASS_IS_PANEL (self));
+
+  i = glass_param_find (key);
+  priv = PRIV (self);
+  if (i < 0 || isnan (priv->param_value[i]))
+    return;
+  priv->param_value[i] = NAN;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+/**
+ * glass_panel_get_effective_param:
+ * @self: a panel
+ * @key: a parameter
+ *
+ * Gets the value this panel's glass uses: its own, else the one set on the
+ * [class@Context], else the material's, else the default; NaN if @key is not
+ * a parameter.
+ *
+ * Returns: the value this panel's glass uses: its own, else the one set on
+ *   the [class@Context], else the material's, else the default; NaN if @key
+ *   is not a parameter
+ */
+double
+glass_panel_get_effective_param (GlassPanel *self,
+                                 const char *key)
+{
+  double values[GLASS_N_PARAMS];
+  int i;
+
+  g_return_val_if_fail (GLASS_IS_PANEL (self), NAN);
+
+  i = glass_param_find (key);
+  if (i < 0)
+    return NAN;
+  glass_panel_resolve_params (self, glass_context_get_default (), values);
+  return values[i];
+}
+
+/**
  * glass_panel_get_has_shadow:
  * @self: a panel
+ *
+ * Gets whether the glass casts a shadow.
  *
  * Returns: whether the glass casts a shadow
  */
@@ -1786,6 +2051,8 @@ glass_panel_set_has_shadow (GlassPanel *self,
  * glass_panel_get_adaptive:
  * @self: a panel
  *
+ * Gets how the foreground colour adapts.
+ *
  * Returns: how the foreground colour adapts
  */
 GlassAdaptiveMode
@@ -1824,6 +2091,8 @@ glass_panel_set_adaptive (GlassPanel        *self,
 /**
  * glass_panel_get_appearance:
  * @self: a panel
+ *
+ * Gets how light the glass looks.
  *
  * Returns: how light the glass looks
  */
