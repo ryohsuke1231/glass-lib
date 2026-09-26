@@ -13,7 +13,8 @@
 - `shaders/`: シェーダ。`core/` が単一ソースで、`targets/` がターゲットごとのラッパ。
   - `shaders/reference/glass.frag` は既存拡張の出荷版の**無改変コピー**。編集しない（更新手順は同じディレクトリの README）。
 - `spec/`: パラメータ定義（`params.json`）と Adaptive のテストベクタ。
-- `demo/`: Glass Gallery（TypeScript）。
+- `demo/`: TypeScript のデモ 2 つ。Glass Gallery（`src/main.ts`・`src/pages/`）と天気アプリ Glass Weather（`src/weather/`）。`data/` はデスクトップファイル・metainfo・アイコン。
+- `examples/`: C・Python・GJS の最小の例。`build-aux/flatpak/`: デモの Flatpak マニフェスト。`docs/reference/`: API ドキュメント（gi-docgen）の設定とページ。
 - `tests/`、`tools/`: 単体テスト、ゴールデン画像のハーネス、計測スクリプト。
 - `spikes/`: Phase 0 の試作（`s1-full-renderer` など）。ライブラリ本体ではない。結果は各 README と `docs/memo.md` に残す。
 - `docs/`: 設計書・地雷の記録（`memo.md`）・過去の版（`archive/`）。
@@ -26,7 +27,8 @@
 - シェーダを変更したら、`meson test -C build` で `glslangValidator` の検査（GLES 3.0 / GL 3.3）が通ることを確認する。
 - **シェーダ Core（`shaders/core/`）を変更したら、`glass-core-golden`（参照 `glass.frag` との比較）が通ることを確認する。** 意図して見た目を変えるときは、先にユーザーに相談する（参照との差が出るのは当然なので、その差を説明できること）。
 - `npm` のコマンドは `demo/` の中で実行する（例: `cd demo && npm run build`）。TS ファイルを修正・編集したら `npm run build` を実行してビルドエラーを確認する。
-- デモの起動は `meson devenv -C build -w . gjs -m demo/dist/main.js`（ビルドしたライブラリの typelib を使うため。`-w .` がないと build/ の中で実行されてパスが合わない）。
+- デモの起動は `meson devenv -C build -w . gjs -m demo/dist/main.js`（ビルドしたライブラリの typelib を使うため。`-w .` がないと build/ の中で実行されてパスが合わない）。天気アプリは `demo/dist/weather/main.js`。
+- Flatpak と API ドキュメントの作り方は設計書 §15.3・§15.4（gi-docgen はこのマシンに無い）。
 - デモの `npm run build` は、先にビルドしたライブラリの `build/lib/Glass-1.gir` から型（`demo/types/`）を生成する。ライブラリの公開 API を変えたら `meson compile -C build` の後に `npm run build`。
 
 ## ファイル読み取りの許可

@@ -1,58 +1,162 @@
 # glass-lib
 
-A GTK4 / libadwaita library that lets applications put refracting, Liquid Glass–style panels on top of their own content.
+Refracting, Liquid Glass–style glass for GTK 4 and libadwaita apps: panels,
+bars and controls that bend, blur and tint the app's own content as it
+scrolls under them — in the same frame, on any compositor.
+
+![Glass Weather, a demo: the same app over a daytime sky and a rainy night](docs/screenshots/weather.png)
 
 > [!NOTE]
-> **Status: early development.** The library, the window widgets and a first version of the demo work; the API may still change. The design (in Japanese) is in [`docs/design.md`](docs/design.md).
+> **Status: early development (0.0.1).** The library, its widgets, the demos
+> and the Flatpaks work; the API may still change. The design notes (in
+> Japanese) are in [`docs/design.md`](docs/design.md).
 
 > [!NOTE]
-> This is an unofficial, community-driven project and is not affiliated with, endorsed by, or connected to Apple Inc. in any way.
+> This is an unofficial, community-driven project and is not affiliated with,
+> endorsed by, or connected to Apple Inc. in any way.
 
 ## What it provides
 
-- **`GlassView`**: a container whose content scrolls underneath floating glass.
-- **`GlassPanel`**: a piece of glass that can carry icons, labels and flat buttons.
-- Window widgets built on them, as drop-in counterparts of libadwaita's:
-  **`GlassToolbarView`** (with a scroll edge effect), **`GlassHeaderBar`** (buttons on glass capsules),
-  **`GlassSplitView`** (a floating glass sidebar), **`GlassToggleGroup`** and **`GlassButton`**.
-- The same optics as the [Liquid Glass GNOME Shell extension](https://github.com/ryohsuke1231/liquid-glass): refraction, chromatic aberration, rim light, drop shadow and inner shading, tuned for small in-app glass.
-- Automatic light/dark switching of the foreground, based on what is behind the glass.
-- A CSS `backdrop-filter` fallback when OpenGL is unavailable.
-- Bindings for GJS (JavaScript/TypeScript) and Python through GObject Introspection (namespace `Glass`).
-- A demo application, **Glass Gallery**.
+- **`GlassView`** and **`GlassPanel`**: glass over any content — the view draws
+  every panel among its overlay children as glass that refracts what is under it.
+- **Drop-in counterparts of libadwaita's widgets**: `GlassToolbarView` (bars
+  floating over the content, with a scroll edge effect), `GlassHeaderBar`
+  (buttons on glass capsules), `GlassSplitView` (a floating sidebar of thick
+  glass), `GlassToggleGroup`, `GlassTabBar`, `GlassSearchEntry`,
+  `GlassButton`, `GlassButtonGroup`, `GlassSwitch`, `GlassSlider`,
+  `GlassMenuButton` / `GlassPopover` and `GlassDialog`.
+- **Glass that behaves like liquid**: panels in a `GlassGroup` flow together
+  like drops of water, glass morphs from one shape into another
+  (`morph-id`), glass over glass refracts in layers, and presses make the
+  glass swell.
+- **Readable text**: the text and icons on the glass turn dark or light with
+  what is under them.
+- **The optics of the [Liquid Glass GNOME Shell extension](https://github.com/ryohsuke1231/liquid-glass)**
+  (refraction, chromatic aberration, rim light, shadow), tuned for small in-app
+  glass — and tunable: every parameter and the tint for the whole app or for
+  one panel.
+- **A CSS fallback** when OpenGL is unavailable, and support for high
+  contrast, reduced transparency and reduced motion.
+- **GJS (JavaScript / TypeScript), Python and C**, through GObject
+  Introspection (namespace `Glass`).
 
-The library draws everything inside the application window, so it does not depend on the compositor.
+The glass is drawn inside the application window, so it does not depend on
+the compositor: it works on any Wayland compositor and on X11.
+
+| | |
+|---|---|
+| ![Glass Gallery: switches, sliders, buttons and a toggle group of glass over a gradient](docs/screenshots/gallery-controls.png) | ![Glass Gallery's Lab: every parameter and the tint, live](docs/screenshots/gallery-lab.png) |
 
 ## Requirements
 
-- GTK ≥ 4.22, libadwaita ≥ 1.9 (GNOME 50 or later), libepoxy
-- OpenGL ES 3.0 or OpenGL 3.3 (for the full renderer)
+- GTK ≥ 4.22 and libadwaita ≥ 1.9 (GNOME 50 or later), libepoxy
+- OpenGL ES 3.0 or OpenGL 3.3 for the full renderer (without it, the glass is frosted with CSS)
+- To build: meson, a C compiler, gobject-introspection. For the demos: Node.js
+  (TypeScript). For the API reference: [gi-docgen](https://gitlab.gnome.org/GNOME/gi-docgen).
 
 ## Building
 
-```bash
+```sh
 meson setup build
 meson compile -C build
 meson test -C build
-
-# the demo (TypeScript, needs Node.js)
-cd demo && npm install && npm run build && cd ..
-meson devenv -C build -w . gjs -m demo/dist/main.js
+meson install -C build
 ```
 
-## Using it (GJS)
+| Option | Default | |
+|---|---|---|
+| `-Dintrospection=` | `true` | `Glass-1.gir` and `Glass-1.typelib`, for GJS and Python |
+| `-Dtests=` | `true` | The tests (`meson test`) |
+| `-Dexamples=` | `true` | The C example |
+| `-Ddocumentation=` | `false` | The API reference, with gi-docgen (`build/docs/reference/glass-lib-1/index.html`) |
+| `-Ddemos=` | `[]` | Install the demos: `gallery`, `weather` |
+
+## Using it
 
 ```js
+import Adw from 'gi://Adw?version=1';
+import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
+// In your GApplication's activate handler:
 Glass.init();
-const view = new Glass.ToolbarView({ content: myScrolledWindow });
+
+const toolbar = new Glass.ToolbarView({ content: myScrolledWindow });
 const header = new Glass.HeaderBar();
-header.pack_start(new Gtk.Button({ icon_name: 'go-previous-symbolic' }));
-view.add_top_bar(header);
-window.set_content(view);
+header.pack_end(new Gtk.Button({ icon_name: 'open-menu-symbolic' }));
+toolbar.add_top_bar(header);
+
+// Glass anywhere over the content: a Glass.View and its overlay children.
+const view = new Glass.View({ content: myPhotoGrid });
+view.add_overlay(new Glass.Panel({ child: myToolbarBox, halign: Gtk.Align.CENTER,
+    valign: Gtk.Align.END, margin_bottom: 16 }));
+
+// Tuning: all the glass, or one panel.
+Glass.Context.get_default().set_param('blur-radius', 3);
+myPanel.set_param('displacement-scale', 70);
 ```
+
+- [`examples/`](examples): the same small app in C, Python and GJS.
+- The API reference (`-Ddocumentation=true`) has a getting-started guide, how
+  the glass works, tuning, styling and debugging.
+
+## Demos
+
+Two apps written in TypeScript for GJS, in [`demo/`](demo):
+
+- **Glass Gallery**, the test bench: Photos (a grid scrolling under glass),
+  Playground (panels to drag over test patterns), Controls, Tabs, and the
+  **Lab**, with every optical parameter and the tint as live sliders.
+- **Glass Weather**, a showcase: the forecast on cards of glass over a sky
+  drawn in code. Weather data by [Open-Meteo.com](https://open-meteo.com/)
+  (CC BY 4.0, non-commercial use).
+
+From the source tree:
+
+```sh
+meson compile -C build
+cd demo && npm install && npm run build && cd ..
+meson devenv -C build -w . gjs -m demo/dist/main.js           # Glass Gallery
+meson devenv -C build -w . gjs -m demo/dist/weather/main.js   # Glass Weather
+```
+
+### Flatpak
+
+Both demos build as Flatpaks on the GNOME 50 runtime:
+
+```sh
+flatpak install --user flathub org.gnome.Sdk//50 \
+    org.freedesktop.Sdk.Extension.node22//25.08 org.freedesktop.Sdk.Extension.typescript//25.08
+flatpak-builder --user --install --force-clean build-flatpak \
+    build-aux/flatpak/io.github.ryohsuke1231.GlassWeather.json    # or ….GlassGallery.json
+flatpak run io.github.ryohsuke1231.GlassWeather
+```
+
+With the `org.flatpak.Builder` Flatpak instead of a `flatpak-builder` package, run
+`flatpak run --env=FLATPAK_USER_DIR=$HOME/.local/share/flatpak org.flatpak.Builder
+--user --install --disable-rofiles-fuse --force-clean build-flatpak <manifest>`
+(the sandboxed builder otherwise looks for the SDK in its own data directory).
+
+## Debugging
+
+`GLASS_DEBUG=hud` shows timings in each view, `GLASS_RENDERER=fallback` forces
+the CSS fallback, and `G_MESSAGES_DEBUG=glass` logs the library's messages; the
+API reference lists the rest.
+
+## Repository layout
+
+| Directory | |
+|---|---|
+| `lib/` | The library (C, GObject) |
+| `shaders/` | The glass shader: `core/` is the single source; `reference/` is the extension's, for the golden tests |
+| `spec/` | The parameters and materials (`params.json`), and the adaptive colours' test vectors |
+| `tests/` | Unit, widget, Python and golden-image tests |
+| `demo/` | Glass Gallery and Glass Weather (TypeScript) |
+| `examples/` | The smallest complete apps, in C, Python and GJS |
+| `docs/` | The design (`design.md`), pitfalls met (`memo.md`), the API reference's pages (`reference/`) |
+| `build-aux/flatpak/` | The demos' Flatpak manifests |
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). The weather data shown by Glass Weather is by
+Open-Meteo.com, under CC BY 4.0.

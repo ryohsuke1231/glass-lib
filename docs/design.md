@@ -1,10 +1,19 @@
 # glass-lib 設計書
 
-- 版: **v0.7（タブバー・検索欄・モーフィング・材質 MENU・角ごとの半径を v1 に入れた版）**
+- 版: **v0.8（v1 の仕上げ: ティント・パネルごとのパラメータ・フォールバックの Adaptive・API ドキュメント・Flatpak・天気アプリ。ロードマップの残りを破棄した版）**
 - 日付: 2026-09-26
+- v0.7 からの変更（ユーザーの指示、2026-09-26）:
+  - 既定値: アプリ内の縁の値（`crisp-soft`）の `max_z` 50 → 35、`profile_shape_n` 7 → 2.4、`rim_directional_power` 1.6 を追加（拡張の 2.7 から。§11.2）
+  - ティント（色・強さ）を調整できる設定にした: 強さは光学パラメータのキー `tint-strength`、色は `GlassContext:tint-color`（§11.1・§11.2）。デモの Lab に入れた
+  - パネルごとのパラメータ（`glass_panel_set_param()` など）。値の決まり方を「パネル → 全体 → 部品自身 → 材質 → 既定」にした（§11.2）
+  - フォールバック（CSS）の Adaptive を実装した（§12.1）
+  - 既存拡張の設定に追従する機能（v0.7 までの §11.3）を破棄した
+  - モーフィング: 始まりの形を最初のフレームで読む・現れている途中のパネルからは出てこない（§6.8）。アプリが `css-classes` を置き換えてもライブラリのクラスが戻る（§6.4）
+  - API ドキュメント（gi-docgen）、`examples/`、Flatpak（2 つのデモ）、README（§15）。天気アプリ Glass Weather（§14.1）
+  - ロードマップ（§17）: dGPU の確認は行わない、HiDPI は利用者のフィードバックに任せる。残りは破棄（§17.1 に一覧）
 - v0.6 からの変更（ユーザーの提案、2026-09-26）: §19 の候補だった `GlassTabBar`・`GlassSearchEntry`・形のモーフィング（`GlassPanel:morph-id`）・材質 `MENU`・角ごとの半径を v1 に入れた（§6.8）。
   Python（PyGObject）からの利用を確かめ、テスト（`tests/test-python.py`）にした（§16）
-- 状態: Phase 0（S1・S5）完了。Phase 2（ライブラリ本体）とウィンドウ部品群、§6.7 の部品、デモを実装（2026-09-25）
+- 状態: v1 の範囲を実装済み（2026-09-26）。Phase 0（S1・S5）、Phase 2（ライブラリ本体・ウィンドウ部品群・§6.7・§6.8 の部品）、Phase 3（デモ 2 つ）、Phase 4 の API ドキュメント・Flatpak・README
 - v0.5 からの変更（ユーザーの決定・指摘、2026-09-26）: 窓そのものが透けるガラス（Tier 2）と `ext-background-effect-v1` を glass-lib の計画から外した（§2.2）。
   `max_z` を 14 → 50、`sheen_intensity` を 0.32 → 0.08 に（3 つの材質の既定。§11.2）。ガラスの上のセグメント・ボタンの列・メニューボタンのボタンを枠なしにした（休止中に背景が付かない。§6.7、memo 地雷27）
 - v0.4 からの変更（ユーザーの指摘、2026-09-25）: 材質の影の強さを 0.07 に（§11.2）。スイッチ・スライダーのつまみの既定のぼかしを 0 に（パネル自身の既定値、§11.2）。
@@ -57,7 +66,7 @@
 | 6 | ライセンス | 🔒 MIT | `LICENSE` は既存リポジトリと同じ文面 |
 | 7 | Mutter を改造する路線 | 🔒 やらない | Wayland プロトコルの草案も v1 では作らない |
 | 8 | 対象のツールキット | 🔒 GTK4 / libadwaita のみ | Qt・Electron・Flutter は対象外 |
-| 9 | 部品の範囲 | 🔒 **ただのガラス（アイコン・テキストなどを載せられるもの）＋ウィンドウ部品群**（ツールバー・ヘッダーバー・サイドバー・セグメント・ボタン。§6.6）**＋§6.7 の部品**（ボタンの列、スイッチ、スライダー、融合するグループ、ポップオーバー・メニュー、ダイアログ） | ウィンドウ部品群は 2026-09-25 のユーザーの決定で、§6.7 は同日のユーザーの提案で v2 から前倒し。タブバー・検索欄・モーフィングは v2 以降（§19） |
+| 9 | 部品の範囲 | 🔒 **ただのガラス（アイコン・テキストなどを載せられるもの）＋ウィンドウ部品群**（ツールバー・ヘッダーバー・サイドバー・セグメント・ボタン。§6.6）**＋§6.7 の部品**（ボタンの列、スイッチ、スライダー、融合するグループ、ポップオーバー・メニュー、ダイアログ） | ウィンドウ部品群は 2026-09-25 のユーザーの決定で、§6.7 は同日のユーザーの提案で v2 から前倒し。タブバー・検索欄・モーフィングも 2026-09-26 に v1 に入れた（§6.8） |
 | 10 | アプリへの適用のしかた | 🔒 **アプリ内の中身に対するガラスだけ**（macOS Tahoe と同じ） | Tier 2（窓そのものが透けるガラス）は **glass-lib では作らない**（§2。ユーザーの決定、2026-09-26） |
 
 ---
@@ -109,7 +118,7 @@ v0.1 の「デスクトップが透けるガラス（Tier 2）」は、既存の
 | ウィンドウ部品群（§6.6） | `GlassToolbarView`（スクロール端の効果つき）、`GlassHeaderBar`、`GlassSplitView`（浮くサイドバー）、`GlassToggleGroup`（セグメント）、`GlassButton` |
 | 層・押下・融合と専用部品（§6.7） | ガラスの上のガラス（層）、押したときの膨らみ（`interactive`）、`GlassGroup`（近いガラスが融合する）、`GlassButtonGroup`、`GlassSwitch`、`GlassSlider`、`GlassPopover`・`GlassMenuButton`（メニュー）、`GlassDialog` |
 | タブバー・検索欄・モーフィングほか（§6.8） | `GlassTabBar`、`GlassSearchEntry`、形のモーフィング（`morph-id`、グループの出入り）、材質 `MENU`、角ごとの半径 |
-| `GlassContext` | ライブラリ全体の設定（レンダラの選択、透明度を下げる、光学パラメータ） |
+| `GlassContext` | ライブラリ全体の設定（レンダラの選択、透明度を下げる、光学パラメータ、ティントの色） |
 | Full レンダラ | 既存の `glass.frag` と同じ見た目（屈折・色収差・リム・影・AO）をアプリ内で描く |
 | フォールバック | GL が使えないとき、または `GlassView` の外に置かれた `GlassPanel` を、CSS の `backdrop-filter` ですりガラスとして描く |
 | Adaptive | ガラスの下の明るさから、載せた文字・アイコンの色（明/暗）を自動で切り替える |
@@ -122,7 +131,7 @@ v0.1 の「デスクトップが透けるガラス（Tier 2）」は、既存の
 - 別のビューのガラス同士の屈折（層は 1 つのビューの中だけ。§6.7）
 - 中身の自動の余白（パネルに隠れる分は、v1 ではアプリが余白を付ける。§7.1）
 
-いずれも v2 以降の候補として §19 に理由と入口を残す。
+いずれも v2 以降の候補として §19 に理由と入口を残したが、2026-09-26 に破棄した（§17.1）。
 タブバー・検索欄・モーフィング・材質 `MENU`・角ごとの半径は、2026-09-26 のユーザーの提案で v1 に入れた（§6.8）。
 デスクトップが透けるガラス（Tier 2）と D-Bus サービス、GNOME 51 の `ext-background-effect-v1` 対応は、v2 でも作らない（§2.2）。**v1 の設計は、これらを後から足しても作り直しにならないようにする**（形状は配列で持つ、材質は enum で持つ、など）。
 
@@ -223,6 +232,9 @@ double          glass_context_get_effective_param (GlassContext *self, GlassMate
 void            glass_context_reset_param       (GlassContext *self, const char *key);
 const char * const *glass_context_list_params   (GlassContext *self);
 gboolean        glass_context_get_param_range   (GlassContext *self, const char *key, double *min, double *max, double *def);
+/* ティントの色（全体）。NULL = 材質の色。alpha は使わない（強さはキー tint-strength）。§11.2 */
+void            glass_context_set_tint_color    (GlassContext *self, const GdkRGBA *color);
+gboolean        glass_context_get_tint_color    (GlassContext *self, GdkRGBA *color);
 
 /* ── GlassView ── */
 GtkWidget      *glass_view_new                  (void);
@@ -241,7 +253,13 @@ void            glass_panel_set_corner_radius   (GlassPanel *self, double radius
 void            glass_panel_set_corner_radii    (GlassPanel *self, double top_left, double top_right,
                                                  double bottom_right, double bottom_left);  /* 負 = corner-radius（§6.8） */
 void            glass_panel_set_morph_id        (GlassPanel *self, const char *morph_id);    /* §6.8 */
-void            glass_panel_set_tint            (GlassPanel *self, const GdkRGBA *tint); /* alpha = 強さ。NULL = 材質の既定 */
+void            glass_panel_set_tint            (GlassPanel *self, const GdkRGBA *tint); /* alpha = 強さ。NULL = 全体か材質のもの */
+/* このパネルだけの光学パラメータ（§11.2）。全体（context）の値より優先 */
+gboolean        glass_panel_set_param           (GlassPanel *self, const char *key, double value);
+double          glass_panel_get_param           (GlassPanel *self, const char *key);  /* 未設定なら NaN */
+gboolean        glass_panel_is_param_set        (GlassPanel *self, const char *key);
+void            glass_panel_reset_param         (GlassPanel *self, const char *key);
+double          glass_panel_get_effective_param (GlassPanel *self, const char *key);  /* 実際に使われる値 */
 void            glass_panel_set_has_shadow      (GlassPanel *self, gboolean has_shadow);
 void            glass_panel_set_adaptive        (GlassPanel *self, GlassAdaptiveMode mode);
 GlassAppearance glass_panel_get_appearance      (GlassPanel *self);  /* 読み取り専用（notify あり） */
@@ -271,12 +289,13 @@ GlassAppearance glass_panel_get_appearance      (GlassPanel *self);  /* 読み�
 | | `corner-radius` | double、`-1`（カプセル） |
 | | `top-left-radius`・`top-right-radius`・`bottom-right-radius`・`bottom-left-radius` | double、`-1`（`corner-radius` に従う。§6.8） |
 | | `morph-id` | string、NULL（§6.8） |
-| | `tint` | GdkRGBA（NULL = 材質の既定） |
+| | `tint` | GdkRGBA（NULL = 全体の `tint-color` か材質の色と、`tint-strength`） |
 | | `has-shadow` | boolean、TRUE |
 | | `adaptive` | `GlassAdaptiveMode`、`AUTO` |
 | | `appearance` | `GlassAppearance`（読み取り専用） |
 | `GlassContext` | `renderer` | `GlassRendererMode`、`AUTO`（環境変数 `GLASS_RENDERER=full\|fallback` で上書き） |
 | | `reduce-transparency` | boolean、FALSE |
+| | `tint-color` | GdkRGBA、NULL（材質の色。§11.2） |
 
 ### 6.4 CSS
 
@@ -289,6 +308,12 @@ GlassAppearance glass_panel_get_appearance      (GlassPanel *self);  /* 読み�
 
 CSS はライブラリの GResource から `GTK_STYLE_PROVIDER_PRIORITY_SETTINGS`（400）で読み込む。
 libadwaita（THEME、200）より上、アプリ（APPLICATION、600）より下なので、アプリはいつでも上書きできる。
+
+- 🔒 **アプリがクラスを丸ごと置き換えても、ライブラリのクラスは戻る**（v0.8）: GJS・Python のコンストラクタで `css_classes: [...]` を渡すと、`css-classes` が置き換わり、
+  パネルが付けた形のクラス（`glass-radius-*`）・モード・明暗のクラスと、部品のクラス（`.glass-button` など）が消える。形のクラスが消えると、子が既定の `border-radius: 9999px` で楕円に切り抜かれる（地雷14 と同じ見た目。天気アプリで見つかった）。
+  `GlassPanel` は `notify::css-classes` で自分のクラスを付け直す（アプリのクラスは残す）。ライブラリ自身のクラスの変更の途中では付け直さない（付け直すと古いクラスが残る。memo 地雷33）。
+- 🔒 **ガラスの上のボタンの中身に前景色を直接付ける**（v0.8）: テーマが USER 優先度でボタン自身の `color` を決めると、パネルの `color` の継承が届かず、明るいガラスの上で白い文字・アイコンになった（地雷30 と同じ仕組み）。
+  テーマはボタンの中身（`button > *`）には色を付けていないので、`.glass-light`・`.glass-dark` のパネルの中のボタンの中身に `color: var(--glass-fg-color)` を付ける（変数は最も近いパネルのものが継承されるので、入れ子でも正しい）。memo 地雷32。
 
 ### 6.5 使用例
 
@@ -414,7 +439,7 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
   - CSS: フォールバックと子の切り抜きは、角ごとの `border-radius` のクラスを実行時に作って付ける（今の `glass-radius-*` と同じ方式）。
   - 使いどころ: 画面の下に付くシート（`GlassDialog` が libadwaita の bottom sheet になったとき: 上の角 15px、下の角 0。`dialog.bottom-sheet` クラスで判別）、窓の縁に沿う板。
 - **材質 `MENU`**（`GlassMaterial` に追加）: ポップオーバーとメニュー用。ぼかし 8px、ティントはテーマのポップオーバーの背景色 0.45（`THICK` の 12px・0.55 より透ける）、影 24px・0.07、Adaptive なし（テーマの色）。
-  `GlassPopover`（メニューも）はこれを使う。ダイアログは `THICK` のまま。値は初期案（C2 と同じくデモで見て決める）。
+  `GlassPopover`（メニューも）はこれを使う。ダイアログは `THICK` のまま。値は初期案（Lab で調整できる）。
 - **`GlassTabBar`**: iOS のタブバー（libadwaita の `AdwViewSwitcherBar` に当たる）。`AdwViewStack`（`stack` プロパティ）のページごとに、アイコンと題名を縦に並べた項目を 1 つのガラスのカプセルに並べる。
   選ばれたページの項目の下を、ガラスの上のガラスの板がスライドする（`GlassToggleGroup` と同じ仕組みを内部で使う）。選ばれた項目のアイコンと題名はアクセントの色
   （色は項目の中の箱に付ける。テーマが USER 優先度でボタンの文字色を決めていると、ボタンに付けた色は負けるため。memo 地雷30）。
@@ -427,6 +452,8 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
   - **同じ `morph-id` のパネルの入れ替え**: パネルが表示されたとき、同じビューの中に同じ `morph-id` のパネルがあり、それが隠れた（または隠れるところ）なら、新しいパネルのガラスは**古いパネルが最後に描かれた形から**自分の形へ、ばねのアニメーションで変わる。
     中身（子）は途中から現れる（不透明度 0 → 1）。古いパネルのガラスはそれ以上描かない（新しいパネルのガラスになった）。例: 検索のボタンが検索欄に変わる。
   - **グループへの出入り**（`GlassGroup` の中、`morph-id` の一致がないとき）: 表示されたパネルは、グループの並びで最も近い（同じ近さなら前の）見えているパネルから**しずくが分かれるように**出てくる。
+    同時に現れたパネル（現れている途中のもの）からは出てこない（どれも元からあったガラスから出る。v0.8）。
+    出てくる元が見えているパネルなら、その位置は**最初のフレームの snapshot の中で読む**（§5.3-2。v0.8）: 表示と同じフレームで中央寄せの列が伸びて元のパネルが動くので、表示した時点の位置から始めると、元のパネルから離れた所に現れた（デモの Controls で見つかった）。
     隠れたパネルのガラスは、しばらく中身なしで描き続け（幽霊）、隣のパネルに**吸い込まれるように**縮んで消える。融合（smooth union と橋）がそのまま効くので、液体のようにつながって分かれる。
     幽霊のアニメーションはビューに付ける（libadwaita は map されていない部品のアニメーションを飛ばすため。memo 地雷29）。
   - グループの外で `morph-id` の一致がなければ、今までどおり（すぐ現れて、すぐ消える）。
@@ -446,7 +473,7 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
 - `content` はビュー全体に広がる。ビューの自然な大きさは `content` の大きさ。
 - overlay 子は、自分の `measure` の結果と `halign` / `valign` / `margin-*` で配置する。
 - パネルの下に中身が隠れる分の余白（例: 最初の写真が上のパネルに隠れない）は、v1 ではアプリが中身に `margin` を付けて調整する。
-  自動の「中身の余白」は v2 の候補（§19）。
+  自動の「中身の余白」は v2 の候補だったが破棄した（§17.1）。部品が覆う量は `top-bar-height`・`content-inset` などで出す。
 
 ### 7.2 パネルの登録と、どこに置かれたかの判定
 
@@ -633,7 +660,7 @@ tex        = gsk_renderer_render_texture (renderer, node, C を S·k 倍した�
   - 残りの原因は構造にある: サイドバーの取り込み矩形（ぼかしの余白）が、ページのヘッダーのカプセル（ガラスと前景）に重なる（Photos のヘッダーの先頭のカプセルはサイドバーのすぐ右）。
     そのため外のビューの取り込みは内のビューのガラスの完成を待ち、読み出しが CPU を通るので、その待ちが CPU 時間になる。
     サイドバーの取り込みを省くと（計測用）1.8ms/フレーム。
-  - 案（保留。ユーザーの判断、2026-09-25: 3ms を厳密に守る必要はなく、性能の問題も起きていないので今は現状のまま。§19）: 内のビューの 1 回の描画で外のビューの取り込みも描き、内のビューのガラスと前景は GL で重ねる（§6.7 の層の合成をビューをまたいで行う）。
+  - 案（保留の後、2026-09-26 に破棄。§17.1。ユーザーの判断、2026-09-25: 3ms を厳密に守る必要はなく、性能の問題も起きていないので今は現状のまま）: 内のビューの 1 回の描画で外のビューの取り込みも描き、内のビューのガラスと前景は GL で重ねる（§6.7 の層の合成をビューをまたいで行う）。
     外のビューは自分のノードの木で「内のビューの背景がそのまま見えている」ことを確かめてから使い、違えば今どおり自分で取り込む。見積り 2.2ms 前後（memo 追記7）。
 - dGPU（PCIe）では読み出しが iGPU より遅い見込み。縮小（1/2、設定で 1/4）とキャッシュで吸収する。
   1/4 は見た目が落ちるので既定にしない（既存拡張の方針 6 と同じ）。
@@ -655,7 +682,7 @@ glasspanel.glass-fallback {
 ```
 
 - 屈折はない（すりガラス）。材質ごとに値を変える。
-- Adaptive はフォールバックでも動かす（§12.1 のフォールバック用の取り込み）。
+- Adaptive はフォールバックでも動かす（§12.1 のフォールバック用の取り込み。✅ v0.8 で実装）。
 - ハイコントラストのときは Full でもこの CSS に切り替え、背景を不透明にする（§13）。
 
 ---
@@ -768,43 +795,58 @@ shaders/
 | `shadow-intensity` | 0.55 | – | `shadow-intensity` |
 | `ao-intensity` | 0.25 | – | `glass-ao-intensity` |
 | `ao-radius` | 7.5 | px | `glass-ao-radius` |
+| `blur-radius` | 5.0 | px | `dock-blur-radius`（材質ごとの値を使う。§11.2） |
+| `tint-strength` | 0.12 | – | `dock-tint-strength`（v0.8。材質ごとの値を使う。§11.2） |
 | `blur-downscale` | 2 | 2 / 4 | `glass-blur-downscale` |
 
 - px の値は**論理 px**。描画時に `S`（サーフェスのスケール）倍する。
 - 影（`shadow-radius`・`shadow-intensity`）の表の値は拡張と同じだが、**アプリ内では材質ごとの値を使う**（§11.2）。拡張の値は壁紙の上に浮くドック・メニュー向けで、明るい窓の中の小さな部品には強すぎる（ユーザーの指摘、`docs/memo.md` 地雷5）。
 - 範囲（min/max）は拡張機能の設定画面（`prefs.js`）と同じにする（実装時に写す）。範囲外は clamp して `g_warning`。
 - **光学の設定はこれ以上増やさない**（既存拡張の方針 7）。`EDGE_LENS_FALLOFF`・`EDGE_LENS_REACH` は定数のまま。
-- 定義は `spec/params.json` に 1 か所で書き、C のヘッダをビルド時に生成する。
+  `tint-strength`（v0.8）は新しい光学の設定ではなく、材質が持っていたティントの強さを調整できるキーにしたもの（ユーザーの指示、2026-09-26）。
+- 定義は `spec/params.json` に 1 か所で書き、C のヘッダ（と API ドキュメントの表、`tools/gen-params-doc.py`）をビルド時に生成する。
 
 ### 11.2 材質（v1 は 4 種類）
 
 | 材質 | 用途 | ぼかし半径 | ティント | 影（半径・強さ） | 取り込みの縮小 | 備考 |
 |---|---|---|---|---|---|---|
 | `REGULAR` | ツールバー、タイトル、ボタンの台 | 2px | 白 0.12 | 16px・0.07 | `blur-downscale` | ティントは既存拡張のドックの既定値と同じ。ぼかし（拡張のドックは 5）と影の半径は S1 でユーザーと比べて決めた。影の強さ 0.07 もユーザーの決定（2026-09-25） |
-| `CLEAR` | 写真・動画の上 | 1.5px | 白 0.04 | 16px・0.07 | 1（縮小しない） | ぼかしが弱いと縮小が見えるため等倍。Adaptive が mixed のときは暗幕（黒 0.25）を足す |
+| `CLEAR` | 写真・動画の上 | 1.5px | 白 0.04 | 16px・0.07 | 1（縮小しない） | ぼかしが弱いと縮小が見えるため等倍。~~Adaptive が mixed のときは暗幕（黒 0.25）を足す~~（未実装のまま破棄。§17.1） |
 | `THICK` | サイドバー（大きな板） | 12px | 窓の背景色 0.55（ライト/ダークに追従） | 24px・0.07 | `blur-downscale` | 大きな板は下の中身が場所ごとに違うので、前景色を切り替えず（Adaptive なし、テーマの色のまま）、濃いティントで読めるようにする |
-| `MENU` | ポップオーバー・メニュー（§6.8） | 8px | ポップオーバーの背景色 0.45（テーマに追従） | 24px・0.07 | `blur-downscale` | `THICK` より透ける。前景色はテーマのまま（Adaptive なし）。値は初期案（2026-09-26）で、デモで見て決める（C2） |
+| `MENU` | ポップオーバー・メニュー（§6.8） | 8px | ポップオーバーの背景色 0.45（テーマに追従） | 24px・0.07 | `blur-downscale` | `THICK` より透ける。前景色はテーマのまま（Adaptive なし）。値は初期案（2026-09-26） |
+
+ティントの列の数（0.12 など）は `tint-strength` の材質の値、色は材質の色（v0.8。`spec/params.json` では `values` の `tint-strength` と `tint` の rgb に分けた）。
 
 - 🔒 **縁の値（アプリ内用）**: 拡張の光学の値は大きなガラス向けの絶対 px で、小さなアプリ内のガラスでは縁が太く濁る（ユーザーの指摘、`docs/memo.md` 地雷8・追記4）。
   アプリ内の材質は、縁に効く値（`edge_smoothing`・`rim_width`・`rim_power`・`ao_radius`・`ao_intensity`・`chroma_strength`・`profile_shape_n`・`displacement_scale`・`max_z`）を**材質自身の値**として持つ。
-  🔒 値は S1 のプリセット **`crisp-soft`**（ユーザーの決定、2026-09-25。値は memo 追記5 の表）: `edge_smoothing` 0.75、`rim_width` 2、`rim_power` 9、`ao_radius` 3、`ao_intensity` 0.10、`chroma_strength` 0.8、`profile_shape_n` 7、`max_z` 50（S1 では 14。2026-09-26 にユーザーが変更）、`displacement_scale` 45。
+  🔒 値は S1 のプリセット **`crisp-soft`**（ユーザーの決定、2026-09-25。値は memo 追記5 の表）を元に、後の変更を入れたもの: `edge_smoothing` 0.75、`rim_width` 2、`rim_power` 9、`ao_radius` 3、`ao_intensity` 0.10、`chroma_strength` 0.8、
+  `profile_shape_n` **2.4**（S1 では 7）、`max_z` **35**（S1 では 14 → 50 → 35）、`displacement_scale` 45、`rim_directional_power` **1.6**（拡張は 2.7）。太字は 2026-09-26 のユーザーの変更（Lab で見て決めた値）。
   🔒 光の `sheen_intensity` も 3 つの材質で 0.08（拡張は 0.32。ユーザーの決定、2026-09-26）。
   縁の**線**（輪郭のぼかし・リムの光・内側の影・色のにじみ）は細くし、**レンズ**（縁の近くで背景が曲がる帯＝ガラス感）は拡張のドームの形のまま弱めにした。設定の種類は増やさない（値の選び方だけ）。
   スーパーサンプリング 4x と測ったフットプリントは既定 ON（§8.5）。
   §11.1 の全体の値（拡張と同じ）は、大きなガラス（将来のサイドバーなど）と比較用に残す。
 - 見た目（明/暗）でティントを変えるか（Apple は変える）は、**v1 では変えない**（既存拡張と同じ: 白いティント固定、前景色だけ切り替える）。
-  デモの Lab で「見た目に応じたティント」を A/B で試せるようにし、良ければ v1.x で材質の既定にする。
-- アプリが変えられるのは `tint`・`corner-radius`・`has-shadow`・`material` だけ。光学パラメータはアプリごとではなく全体の設定（`GlassContext`）。
-- 🔒 **値の決まり方**: 各キーの値は「`glass_context_set_param()` で明示された値 → パネル自身の既定値 → 材質の値 → §11.1 の既定値（拡張と同じ）」の順に最初にあるもの。
-  つまり Lab などで明示した値はすべての材質に効き、`glass_context_reset_param()` で材質の値に戻る。
-  パネル自身の既定値は非公開で、部品が自分のガラスに使う（v1 ではスイッチ・スライダーのつまみの `blur-radius` 0 だけ。§6.7）。アプリから設定する API は無い（光学の設定を増やさない）。ぼかし半径も同じ仕組みのキー `blur-radius` で扱う（既存拡張も要素ごとのぼかし半径を設定に持っているので、新しい光学の設定ではない）。
+  v0.7 までの「Lab での A/B（C3）」は破棄した。代わりにティントの色と強さを Lab で調整できるようにした（下）。
+- 🔒 **ティント**（v0.8。ユーザーの指示、2026-09-26）: 強さは光学パラメータのキー `tint-strength`（0〜1。材質の値は上の表）、色は次のうち最初にあるもの。
+  1. パネルの `tint`（強さも alpha で決める。スイッチ・スライダーのつまみ、トグルの板など、部品が自分で決めるティントもこれ）
+  2. `GlassContext:tint-color`（全体。alpha は使わない）
+  3. 材質の色（白、または `THICK`・`MENU` はテーマの窓・ポップオーバーの背景色）
+  Lab の「Tint」で色と強さを変えると、自分のティントを持たないすべてのガラスに効く。透明度を下げる設定では強さを 0.6 以上にする（§13）。
+- 🔒 **値の決まり方**（v0.8 で改訂）: 各キーの値は次の順に最初にあるもの。
+  1. `glass_panel_set_param()` でそのパネルに設定した値（アプリが 1 枚だけ変える。例: 大きなカードだけレンズを強く）
+  2. `glass_context_set_param()` で全体に設定した値（Lab）
+  3. 部品自身の既定値（非公開。v1 ではスイッチ・スライダーのつまみの `blur-radius` 0 だけ。§6.7）
+  4. 材質の値
+  5. §11.1 の既定値（拡張と同じ）
+  つまり Lab の値はすべての材質に効き（パネルに設定した値は除く）、`reset_param()` で次の段の値に戻る。
+  パネルごとの値は設定の種類を増やすものではない（同じキーの効く範囲だけ。ユーザーの選択、2026-09-26）。
+  ぼかし半径も同じ仕組みのキー `blur-radius` で扱う（既存拡張も要素ごとのぼかし半径を設定に持っているので、新しい光学の設定ではない）。
+- アプリがパネルに設定できるのは `tint`・`corner-radius`（と角ごとの半径）・`has-shadow`・`material` と、上のパネルごとのパラメータ。
 
-### 11.3 既存拡張の設定に追従する（v1.x・任意）
+### 11.3 ~~既存拡張の設定に追従する~~（破棄）
 
-サンドボックス外のアプリは、既存拡張の設定（`/org/gnome/shell/extensions/liquid-glass/` の `glass-*`）を読める。
-拡張機能のスキーマは拡張機能のディレクトリにあるので、`GSettingsSchemaSource.new_from_directory()` で読み込む。
-これを有効にすると、**拡張機能の Glass ページで調整した見た目がアプリにもそのまま反映される**。Flatpak のアプリでは読めないので既定値を使う。
-v1 の必須ではない（`GlassContext` のプロパティ `follow-shell-settings` として後から足す）。
+❌ **破棄した**（ユーザーの決定、2026-09-26）。v0.7 までは v1.x の任意の機能として、サンドボックス外のアプリが既存拡張の設定（`/org/gnome/shell/extensions/liquid-glass/` の `glass-*`）を読んで見た目を合わせる案（`GlassContext:follow-shell-settings`）があった。
+アプリ内のガラスは材質の値（§11.2）で調整し、拡張の値とは独立に決める。`spec/params.json` の `extension_key` は、値の出どころの記録として残す。
 
 ---
 
@@ -813,7 +855,12 @@ v1 の必須ではない（`GlassContext` のプロパティ `follow-shell-setti
 ### 12.1 入力
 
 - Full: §8.3 で読み出した取り込み画素（縮小済み・ぼかし前）を使う。
-- フォールバック: パネルの矩形を小さく（例 32x8）`render_texture` して読み出す。中身が変わったときだけ、最大 10 回/秒。
+- フォールバック（✅ v0.8 で実装。ユーザーの指示「CSS の色自動切り替え」、2026-09-26）: ビューが自分の backdrop（背景色＋中身＋スクロール端の効果）を小さく `render_texture` して読み出す。
+  - snapshot の中では、Adaptive のパネルの矩形（`compute_bounds`、§5.3-2）と backdrop のノードを覚えるだけ。描画と読み出しは snapshot の外（タイマー）で、窓のレンダラで行う。
+  - 全パネルの矩形の和を 1/4（長い辺が 256px を超えるなら それ以下）で 1 回だけ描き、パネルごとに §12.2 の統計を取る。セルの最小はフォールバックの CSS のぼかし（12px）、ティントは CSS の白 0.18 で計算する。
+  - 中身（ノードの同一性・位置）とパネルの矩形が前回と同じなら何もしない。変わっても最大 10 回/秒。
+  - パネルの中のビュー（自分の backdrop が下のガラスで、読めない）・つまみのビュー・ハイコントラストでは測らない（テーマの色）。ビューの外やビューの中身の側に置いたパネルも測らない（テーマの色のまま。§7.2）。
+  - 反映の仕方（EMA・反転の保持・次のフレームの前にクラスを付け替える）は Full と同じ（§12.3・§12.5）。テスト: `/widgets/fallback-adaptive`（白 → LIGHT、黒 → DARK）。
 - **パネルの前景は取り込みに入っていない**ので、自分の文字色の変化が次の判定に影響しない。
   既存拡張の `SWITCH_SETTLE_MS`（自分の色の変化を測らないための待ち時間）は不要になる。
 
@@ -880,19 +927,31 @@ v1 の必須ではない（`GlassContext` のプロパティ `follow-shell-setti
 |---|---|---|
 | **Photos** | 写真のグリッドが、上のタイトルのパネルと下のツールバーのパネル（アイコンのボタン）の下を流れる | 屈折、**同じフレームでの一致**、前景色の自動切り替え、キャッシュ |
 | **Playground** | ドラッグ・リサイズできるパネルを、切り替えられる背景（縞・市松・グラデーション・文字・写真・動くグラデーション）の上で動かす。材質・角の半径・ティント・影 | 形と材質の見え方、縁の屈折、端（ビューの端に接したとき） |
-| **Controls** | §6.7 の部品（スイッチ・スライダー・融合するボタン・ボタンの列・メニュー・ダイアログ）を、切り替えられる背景の上に置く。ボタンの隙間をスライダーで変えられる | 層（ガラスの上のガラス）、融合の形、つまみのレンズ |
+| **Controls** | §6.7 の部品（スイッチ・スライダー・融合するボタン・ボタンの列・メニュー・ダイアログ）を、切り替えられる背景の上に置く。融合するボタンは「⏮+⏵+⋯ − ☆ − 🗑」（+ はくっついて 1 つのカプセル、− は離れている）: 「⋯」で ☆ と 🗑 がカプセルからしずくのように出てきて、戻るときは吸い込まれる（v0.8。ユーザーの指示で、一律の隙間のスライダーは外した。`GlassGroup:spacing` は API に残す） | 層（ガラスの上のガラス）、融合の形とモーフィング、つまみのレンズ |
 | **Tabs** | `AdwViewStack` の 3 ページ（写真・文章・色）の上に浮くタブバー。右下の検索ボタンが検索欄に変わる（`morph-id`）。検索は文章のページを絞り込む。1 つのタブに注意の点 | タブバーの板、検索欄、モーフィング |
-| **Lab** | 光学パラメータ（§11.1）のスライダー、デバッグビュー（形状/影・変位）、Full / フォールバックの切り替え、HUD（§8.8）、「見た目に応じたティント」の A/B | 画質と性能の比較、既存拡張との見比べ |
+| **Lab** | 光学パラメータ（§11.1）のスライダー、ティント（色と強さ。v0.8）、Full / フォールバックの切り替え、透明度を下げる、HUD（§8.8）。値は `GlassContext` に設定するので、アプリのすべてのガラスに効く | 画質と性能の比較、既定値を決める |
 
 - 動く背景（Moving）は、Playground・Controls・Lab で**再生／一時停止と速度**（0.25〜4 倍、対数の目盛り）を変えられる。操作部品はガラスのボタンと `GlassSlider`（Lab ではインスペクタの中）。
   既定値を探すときに、背景の動きを止めて見比べたり、ゆっくり動かして縁の追従を見たりするため（ユーザーの提案、2026-09-25）。
 
-- 写真は同梱しない（ライセンスのため）。実行時に `/usr/share/backgrounds` の画像を読み、加えて「フォルダを開く」（ファイル選択のポータル）と、コードで生成するテスト模様を使う。
-- 開発中は `meson devenv` でビルドしたライブラリ（typelib）を使って `gjs -m` で起動する。Flatpak は Phase 4。
+- 写真は同梱しない（ライセンスのため）。実行時に `/usr/share/backgrounds` の画像を読み（Flatpak ではホストのものを `/run/host` から。`--filesystem=host-os:ro`）、加えて「フォルダを開く」（ファイル選択のポータル）と、コードで生成するテスト模様を使う。
+- 開発中は `meson devenv` でビルドしたライブラリ（typelib）を使って `gjs -m` で起動する。Flatpak は §15.3。
 
-### 14.1 ショーケース用デモ（将来）: 天気アプリ（仮称 Glass Weather）
+### 14.1 ショーケース用デモ: 天気アプリ Glass Weather（✅ v0.8 で実装）
 
-Glass Gallery は**検証用のハーネス**。開発者を惹きつけるための「見せる」デモは別に作る。ユーザーの提案で**天気アプリ**にする（2026-09-24。作成は v1 のライブラリが固まってから）。
+Glass Gallery は**検証用のハーネス**。開発者を惹きつけるための「見せる」デモは別に作る。ユーザーの提案で**天気アプリ**にする（2026-09-24）。
+
+**実装（2026-09-26）**: `demo/src/weather/`（`main.ts`・`window.ts`・`api.ts`・`sky.ts`・`conditions.ts`）。アプリ ID `io.github.ryohsuke1231.GlassWeather`、起動は `meson devenv -C build -w . gjs -m demo/dist/weather/main.js`。
+
+- 構成: `GlassToolbarView`（ヘッダーと下の検索が浮く）の中に `GlassView`（中身 = 空、overlay = スクロールするカード）。
+  ビューを 2 段にするのは、1 つのビューではガラスの本体をすべて描いてから前景を描くので、ヘッダーの下を通るカードの文字がヘッダーのガラスの上に出てしまうため（§7.6。外のビューなら、カードとその文字をふつうの画像として屈折する）。
+- 空はコードで描く（晴れ・曇り・霧・雨・雪・雷 × 昼・夜。雲が流れ、雨・雪が降る。「動きを減らす」では止まる）。画像のライセンスの問題が無い。
+- 現在の天気（空に直接白い文字）、1 時間ごと（横にスクロールする帯）、10 日（気温の幅のバー）、6 つの小さなカード（体感・湿度・風・UV・日の出・降水）。カードは `REGULAR` のガラスで、文字の色は空の明暗で切り替わる（昼は暗い文字、夜は明るい文字）。
+- 都市の検索: 下の検索ボタンが検索欄に変わり（`morph-id`）、候補の一覧（`MENU` の材質。忙しいカードの上でも読めるように）が検索欄からしずくのように出てくる（`GlassGroup`）。最近の場所を覚える。°C / °F は `GlassToggleGroup`。
+- メニューの「Preview Sky」で空を切り替えて、ガラスと文字の色の見え方をどの空でも確かめられる（天気は作り物になり、そう表示する）。
+- データは Open-Meteo（下の表）。予報は 15 分キャッシュ（`~/.cache/glass-weather/`）。通信できないときは古いキャッシュ、無ければサンプルのデータを、そう表示して出す。出典「Weather data by Open-Meteo.com」をデータの横に表示（2026-09-26 に規約を再確認: 非営利なら無料、CC BY 4.0、出典のリンクが要る）。
+- 環境変数: `GLASS_WEATHER_SKY=clear-day|rain-night|…`（空のプレビュー）、`GLASS_WEATHER_OFFLINE=1`（通信しない）。
+- やらなかったこと: 現在地（GeoClue のポータル）。都市の検索で足りるため。
 
 **天気アプリが向いている理由**
 
@@ -918,30 +977,33 @@ Glass Gallery は**検証用のハーネス**。開発者を惹きつけるた�
 
 ## 15. リポジトリ構成・ビルド・開発環境
 
-### 15.1 構成（予定）
+### 15.1 構成（v0.8 時点）
 
 ```
 glass-lib/
 ├── README.md  LICENSE（MIT）  .gitignore
-├── meson.build  meson_options.txt
+├── meson.build  meson_options.txt   オプション: introspection, tests, examples, documentation, demos, spikes
 ├── docs/
 │   ├── design.md              ← 本書
-│   ├── memo.md                地雷の記録（既存リポジトリと同じ運用。Phase 0 で作る）
+│   ├── memo.md                地雷の記録（既存リポジトリと同じ運用）
+│   ├── reference/             API ドキュメント（gi-docgen）の設定と、ガイドのページ（英語）
+│   ├── screenshots/           README の画像（写真を含まない画面だけ）
 │   └── archive/design-v0.1.md
 ├── spec/
-│   ├── params.json            光学パラメータと材質の定義（C ヘッダを生成）
+│   ├── params.json            光学パラメータと材質の定義（C ヘッダと API ドキュメントの表を生成）
 │   └── adaptive-vectors.json  Adaptive のテストベクタ
 ├── shaders/                   §10.1
 ├── lib/
-│   ├── glass.h  glass-version.h.in  glass-main.c
-│   ├── glass-context.[ch]  glass-view.[ch]  glass-panel.[ch]  glass-enums.[ch]
-│   ├── render/  glass-renderer.[ch]  glass-capture.c  glass-blur.c  glass-pass.c  glass-gl.[ch]   （非公開）
+│   ├── glass.h  glass-version.h.in  glass-main.c  glass-context.[ch]  glass-view.[ch]  glass-panel.[ch] …（公開の部品ごと）
+│   ├── render/  glass-renderer.[ch]  glass-gl.[ch]   （非公開）
 │   ├── adaptive/  glass-adaptive.[ch]   （非公開）
-│   └── style/  glass.css  glass.gresource.xml
-├── demo/                      Glass Gallery（TypeScript）: package.json  tsconfig.json  src/  data/
-├── tests/                     C の単体テスト、golden/（Core と参照の比較。§10.5）
+│   └── style/  glass.css
+├── demo/                      TypeScript: src/main.ts + src/pages/（Glass Gallery）、src/weather/（Glass Weather）、data/（デスクトップ・metainfo・アイコン）、meson.build（-Ddemos= でインストール）
+├── examples/                  最小の完全なアプリ（C・Python・GJS。C は -Dexamples でビルドして確かめる）
+├── build-aux/flatpak/         2 つのデモの Flatpak マニフェスト（§15.3）
+├── tests/                     C の単体テスト、ウィジェット、Python、golden/（Core と参照の比較。§10.5）
 ├── spikes/                    Phase 0 の試作（s1-full-renderer）
-└── tools/                     glsl-include.py（#include の展開）、計測スクリプト
+└── tools/                     glsl-include.py（#include の展開）、gen-params.py・gen-params-doc.py（params.json から生成）
 ```
 
 ### 15.2 開発環境（このマシン）
@@ -956,13 +1018,34 @@ meson test -C build
 
 # デモ（Node 22 は導入済み）
 cd demo && npm install && npm run build
-meson devenv -C build -w . gjs -m demo/dist/main.js
+meson devenv -C build -w . gjs -m demo/dist/main.js           # Glass Gallery
+meson devenv -C build -w . gjs -m demo/dist/weather/main.js   # Glass Weather
+
+# 例
+build/examples/hello-glass
+meson devenv -C build -w . python3 examples/hello-glass.py
+meson devenv -C build -w . gjs -m examples/hello-glass.js
 ```
 
-- デモの型: `@girs/gtk-4.0`・`@girs/adw-1` と、ビルドした `Glass-1.gir` から `@ts-for-gir/cli` で生成した型。
+- デモの型: `@girs/gtk-4.0`・`@girs/adw-1`・`@girs/soup-3.0` と、ビルドした `Glass-1.gir` から `@ts-for-gir/cli` で生成した型。
 - 依存: gtk4 ≥ 4.22、libadwaita-1 ≥ 1.9、epoxy。
 
-### 15.3 Git の運用
+### 15.3 Flatpak（v0.8）
+
+- マニフェストは `build-aux/flatpak/io.github.ryohsuke1231.GlassGallery.json` と `…GlassWeather.json`。ランタイムは `org.gnome.Platform//50`、SDK 拡張は `node22`・`typescript`（25.08）。
+- 1 つのモジュールで、リポジトリ（`dir` の source）を meson でビルドする（`-Dtests=false -Dspikes=false -Dexamples=false -Ddemos=gallery` など）。
+  デモの TypeScript は `meson install` のときに `demo/install-js.sh` が `tsc --noCheck` で JavaScript にする（Flatpak のビルドはネットワークを使えず、`npm install` で型のパッケージを入れられないため。型の検査は開発の `npm run build` で行う）。
+- 権限: 両方 `--share=ipc --socket=wayland --socket=fallback-x11 --device=dri`。Gallery はホストの壁紙を読むため `--filesystem=host-os:ro`、Weather は `--share=network`。
+- このマシンで両方をビルドし、インストールして起動した（2026-09-26。GL のガラスが描かれ、天気のデータも取れた）。
+  `org.flatpak.Builder` の Flatpak で作るときは、ユーザーのインストールを見せるために `--env=FLATPAK_USER_DIR=$HOME/.local/share/flatpak`、FUSE が使えないので `--disable-rofiles-fuse` が要った（README）。
+
+### 15.4 API ドキュメント（v0.8）
+
+- gi-docgen（`-Ddocumentation=true`）。設定は `docs/reference/glass.toml.in`、ガイドのページ（英語）は同じディレクトリ: Getting Started・How the Glass Works・Tuning・Parameters and Materials（`spec/params.json` から生成）・Styling・Debugging。
+- `--fatal-warnings` でビルドする。公開 API の説明が欠けていると失敗する（`gi-docgen check` で 0 件にした）。
+- このマシンには gi-docgen が無いので、確かめるときはスクラッチの venv に入れて、別のビルドディレクトリで行った（`build/` を gi-docgen に依存させない）。
+
+### 15.5 Git の運用
 
 - `main` はリリース用、作業は `dev` ブランチ（既存リポジトリと同じ）。
 - 最初のコミットで `dev` を作る。
@@ -977,11 +1060,12 @@ meson devenv -C build -w . gjs -m demo/dist/main.js
 | シェーダの構文 | `glslangValidator`（GLES 3.0 / GL 3.3） | エラーなし |
 | ぼかし | カーネルの係数を既存拡張の TS 実装と比較 | 係数が一致 |
 | Adaptive | `adaptive-vectors.json` を C で再生（`tests/test-adaptive.c`） | 全ベクタで一致 ✅ |
-| パラメータ | clamp・既定値・`list_params`・材質の解決（`tests/test-params.c`） | 表（§11.1）と一致 ✅ |
-| ウィジェット | 登録と解除、content 側・入れ子・レンダラ設定でのフォールバック、部品の報告値、ヘッダーのカプセルの表示（見える子がいる間だけ）、ボタンの列、スイッチ・スライダーの値と役割、グループの登録、メニューの組み立て、ダイアログの中身、ガラスの上のボタンが枠なしであること、下だけが変わったときの入れ子のビュー・ダイアログの描き直し、角ごとの半径、モーフィング（グループへの出入りと `morph-id` の入れ替え）、タブバー（スタックと両方向に連動）、検索欄（`GtkEditable`・`search-changed`）（`tests/test-widgets.c`、19 件。ディスプレイが要る） | 警告なし ✅ |
-| Python | PyGObject から公開 API を一通り使う: out 引数（`get_param_range`・`get_tint`・`get_corner_radii`）、プロパティ、シグナル、インタフェース（`GtkEditable`）、Python でのサブクラス化、全部品を 1 つの窓に置いて連動を確かめる（`tests/test-python.py`。PyGObject とディスプレイが要る） | 失敗なし ✅ |
+| パラメータ | clamp・既定値・`list_params`・材質の解決・ティントの色と強さの解決（`tests/test-params.c`） | 表（§11.1・§11.2）と一致 ✅ |
+| ウィジェット | 登録と解除、content 側・入れ子・レンダラ設定でのフォールバック、部品の報告値、ヘッダーのカプセルの表示（見える子がいる間だけ）、ボタンの列、スイッチ・スライダーの値と役割、グループの登録、メニューの組み立て、ダイアログの中身、ガラスの上のボタンが枠なしであること、下だけが変わったときの入れ子のビュー・ダイアログの描き直し、角ごとの半径、モーフィング（グループへの出入りと `morph-id` の入れ替え）、タブバー（スタックと両方向に連動）、検索欄（`GtkEditable`・`search-changed`）、フォールバックの Adaptive（白 → LIGHT・黒 → DARK、クラスは常に 1 つ）、パネルごとのパラメータとティントの優先順位、`css-classes` を置き換えたときにライブラリのクラスが戻ること（`tests/test-widgets.c`、22 件。ディスプレイが要る） | 警告なし ✅ |
+| Python | PyGObject から公開 API を一通り使う: out 引数（`get_param_range`・`get_tint`・`get_corner_radii`・`get_tint_color`）、プロパティ、シグナル、インタフェース（`GtkEditable`）、パネルごとのパラメータ、Python でのサブクラス化、全部品を 1 つの窓に置いて連動を確かめる（`tests/test-python.py`。PyGObject とディスプレイが要る） | 失敗なし ✅ |
+| 例・ドキュメント | C の例は `-Dexamples`（既定 ON）でビルドする。API ドキュメントは gi-docgen の `--fatal-warnings` | ビルドが通る ✅ |
 | 性能 | デモの HUD、GPU busy%（既存の計測方法） | §8.8 の予算内 |
-| 手動 | チェックリスト: 1x / 1.25x / 2x、ライト/ダーク、ハイコントラスト、Vulkan / GL（`GSK_RENDERER=gl`）、X11、Flatpak | 文字が常に読める・ずれがない |
+| 手動 | ライト/ダーク、ハイコントラスト、Vulkan / GL（`GSK_RENDERER=gl`）、X11、Flatpak（2026-09-26 に 2 つのデモで確認）。HiDPI（2x・分数スケール）は利用者のフィードバックに任せる（§17） | 文字が常に読める・ずれがない |
 
 ---
 
@@ -999,35 +1083,55 @@ meson devenv -C build -w . gjs -m demo/dist/main.js
 
 S2（GSK だけで描く Lite）、S3（拡張機能での blit）、S6（GNOME 51）は、v1 の範囲外になったので行わない。
 
-### Phase 1: 土台（M）— CI 以外は完了
+### Phase 1: 土台（M）— 完了
 
 - ✅ meson の骨組み、`spec/params.json` とヘッダの生成、シェーダ Core、ハーネスとゴールデン画像（Phase 0 と Phase 2 の中で作った）
-- ⬜ CI（GitHub Actions: ビルド・単体テスト・シェーダ検査）
+- ❌ CI（GitHub Actions）は破棄（§17.1）
 
 ### Phase 2: ライブラリ本体（L）— 実装済み（2026-09-25。memo 追記6）
 
 - ✅ `glass_init`、`GlassContext`、`GlassView`、`GlassPanel`、Full レンダラ、フォールバック、Adaptive、CSS、GIR/typelib
 - ✅ ウィンドウ部品群（§6.6。2026-09-25 のユーザーの決定で v2 から前倒し）
 - ✅ §6.7 の部品（層・押下・融合・ボタンの列・スイッチ・スライダー・ポップオーバー／メニュー・ダイアログ。2026-09-25 のユーザーの提案で v2 から前倒し）
-- ✅ スクロール中の CPU: 3.3 → 3.0〜3.1ms/フレーム（§8.8）。予算の 3ms をわずかに超えるが、ユーザーの判断で現状のままとした（2026-09-25）。残りの案（ビューをまたぐ取り込みの共有）は §19 に保留
+- ✅ スクロール中の CPU: 3.3 → 3.0〜3.1ms/フレーム（§8.8）。予算の 3ms をわずかに超えるが、ユーザーの判断で現状のままとした（2026-09-25）。残りの案（ビューをまたぐ取り込みの共有）は破棄（§17.1）
 - ✅ §6.8 の部品（タブバー・検索欄・モーフィング・材質 `MENU`・角ごとの半径。2026-09-26 のユーザーの提案で v2 から前倒し）
 - ✅ Python からの利用の確認（2026-09-26。`tests/test-python.py`。cairo で描く `GtkDrawingArea` をアプリが使うには、別に `python3-gi-cairo` が要る。glass-lib の問題ではない）
-- ⬜ 残り: フォールバックの Adaptive（§12.1 の小さな取り込み）、HiDPI（2x・分数スケール）と dGPU での確認
+- ✅ フォールバックの Adaptive（§12.1。2026-09-26）
+- ✅ ティントの調整（`tint-strength`・`tint-color`）、パネルごとのパラメータ（§11.2。2026-09-26）
+- ➖ HiDPI（2x・分数スケール）: 自分では確かめない。利用者のフィードバックに任せる（ユーザーの決定、2026-09-26）。値はすべて論理 px で持ち、描くときに `gdk_surface_get_scale()` 倍にしている（§10.2）
+- ❌ dGPU（外付け GPU など）での確認: 破棄（ハードウェアが無く実験が難しい。ユーザーの決定、2026-09-26）
 
-### Phase 3: デモ（M）— 最初の版を実装済み（2026-09-25）
+### Phase 3: デモ（M）— 完了（2026-09-26）
 
-- ✅ Photos / Playground / Controls（§6.7 の部品）/ Tabs（§6.8 の部品）/ Lab
-- ⬜ 「見た目に応じたティント」の A/B（C3）、材質の値を見比べて決める（C2）
+- ✅ Glass Gallery: Photos / Playground / Controls（§6.7 の部品。融合のデモは v0.8 で「+」と「−」の並びに）/ Tabs（§6.8 の部品）/ Lab（ティントも）
+- ✅ Glass Weather（§14.1）
+- ✅ 材質の値（C2）: ユーザーが Lab で調整して既定値を決める運用にした（v0.8 の `max_z`・`profile_shape_n`・`rim_directional_power` はその結果）
 
-### Phase 4: 仕上げ（M）
+### Phase 4: 仕上げ（M）— 完了（2026-09-26）
 
-性能の調整、アクセシビリティの確認（ハイコントラスト・透明度を下げる・動きを減らす）、API ドキュメント（gi-docgen）、Flatpak（デモ）、README のスクリーンショット、GNOME 51 のランタイムでの CI。
+- ✅ API ドキュメント（gi-docgen。§15.4）、`examples/`（C・Python・GJS）
+- ✅ Flatpak（2 つのデモ。§15.3）
+- ✅ README（スクリーンショット付き）
 
-### v1 の後
+### 17.1 破棄したもの（ユーザーの指示「ロードマップに残っているものは破棄」、2026-09-26）
 
-- v1.x: 既存拡張の設定への追従（§11.3）、見た目に応じたティント（C3 の結果しだい）
-- ショーケース: 天気アプリ Glass Weather（§14.1）
-- v2: §19 の候補（タブバー・検索欄・モーフィングなど）
+| 破棄したもの | 元の場所 |
+|---|---|
+| CI（GitHub Actions: ビルド・単体テスト・シェーダ検査） | Phase 1 |
+| GNOME 51 のランタイムでの CI | Phase 4、§18 |
+| dGPU（外付け GPU など）での確認 | Phase 2、§8.8、§18 |
+| 性能の調整（スクロール中 3.0〜3.1ms/フレームのまま） | Phase 4 |
+| アクセシビリティの手動の確認（ハイコントラスト・透明度を下げる・動きを減らす） | Phase 4、§16 |
+| 「見た目に応じたティント」（Apple 流）の A/B（C3） | Phase 3、§11.2、§20。ティントを Lab で調整できるようにしたことで代える |
+| 既存拡張の設定への追従（`follow-shell-settings`） | v1.x、§11.3（ユーザーの明示の指示） |
+| `CLEAR` の材質で、明暗が混ざるときに暗幕を足す | §11.2（未実装のまま） |
+| 中身の自動の余白 | §19 |
+| 既存拡張が Core を使う（シェーダの一本化） | §19 |
+| 上流 GTK への提案（displacement ノードの公開、dmabuf の取り出し） | §19、§18 |
+| ビューをまたぐ取り込みの共有（スクロール中 3.0 → 約 2.2ms/フレームの案） | §19、§8.8 |
+| 天気アプリの現在地（GeoClue のポータル） | §14.1（都市の検索で足りる） |
+
+HiDPI の確認は破棄ではなく、利用者のフィードバックで対応する。
 
 ---
 
@@ -1036,27 +1140,30 @@ S2（GSK だけで描く Lite）、S3（拡張機能での blit）、S6（GNOME 
 | リスク | 影響 | 対策 |
 |---|---|---|
 | snapshot 中の `render_texture` が GTK と衝突する | Full が使えない | ✅ S1 で衝突しないことを確認。ただし GL レンダラでは current のコンテキストが変わる（§8.2、地雷1） |
-| dGPU で読み出しが遅い | スクロール中にカクつく | 縮小・キャッシュ。上流に dmabuf の取り出しか displacement ノードの公開を提案（§19） |
+| dGPU で読み出しが遅い | スクロール中にカクつく | 縮小（1/2、設定で 1/4）とキャッシュ。確認は行わない（§17.1）。問題が報告されたら `blur-downscale` とキャッシュで対応する |
 | パネルを重ねたときに互いを屈折しない | 見た目の違和感 | ✅ 同じビューの中は層として屈折する（§6.7）。別のビューの間はふつうの画像として見える |
 | content の背景が透明だとガラスが黒ずむ | 見た目 | `backdrop-color`（§7.3） |
 | ビューとパネルの間のコンテナに背景がある | ガラスが隠れる | 文書と CSS の既定、デバッグ時の警告 |
-| GTK の将来の変更（4.24 以降） | 動作の変化 | 公開 API だけを使う。GNOME 51 のランタイムで CI を回す（Phase 4） |
+| GTK の将来の変更（4.24 以降） | 動作の変化 | 公開 API だけを使う（GNOME 51 の CI は破棄。§17.1） |
+| HiDPI（2x・分数スケール）で見た目がずれる | 縁・屈折の見え方 | 値は論理 px で持ち、描くときにスケール倍にする（§10.2）。確認は利用者のフィードバックに任せる（§17） |
 | 名前「Liquid Glass」への言及 | 商標 | ライブラリ名は glass-lib。README に Apple との無関係を明記 |
 
 ---
 
 ## 19. v2 以降の候補（保留したもの）
 
+2026-09-26 のユーザーの指示で、残っていた候補はすべて破棄した（§17.1）。記録として残す。
+
 | 候補 | 入口（v1 の何を拡張するか） |
 |---|---|
 | ~~ガラスの融合・押したときの膨らみ・ガラスの上のガラス・Switch・Slider・SegmentedControl~~ | ✅ v0.4 で v1 に入れた（§6.7） |
 | ~~モーフィング、TabBar、SearchEntry、MENU 材質、角ごとの半径~~ | ✅ v0.7 で v1 に入れた（§6.8。ユーザーの提案、2026-09-26） |
-| 中身の自動の余白 | パネルに隠れる分の余白をビューが中身に伝える |
+| ~~中身の自動の余白~~ | ❌ 破棄。パネルに隠れる分の余白をビューが中身に伝える案 |
 | ~~Tier 2（窓が透けるガラス）・GNOME 51 の `ext-background-effect-v1`~~ | ❌ 計画から外した（§2.2。ユーザーの決定、2026-09-26） |
-| 既存拡張の設定への追従 | §11.3 |
-| 既存拡張が Core を使う（シェーダの一本化） | §10.2 の明示化で、拡張機能は今と同じ値を渡せば一致する |
-| 上流 GTK への提案（displacement ノードの公開、dmabuf の取り出し） | 実現すれば読み出しが不要になり、GPU 内で完結する |
-| ビューをまたぐ取り込みの共有（スクロール中の CPU を 3.0 → 約 2.2ms/フレームに） | §8.8 の案。性能が問題になったら |
+| ~~既存拡張の設定への追従~~ | ❌ 破棄（§11.3） |
+| ~~既存拡張が Core を使う（シェーダの一本化）~~ | ❌ 破棄。§10.2 の明示化で、拡張機能は今と同じ値を渡せば一致する（入口は残っている） |
+| ~~上流 GTK への提案（displacement ノードの公開、dmabuf の取り出し）~~ | ❌ 破棄 |
+| ~~ビューをまたぐ取り込みの共有（スクロール中の CPU を 3.0 → 約 2.2ms/フレームに）~~ | ❌ 破棄（§8.8 の案） |
 
 ### 19.1 macOS のようなウィンドウ部品群を既定で提供するか（2026-09-24 のユーザーの問い）
 
@@ -1090,8 +1197,8 @@ v1 の範囲（ただのガラス）は変えない（決定事項 9）。以下
 | # | 内容 | 決め方 |
 |---|---|---|
 | ~~C1~~ | `backdrop-color` の既定値 | ✅ 固定値にせず、実行時に CSS の `var(--window-bg-color)` を解決して使う（このマシンの libadwaita 1.9 ではライト `#fafafb`・ダーク `#222226`。Ubuntu の Yaru の色の変種でも正しくなる）。§7.3 |
-| C2 | 材質 `REGULAR` / `CLEAR` の値（§11.2 は初期案。影は 16px・0.07。強さはユーザーが決定、2026-09-25） | デモの Playground・Lab で見て、ユーザーが決める |
-| C3 | 見た目に応じたティント（Apple 流）を既定にするか | デモの Lab の A/B で、ユーザーが決める |
+| ~~C2~~ | 材質 `REGULAR` / `CLEAR` の値 | ✅ ユーザーが Lab で調整して決める運用にした。v0.8 で `max_z` 35・`profile_shape_n` 2.4・`rim_directional_power` 1.6（§11.2） |
+| ~~C3~~ | 見た目に応じたティント（Apple 流）を既定にするか | ❌ 破棄（§17.1）。ティントの色と強さを Lab で調整できるようにした（§11.2） |
 | ~~C4~~ | snapshot 中の `render_texture` の安全性 | ✅ S1 で解決（安全。専用レンダラは不要） |
 | ~~C5~~ | 既存拡張の `prefs.js` の各パラメータの範囲 | ✅ `spec/params.json` に写した |
 | ~~C6~~ | アプリ内の縁の値とぼかし半径 | ✅ ユーザーが決定（2026-09-25）: `crisp-soft`・ぼかし 2px・測ったフットプリント・スーパーサンプリング 4x |
