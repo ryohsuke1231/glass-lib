@@ -159,6 +159,17 @@ glassheaderbar glasspanel.window-controls windowcontrols {
   margin: 0 2px;
 }
 
+/* Glass of its own packed in a header bar (a glass button, a search field)
+ * is as tall as the capsules. */
+glassheaderbar glasspanel.glass-button > button {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+glassheaderbar glasspanel.search-entry {
+  min-height: 36px;
+}
+
 /* ── Toggle group ── */
 
 glasspanel.toggle-group {

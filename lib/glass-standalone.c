@@ -17,7 +17,22 @@ struct _GlassStandalone {
   GtkNative        *native;           /* the renderer's, weak */
   GlassCapture     *capture;
   GlassPanelRender *render;
+  GtkWidget        *retry_widget;     /* weak: drawing again next frame */
+  guint             retry_id;
 };
+
+static gboolean
+retry_tick (GtkWidget     *widget,
+            GdkFrameClock *clock,
+            gpointer       data)
+{
+  GlassStandalone *self = data;
+
+  g_clear_weak_pointer (&self->retry_widget);
+  self->retry_id = 0;
+  gtk_widget_queue_draw (widget);
+  return G_SOURCE_REMOVE;
+}
 
 GlassStandalone *
 glass_standalone_new (void)
@@ -46,6 +61,9 @@ glass_standalone_free (GlassStandalone *self)
 {
   if (self == NULL)
     return;
+  if (self->retry_widget)
+    gtk_widget_remove_tick_callback (self->retry_widget, self->retry_id);
+  g_clear_weak_pointer (&self->retry_widget);
   glass_standalone_release (self);
   glass_capture_free (self->capture, NULL);
   glass_panel_render_free (self->render, NULL);
@@ -126,6 +144,12 @@ glass_standalone_draw (GlassStandalone       *self,
   req.has_shadow = shadow;
   if (!glass_renderer_render_panel (self->renderer, self->render, self->capture, &req, &res))
     return FALSE;
+  /* Last frame's glass (no free output texture): draw again next frame. */
+  if (res.stale && self->retry_widget == NULL)
+    {
+      g_set_weak_pointer (&self->retry_widget, widget);
+      self->retry_id = gtk_widget_add_tick_callback (widget, retry_tick, self, NULL);
+    }
   glass_renderer_flush (self->renderer);
 
   gtk_snapshot_append_texture (snapshot, res.texture, &res.rect);

@@ -301,6 +301,22 @@ test_header_capsules (void)
   glass_header_bar_remove (GLASS_HEADER_BAR (header), button);
   g_assert_false (gtk_widget_get_visible (capsule));
 
+  /* Glass of its own stands beside the capsule, not on it. */
+  {
+    GtkWidget *glass = g_object_ref_sink (glass_button_new_from_icon_name ("edit-find-symbolic"));
+    GtkWidget *group = glass_group_new ();
+
+    glass_header_bar_pack_end (GLASS_HEADER_BAR (header), glass);
+    glass_header_bar_pack_start (GLASS_HEADER_BAR (header), group);
+    g_assert_null (gtk_widget_get_ancestor (glass, GLASS_TYPE_BUTTON_GROUP));
+    g_assert_null (gtk_widget_get_ancestor (gtk_widget_get_parent (glass), GLASS_TYPE_PANEL));
+    g_assert_null (gtk_widget_get_ancestor (group, GLASS_TYPE_BUTTON_GROUP));
+    glass_header_bar_remove (GLASS_HEADER_BAR (header), glass);
+    glass_header_bar_remove (GLASS_HEADER_BAR (header), group);
+    g_assert_null (gtk_widget_get_parent (glass));
+    g_object_unref (glass);
+  }
+
   g_object_unref (header);
 }
 

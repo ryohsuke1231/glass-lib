@@ -11,6 +11,8 @@
   - モーフィング: 始まりの形を最初のフレームで読む・現れている途中のパネルからは出てこない（§6.8）。アプリが `css-classes` を置き換えてもライブラリのクラスが戻る（§6.4）
   - API ドキュメント（gi-docgen）、`examples/`、Flatpak（2 つのデモ）、README（§15）。天気アプリ Glass Weather（§14.1）
   - ロードマップ（§17）: dGPU の確認は行わない、HiDPI は利用者のフィードバックに任せる。残りは破棄（§17.1 に一覧）
+  - 2026-09-27 の追加（ユーザーの指示・指摘）: 天気アプリを macOS の天気アプリのレイアウトに（サイドバー・右上の検索・1/3 と 2/3。§14.1）。
+    メニューのちらつきと文字のずれ・メニューの位置（§6.7）。ヘッダーにガラスの部品を置けるように（§6.6）。Flatpak はホストの `flatpak` でインストールする（§15.3）
 - v0.6 からの変更（ユーザーの提案、2026-09-26）: §19 の候補だった `GlassTabBar`・`GlassSearchEntry`・形のモーフィング（`GlassPanel:morph-id`）・材質 `MENU`・角ごとの半径を v1 に入れた（§6.8）。
   Python（PyGObject）からの利用を確かめ、テスト（`tests/test-python.py`）にした（§16）
 - 状態: v1 の範囲を実装済み（2026-09-26）。Phase 0（S1・S5）、Phase 2（ライブラリ本体・ウィンドウ部品群・§6.7・§6.8 の部品）、Phase 3（デモ 2 つ）、Phase 4 の API ドキュメント・Flatpak・README
@@ -374,7 +376,7 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
 | 部品 | libadwaita の対応 | 振る舞い |
 |---|---|---|
 | `GlassToolbarView` | `AdwToolbarView` | 中身がバーの下まで伸びる（常に）。上下のバーは中身の上に浮く。**スクロール端の効果**（`top-edge-style`・`bottom-edge-style`）: `SOFT` = バーの下の帯で中身をぼかしながら薄めて、背景の色へ溶かす（既定）。`HARD` = 同じ帯を均一にぼかして区切り線を引く。`NONE` = なし。バーの高さは `top-bar-height`・`bottom-bar-height`（読み取り専用）で出すので、アプリはスクロールする中身の先頭にその分の余白を付ける（libadwaita の `extend-content-to-top-edge` と同じ扱い） |
-| `GlassHeaderBar` | `AdwHeaderBar` | `pack_start`・`pack_end` の部品は、それぞれ**1 つのガラスのカプセル**にまとめて浮かせる。タイトルはガラスなし（スクロール端の効果の上に載る）。窓のボタン（閉じる等）も小さなカプセルに入れる（どんな中身の上でも見えるように）。空の所はドラッグで窓を動かせる（`GtkWindowHandle`） |
+| `GlassHeaderBar` | `AdwHeaderBar` | `pack_start`・`pack_end` の部品は、それぞれ**1 つのガラスのカプセル**にまとめて浮かせる。それ自体がガラスの部品（`GlassPanel`・`GlassButton`・`GlassGroup`）は、カプセルに入れず（ガラスの上のガラスにしない）カプセルの内側の隣に置く（v0.8。高さはカプセルにそろえる）。タイトルはガラスなし（スクロール端の効果の上に載る）。窓のボタン（閉じる等）も小さなカプセルに入れる（どんな中身の上でも見えるように）。空の所はドラッグで窓を動かせる（`GtkWindowHandle`） |
 | `GlassSplitView` | `AdwOverlaySplitView` | サイドバーは**窓の中に浮く角丸の板**（材質 `THICK`、窓の縁から 8px 内側、半径 14px）。中身はサイドバーの下まで伸び、サイドバーが覆う幅は `content-inset`（読み取り専用）で出す。`show-sidebar` でスライドして出し入れする |
 | `GlassToggleGroup` | `AdwToggleGroup` | カプセルの中に並んだトグル。選ばれたものの下を丸い板がスライドする。**板はガラスの上のガラス**（§6.7 の層。押している間は膨らむ）。トグルは `GtkToggleButton` ではなく `GtkButton`＋`.active` クラス（テーマの `button:checked` の塗りが板を覆うため。memo 地雷12） |
 | `GlassButton` | `GtkButton` ＋ `.circular` / `.pill` | それ自体がガラスのボタン（アイコンか文字）。押している間はガラスが少し明るくなる。`GtkActionable` |
@@ -413,6 +415,11 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
 - **`GlassPopover`・`GlassMenuButton`**: ポップオーバーは別のサーフェス（xdg_popup）なので `GlassView` の中に入らない。
   **親の窓の、今のフレームのノード**を `GtkWidgetPaintable` で借りて取り込み、自分のサーフェスの位置（`gdk_popup_get_position_x/y` と `gtk_native_get_surface_transform`）に合わせて THICK のガラスを描く。
   親のサーフェスの `render` シグナルで描き直す。`glass_popover_new_from_model()` はメニュー（項目・区切り・サブメニュー）を組み立てる。
+  - 🔒 **窓のノードが無いフレームでは、最後のノードを使う**（v0.8。ユーザーの指摘: ホバーやサブメニューで、黒い見た目とガラスの見た目が高速に入れ替わった）。
+    項目の `gtk_widget_queue_draw()` はポップオーバーを越えて窓まで遡り、窓の描画ノードを捨てる（ポップオーバーの親は窓の中のボタン）。窓が描き直す前にポップオーバーが描かれると、ガラスの背景が無く、ふつうのポップオーバーの見た目に落ちていた。memo 地雷36。
+  - ガラスの上の中身は、`contents` の**内容の箱**を原点に置く（`gtk_widget_snapshot_child()` の子の位置はそこから。`compute_bounds` は枠の箱なので、パディングと枠の分だけ左上にずれていた。memo 地雷37）。
+  - 窓の外にはみ出した部分の背景は、ティントの色（不透明）で埋める（見えないものは屈折させない。黒くなっていた）。
+  - `GlassMenuButton` のメニューはボタンの下（10px 空けて）に開き、端をボタンの端にそろえる: メニューの幅が収まる側へ開く（両方に収まるなら窓の端から遠い方、どちらにも収まらなければボタンの中央。v0.8。ユーザーの指示）。
 - **`GlassDialog`**: `AdwDialog` はダイアログのホストが窓の中身の上に描くので、`GlassView` の中に入らない。
   中身の下に、**ホストの中身（ダイアログ以外の子）の今のフレームのノード**から THICK のガラスを描く。
   中身だけが変わるフレーム（動く背景）でも GTK はダイアログのノードを使い回すので、窓が描かれるフレームごとに、フレームクロックの `before-paint` で描き直させる（同じフレーム。memo 地雷24）。
@@ -630,11 +637,11 @@ tex        = gsk_renderer_render_texture (renderer, node, C を S·k 倍した�
 
 ### 8.6 出力テクスチャのプール
 
-- パネルごとに最大 3 枚。`gdk_gl_texture_builder_build()` の破棄通知で、GTK が使い終わったテクスチャをプールに戻す。
+- パネルごとに最大 4 枚。`gdk_gl_texture_builder_build()` の破棄通知で、GTK が使い終わったテクスチャをプールに戻す。
 - `GLsync` を `gdk_gl_texture_builder_set_sync()` で付ける（GTK 側が描画完了を待てるように）。
   パスごとには `glFlush` せず、ビュー（またはポップオーバー・ダイアログ）の描画の終わりに 1 回だけ flush する（`glass_renderer_flush`）。
   GTK はこのフェンスを別のコンテキストで待つので、flush は省けない。
-- 3 枚とも使用中なら、そのフレームは前回のテクスチャを再利用する（書き換え中のテクスチャを GTK に渡さない）。
+- 全部が使用中なら、そのフレームは前回のテクスチャを再利用し（書き換え中のテクスチャを GTK に渡さない）、**次のフレームでもう一度描く**（v0.8。頼まないと古いガラスが残った。memo 地雷42）。プールは 4 枚（v0.8。3 枚から）
 
 ### 8.7 失敗時の扱い
 
@@ -943,11 +950,16 @@ Glass Gallery は**検証用のハーネス**。開発者を惹きつけるた�
 
 **実装（2026-09-26）**: `demo/src/weather/`（`main.ts`・`window.ts`・`api.ts`・`sky.ts`・`conditions.ts`）。アプリ ID `io.github.ryohsuke1231.GlassWeather`、起動は `meson devenv -C build -w . gjs -m demo/dist/weather/main.js`。
 
-- 構成: `GlassToolbarView`（ヘッダーと下の検索が浮く）の中に `GlassView`（中身 = 空、overlay = スクロールするカード）。
+- レイアウトは macOS の天気アプリをまねる（v0.8。ユーザーの指示、2026-09-27）:
+  - `GlassSplitView` の開閉できるサイドバー（Glass Gallery と同じ）: 一番上に開いた検索欄、その下に場所の一覧（名前・その場所の現在時刻・少し大きめの気温。ホバーで × が出て消せる）。検索中は一覧の代わりに候補を出す。
+  - 右上に閉じた検索ボタン（ガラスのボタン。ヘッダーの ⋯ のカプセルの左）。押すとガラスが検索欄に変わり（`morph-id`）、候補はその下のガラスのポップオーバー（`MENU`）に出る。
+  - 中身: 現在の天気（空に直接白い文字）→ 1 時間ごと（48 時間分。幅いっぱい。収まらないときは横のスクロールバー）→ その下の左 1/3 に 10 日、右 2/3 に 2×2 の 4 枚（体感と湿度のゲージ・風の方位盤・1 時間ごとの降水量の棒（横にスクロール）・日の出から日の入りの弧と今の太陽）。幅が 720px 未満（小さな窓、サイドバーで狭いとき）は 10 日の下に 4 枚。
+  - カードは `CLEAR` のガラス（ユーザーの指示）。文字の色は空の明暗で切り替わる（昼は暗い文字、夜は明るい文字）。
+- 構成: `GlassSplitView` の中身が `GlassToolbarView`（ヘッダーが浮く）、その中に `GlassView`（中身 = 空、overlay = スクロールするカード）。
   ビューを 2 段にするのは、1 つのビューではガラスの本体をすべて描いてから前景を描くので、ヘッダーの下を通るカードの文字がヘッダーのガラスの上に出てしまうため（§7.6。外のビューなら、カードとその文字をふつうの画像として屈折する）。
+  1/3・2/3 の並びは小さな自前のレイアウト（`ThirdsLayout`）: 最小の幅は縦に積んだときのもの。`GtkGrid` の同じ幅の 3 列だと、窓の最小の幅が約 1060px になり、狭くできなかった。`AdwBreakpointBin` はスクロールする中身を窓の高さで切ってしまうので使わない（memo 追記12）。
 - 空はコードで描く（晴れ・曇り・霧・雨・雪・雷 × 昼・夜。雲が流れ、雨・雪が降る。「動きを減らす」では止まる）。画像のライセンスの問題が無い。
-- 現在の天気（空に直接白い文字）、1 時間ごと（横にスクロールする帯）、10 日（気温の幅のバー）、6 つの小さなカード（体感・湿度・風・UV・日の出・降水）。カードは `REGULAR` のガラスで、文字の色は空の明暗で切り替わる（昼は暗い文字、夜は明るい文字）。
-- 都市の検索: 下の検索ボタンが検索欄に変わり（`morph-id`）、候補の一覧（`MENU` の材質。忙しいカードの上でも読めるように）が検索欄からしずくのように出てくる（`GlassGroup`）。最近の場所を覚える。°C / °F は `GlassToggleGroup`。
+- °C / °F は `GlassToggleGroup`。場所・単位は `~/.config/glass-weather/state.json`（初回は東京・ロンドン・ニューヨーク）。
 - メニューの「Preview Sky」で空を切り替えて、ガラスと文字の色の見え方をどの空でも確かめられる（天気は作り物になり、そう表示する）。
 - データは Open-Meteo（下の表）。予報は 15 分キャッシュ（`~/.cache/glass-weather/`）。通信できないときは古いキャッシュ、無ければサンプルのデータを、そう表示して出す。出典「Weather data by Open-Meteo.com」をデータの横に表示（2026-09-26 に規約を再確認: 非営利なら無料、CC BY 4.0、出典のリンクが要る）。
 - 環境変数: `GLASS_WEATHER_SKY=clear-day|rain-night|…`（空のプレビュー）、`GLASS_WEATHER_OFFLINE=1`（通信しない）。
@@ -1038,6 +1050,8 @@ meson devenv -C build -w . gjs -m examples/hello-glass.js
 - 権限: 両方 `--share=ipc --socket=wayland --socket=fallback-x11 --device=dri`。Gallery はホストの壁紙を読むため `--filesystem=host-os:ro`、Weather は `--share=network`。
 - このマシンで両方をビルドし、インストールして起動した（2026-09-26。GL のガラスが描かれ、天気のデータも取れた）。
   `org.flatpak.Builder` の Flatpak で作るときは、ユーザーのインストールを見せるために `--env=FLATPAK_USER_DIR=$HOME/.local/share/flatpak`、FUSE が使えないので `--disable-rofiles-fuse` が要った（README）。
+- 🔒 **インストールはホストの `flatpak` で行う**（2026-09-27。ユーザーの指摘: rofi の drun から起動できなかった）。flatpak はインストールのときにデスクトップファイルの `Exec` を「インストールした `flatpak` のパス」で書き換える。
+  サンドボックスの中の flatpak-builder から `--install` すると `/app/bin/flatpak run …` になり、ホストには無い。`--repo=repo` でリポジトリに出し、`flatpak build-bundle` と `flatpak install --bundle`（ホスト）で入れる（memo 地雷38）。
 
 ### 15.4 API ドキュメント（v0.8）
 

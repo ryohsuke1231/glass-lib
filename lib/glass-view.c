@@ -65,6 +65,7 @@ struct _GlassView {
 
   gint64          hud_last_us;
   char           *hud_text;
+  guint           retry_tick;        /* drawing again: a panel's glass was stale */
 
   /* The adaptive colours under the CSS fallback (design.md §12.1): the
    * backdrop and the panels of the last snapshot, sampled small, at most
@@ -241,6 +242,9 @@ glass_view_unrealize (GtkWidget *widget)
 {
   GlassView *self = GLASS_VIEW (widget);
 
+  if (self->retry_tick)
+    gtk_widget_remove_tick_callback (widget, self->retry_tick);
+  self->retry_tick = 0;
   release_renderer (self);
   self->renderer_failed = FALSE;
   GTK_WIDGET_CLASS (glass_view_parent_class)->unrealize (widget);
@@ -505,6 +509,25 @@ ancestor_glass (GlassView *self, GlassLayerSource *out)
   return TRUE;
 }
 
+static gboolean
+retry_tick (GtkWidget     *widget,
+            GdkFrameClock *clock,
+            gpointer       data)
+{
+  GLASS_VIEW (widget)->retry_tick = 0;
+  gtk_widget_queue_draw (widget);
+  return G_SOURCE_REMOVE;
+}
+
+/* A panel got last frame's glass (no free output texture): draw again on
+ * the next frame, and every frame after, until they catch up. */
+static void
+retry_next_frame (GlassView *self)
+{
+  if (self->retry_tick == 0)
+    self->retry_tick = gtk_widget_add_tick_callback (GTK_WIDGET (self), retry_tick, NULL, NULL);
+}
+
 static void
 draw_item (GlassView             *self,
            GtkSnapshot           *snapshot,
@@ -554,6 +577,8 @@ draw_item (GlassView             *self,
       glass_panel_set_output (item->entry->panel, NULL, NULL);
       return;
     }
+  if (res.stale)
+    retry_next_frame (self);
 
   if (item->opacity < 1.0f)
     gtk_snapshot_push_opacity (snapshot, item->opacity);

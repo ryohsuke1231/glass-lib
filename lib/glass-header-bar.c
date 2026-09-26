@@ -17,9 +17,11 @@
  * [class@ToolbarView].
  *
  * Widgets packed at the start share one glass capsule, as do the ones
- * packed at the end. The window's title (or the title widget) sits between
- * them without glass. The empty parts of the bar move the window when
- * dragged.
+ * packed at the end. A widget that is glass of its own — a [class@Panel]
+ * such as a [class@Button], or a [class@Group] — stands next to the
+ * capsule instead (on the side of the middle), as a separate piece of
+ * glass. The window's title (or the title widget) sits between them
+ * without glass. The empty parts of the bar move the window when dragged.
  *
  * ## CSS nodes
  *
@@ -33,6 +35,7 @@ struct _GlassHeaderBar {
 
   GtkWidget *handle;
   GtkWidget *center_box;
+  GtkWidget *start_box, *end_box;   /* the capsules, and glass packed beside them */
   GtkWidget *start_capsule;         /* GlassButtonGroup */
   GtkWidget *end_capsule;
   GtkWidget *start_controls_capsule, *start_controls;
@@ -314,8 +317,8 @@ glass_header_bar_init (GlassHeaderBar *self)
   self->center_box = gtk_center_box_new ();
   gtk_window_handle_set_child (GTK_WINDOW_HANDLE (self->handle), self->center_box);
 
-  start = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
-  end = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+  start = self->start_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
+  end = self->end_box = gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 6);
   gtk_center_box_set_start_widget (GTK_CENTER_BOX (self->center_box), start);
   gtk_center_box_set_end_widget (GTK_CENTER_BOX (self->center_box), end);
 
@@ -387,12 +390,22 @@ glass_header_bar_new (void)
   return g_object_new (GLASS_TYPE_HEADER_BAR, NULL);
 }
 
+/* Glass of its own goes beside the capsule: inside it, it would be glass
+ * on glass. */
+static gboolean
+is_glass (GtkWidget *child)
+{
+  return GLASS_IS_PANEL (child) || GLASS_IS_GROUP (child);
+}
+
 /**
  * glass_header_bar_pack_start:
  * @self: a header bar
  * @child: a widget, usually a button
  *
- * Adds @child to the capsule at the start, after the ones added before.
+ * Adds @child to the capsule at the start, after the ones added before. A
+ * widget that is glass of its own ([class@Panel], [class@Group]) goes after
+ * the capsule instead.
  */
 void
 glass_header_bar_pack_start (GlassHeaderBar *self,
@@ -401,6 +414,12 @@ glass_header_bar_pack_start (GlassHeaderBar *self,
   g_return_if_fail (GLASS_IS_HEADER_BAR (self));
   g_return_if_fail (GTK_IS_WIDGET (child));
 
+  if (is_glass (child))
+    {
+      gtk_widget_set_valign (child, GTK_ALIGN_CENTER);
+      gtk_box_append (GTK_BOX (self->start_box), child);
+      return;
+    }
   glass_button_group_append (GLASS_BUTTON_GROUP (self->start_capsule), child);
   g_signal_connect_object (child, "notify::visible", G_CALLBACK (child_visible_changed), self, 0);
   update_visibility (self);
@@ -412,7 +431,8 @@ glass_header_bar_pack_start (GlassHeaderBar *self,
  * @child: a widget, usually a button
  *
  * Adds @child to the capsule at the end, before (to the left of) the ones
- * added before, like `gtk_header_bar_pack_end()`.
+ * added before, like `gtk_header_bar_pack_end()`. A widget that is glass of
+ * its own ([class@Panel], [class@Group]) goes before the capsule instead.
  */
 void
 glass_header_bar_pack_end (GlassHeaderBar *self,
@@ -421,6 +441,12 @@ glass_header_bar_pack_end (GlassHeaderBar *self,
   g_return_if_fail (GLASS_IS_HEADER_BAR (self));
   g_return_if_fail (GTK_IS_WIDGET (child));
 
+  if (is_glass (child))
+    {
+      gtk_widget_set_valign (child, GTK_ALIGN_CENTER);
+      gtk_box_prepend (GTK_BOX (self->end_box), child);
+      return;
+    }
   glass_button_group_prepend (GLASS_BUTTON_GROUP (self->end_capsule), child);
   g_signal_connect_object (child, "notify::visible", G_CALLBACK (child_visible_changed), self, 0);
   update_visibility (self);
@@ -442,6 +468,11 @@ glass_header_bar_remove (GlassHeaderBar *self,
   g_return_if_fail (GLASS_IS_HEADER_BAR (self));
 
   parent = gtk_widget_get_parent (child);
+  if (parent == self->start_box || parent == self->end_box)
+    {
+      gtk_box_remove (GTK_BOX (parent), child);
+      return;
+    }
   parent = parent ? gtk_widget_get_parent (parent) : NULL;   /* the group, above its row */
   if (parent == self->start_capsule || parent == self->end_capsule)
     {

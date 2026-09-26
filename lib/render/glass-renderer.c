@@ -27,7 +27,7 @@
 #include <math.h>
 #include <string.h>
 
-#define OUTPUT_POOL_SIZE 3
+#define OUTPUT_POOL_SIZE 4
 
 /* Room kept around the panel for the drop shadow, on top of shadow_radius:
  * the shader's boundsMask starts fading at 85% of shadow_max_radius; with this
@@ -1509,6 +1509,7 @@ glass_renderer_render_panel (GlassRenderer            *self,
   key.supersample = !(debug & GLASS_DEBUG_NO_SUPERSAMPLE);
   key.measured_footprint = !(debug & GLASS_DEBUG_ESTIMATED_FOOTPRINT);
 
+  res->stale = FALSE;
   if (pr->pass_valid && pr->last_texture && memcmp (&key, &pr->pass_key, sizeof key) == 0)
     {
       res->texture = pr->last_texture;
@@ -1520,11 +1521,17 @@ glass_renderer_render_panel (GlassRenderer            *self,
   slot = pool_acquire (pr->pool, o_w, o_h);
   if (slot == NULL)
     {
-      /* Every texture is still held by GTK: show the previous one. */
+      /* Every texture is still held by GTK: show the previous one for now,
+       * and have the caller draw again on the next frame. Without that, a
+       * resize (a sidebar sliding, a window going fullscreen) that ran out
+       * of textures left its last frame's glass at the old size until
+       * something else redrew (docs/memo.md 地雷42). */
       if (pr->last_texture == NULL)
         return FALSE;
+      g_debug ("output textures all in use: last frame's glass, again next frame");
       res->texture = pr->last_texture;
       res->rect = pr->pass_key.O;
+      res->stale = TRUE;
       return TRUE;
     }
 

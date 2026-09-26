@@ -4,7 +4,7 @@ Refracting, Liquid Glass–style glass for GTK 4 and libadwaita apps: panels,
 bars and controls that bend, blur and tint the app's own content as it
 scrolls under them — in the same frame, on any compositor.
 
-![Glass Weather, a demo: the same app over a daytime sky and a rainy night](docs/screenshots/weather.png)
+![Glass Weather, a demo: a sidebar of places on thick glass, the forecast on cards of clear glass over a sky drawn in code](docs/screenshots/weather.png)
 
 > [!NOTE]
 > **Status: early development (0.0.1).** The library, its widgets, the demos
@@ -107,9 +107,11 @@ Two apps written in TypeScript for GJS, in [`demo/`](demo):
 - **Glass Gallery**, the test bench: Photos (a grid scrolling under glass),
   Playground (panels to drag over test patterns), Controls, Tabs, and the
   **Lab**, with every optical parameter and the tint as live sliders.
-- **Glass Weather**, a showcase: the forecast on cards of glass over a sky
-  drawn in code. Weather data by [Open-Meteo.com](https://open-meteo.com/)
-  (CC BY 4.0, non-commercial use).
+- **Glass Weather**, a showcase laid out like macOS's Weather: your places
+  (with their local time and temperature) on a sidebar of glass, the forecast
+  on cards of clear glass over a sky drawn in code, and a search button whose
+  glass becomes a search field. Weather data by
+  [Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0, non-commercial use).
 
 From the source tree:
 
@@ -132,10 +134,21 @@ flatpak-builder --user --install --force-clean build-flatpak \
 flatpak run io.github.ryohsuke1231.GlassWeather
 ```
 
-With the `org.flatpak.Builder` Flatpak instead of a `flatpak-builder` package, run
-`flatpak run --env=FLATPAK_USER_DIR=$HOME/.local/share/flatpak org.flatpak.Builder
---user --install --disable-rofiles-fuse --force-clean build-flatpak <manifest>`
-(the sandboxed builder otherwise looks for the SDK in its own data directory).
+With the `org.flatpak.Builder` Flatpak instead of a `flatpak-builder` package,
+build into a repository and install with the host's `flatpak`:
+
+```sh
+flatpak run --env=FLATPAK_USER_DIR=$HOME/.local/share/flatpak org.flatpak.Builder \
+    --user --repo=repo --disable-rofiles-fuse --force-clean build-flatpak \
+    build-aux/flatpak/io.github.ryohsuke1231.GlassWeather.json
+flatpak build-bundle repo glass-weather.flatpak io.github.ryohsuke1231.GlassWeather
+flatpak install --user --reinstall --bundle glass-weather.flatpak
+```
+
+(`FLATPAK_USER_DIR`: the sandboxed builder otherwise looks for the SDK in its
+own data directory. Installing from inside it with `--install` would write
+`/app/bin/flatpak` into the app's desktop file, so launchers could not start
+it.)
 
 ## Debugging
 

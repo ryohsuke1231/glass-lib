@@ -46,6 +46,14 @@ struct _GlassPopover {
   GdkSurface      *watched;          /* the window's surface, while mapped */
   gulong           render_handler;
   guint            submenus;
+
+  /* The window's last node, and the backdrop made from it (kept while
+   * nothing changes, so the capture's cache hits). */
+  GskRenderNode   *window_node;
+  GskRenderNode   *backdrop;
+  graphene_point_t backdrop_offset;
+  graphene_rect_t  backdrop_area;
+  GdkRGBA          backdrop_fill;
 };
 
 G_DEFINE_FINAL_TYPE (GlassPopover, glass_popover, GTK_TYPE_POPOVER)
@@ -81,6 +89,102 @@ parent_window (GlassPopover *self, graphene_point_t *offset)
   return GTK_WIDGET (root);
 }
 
+/* The window's own node inside what its paintable hands out (a new clip
+ * and translation around it every time). */
+static GskRenderNode *
+window_leaf (GskRenderNode *node, float *dx, float *dy)
+{
+  *dx = *dy = 0.0f;
+  while (node)
+    {
+      float x, y;
+
+      if (gsk_render_node_get_node_type (node) == GSK_CLIP_NODE)
+        node = gsk_clip_node_get_child (node);
+      else if (gsk_render_node_get_node_type (node) == GSK_TRANSFORM_NODE ||
+               (gsk_render_node_get_node_type (node) == GSK_CONTAINER_NODE &&
+                gsk_container_node_get_n_children (node) == 1))
+        {
+          GskRenderNode *inner = glass_unwrap_node (node, &x, &y);
+
+          if (inner == node)
+            break;
+          *dx += x;
+          *dy += y;
+          node = inner;
+        }
+      else
+        break;
+    }
+  return node;
+}
+
+static void
+forget_backdrop (GlassPopover *self)
+{
+  g_clear_pointer (&self->window_node, gsk_render_node_unref);
+  g_clear_pointer (&self->backdrop, gsk_render_node_unref);
+}
+
+/* What is behind the popover: the window's node, moved to where the popup
+ * is, over the tint (opaque) where the popup reaches past the window, since
+ * nothing can be seen there.
+ *
+ * [docs/memo.md 地雷36] Hovering an item queues a draw that runs up past the
+ * popover into the window (the popover's parent is in it): GTK drops the
+ * window's render node until the window paints again. If the popover paints
+ * first there is no node, and the popover fell back to its plain look for
+ * that frame. Keep the last node instead: the popover shows the window as
+ * of its last frame anyway, and draws again once the window has rendered. */
+static GskRenderNode *
+backdrop_node (GlassPopover           *self,
+               GtkWidget              *window,
+               const graphene_point_t *offset,
+               const graphene_rect_t  *area,
+               const GdkRGBA          *fill)
+{
+  GskRenderNode *current = glass_standalone_backdrop (window, graphene_point_zero ());
+  GskRenderNode *nodes[2];
+  GskTransform *transform;
+  GdkRGBA opaque = *fill;
+
+  if (current)
+    {
+      /* A new node every frame even when nothing changed (the paintable
+       * wraps it): compare what it shows. */
+      float dx, dy, odx, ody;
+
+      if (self->window_node == NULL ||
+          window_leaf (current, &dx, &dy) != window_leaf (self->window_node, &odx, &ody) ||
+          dx != odx || dy != ody)
+        {
+          forget_backdrop (self);
+          self->window_node = gsk_render_node_ref (current);
+        }
+      gsk_render_node_unref (current);
+    }
+  if (self->window_node == NULL)
+    return NULL;
+
+  opaque.alpha = 1.0f;
+  if (self->backdrop && graphene_point_equal (offset, &self->backdrop_offset) &&
+      graphene_rect_equal (area, &self->backdrop_area) && gdk_rgba_equal (&opaque, &self->backdrop_fill))
+    return gsk_render_node_ref (self->backdrop);
+
+  nodes[0] = gsk_color_node_new (&opaque, area);
+  transform = gsk_transform_translate (NULL, offset);
+  nodes[1] = gsk_transform_node_new (self->window_node, transform);
+  gsk_transform_unref (transform);
+  g_clear_pointer (&self->backdrop, gsk_render_node_unref);
+  self->backdrop = gsk_container_node_new (nodes, 2);
+  self->backdrop_offset = *offset;
+  self->backdrop_area = *area;
+  self->backdrop_fill = opaque;
+  gsk_render_node_unref (nodes[0]);
+  gsk_render_node_unref (nodes[1]);
+  return gsk_render_node_ref (self->backdrop);
+}
+
 static void
 glass_popover_snapshot (GtkWidget   *widget,
                         GtkSnapshot *snapshot)
@@ -88,30 +192,35 @@ glass_popover_snapshot (GtkWidget   *widget,
   GlassPopover *self = GLASS_POPOVER (widget);
   GtkWidget *contents = find_contents (widget);
   GtkWidget *window;
-  graphene_point_t offset;
+  graphene_point_t offset, origin;
   graphene_rect_t box;
   GskRenderNode *backdrop = NULL;
   GdkRGBA bg;
   GskRoundedRect shape;
 
+  gtk_widget_get_color (self->bg_node, &bg);
   if (contents == NULL || !gtk_widget_compute_bounds (contents, widget, &box) ||
+      !gtk_widget_compute_point (contents, widget, graphene_point_zero (), &origin) ||
       (window = parent_window (self, &offset)) == NULL ||
-      (backdrop = glass_standalone_backdrop (window, &offset)) == NULL)
+      (backdrop = backdrop_node (self, window, &offset,
+                                 &GRAPHENE_RECT_INIT (0, 0, gtk_widget_get_width (widget), gtk_widget_get_height (widget)),
+                                 &bg)) == NULL)
     goto plain;
 
   /* A soft shadow within the popover's own margins. */
   gsk_rounded_rect_init_from_rect (&shape, &box, RADIUS);
   gtk_snapshot_append_outset_shadow (snapshot, &shape, &(GdkRGBA) { 0, 0, 0.02f, 0.22f }, 0, 2, 0, 8);
 
-  gtk_widget_get_color (self->bg_node, &bg);
   if (!glass_standalone_draw (self->glass, widget, snapshot, backdrop, &box, (double[4]) { RADIUS, RADIUS, RADIUS, RADIUS },
                               GLASS_MATERIAL_MENU, &bg, FALSE))
     goto plain;
   gsk_render_node_unref (backdrop);
 
-  /* The contents' children, without the contents' own background. */
+  /* The contents' children, without the contents' own background. They
+   * are placed from the contents' content box, which is its origin: the
+   * bounds are its border box (padding and border off). */
   gtk_snapshot_save (snapshot);
-  gtk_snapshot_translate (snapshot, &box.origin);
+  gtk_snapshot_translate (snapshot, &origin);
   for (GtkWidget *child = gtk_widget_get_first_child (contents); child; child = gtk_widget_get_next_sibling (child))
     gtk_widget_snapshot_child (contents, child, snapshot);
   gtk_snapshot_restore (snapshot);
@@ -159,6 +268,7 @@ glass_popover_unmap (GtkWidget *widget)
       g_clear_signal_handler (&self->render_handler, self->watched);
       g_clear_object (&self->watched);
     }
+  forget_backdrop (self);
   GTK_WIDGET_CLASS (glass_popover_parent_class)->unmap (widget);
 }
 
@@ -190,6 +300,7 @@ glass_popover_dispose (GObject *object)
 
   g_clear_pointer (&self->bg_node, gtk_widget_unparent);
   g_clear_pointer (&self->glass, glass_standalone_free);
+  forget_backdrop (self);
 
   G_OBJECT_CLASS (glass_popover_parent_class)->dispose (object);
 }
@@ -210,12 +321,23 @@ glass_popover_class_init (GlassPopoverClass *klass)
   widget_class->root = glass_popover_root;
 }
 
+/* An app replacing the classes (css_classes in a GJS or Python
+ * constructor) keeps .glass, which the stylesheet needs (as panels keep
+ * theirs: docs/memo.md 地雷33). */
+static void
+css_classes_changed (GtkWidget *widget)
+{
+  if (!gtk_widget_has_css_class (widget, "glass"))
+    gtk_widget_add_css_class (widget, "glass");
+}
+
 static void
 glass_popover_init (GlassPopover *self)
 {
   self->glass = glass_standalone_new ();
   gtk_popover_set_has_arrow (GTK_POPOVER (self), FALSE);
   gtk_widget_add_css_class (GTK_WIDGET (self), "glass");
+  g_signal_connect (self, "notify::css-classes", G_CALLBACK (css_classes_changed), NULL);
 
   /* Never drawn: the glass's tint, var(--popover-bg-color) (glass.css). */
   self->bg_node = glass_style_node_new ("backdrop");

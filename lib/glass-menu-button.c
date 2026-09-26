@@ -356,11 +356,52 @@ glass_menu_button_set_popover (GlassMenuButton *self,
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_POPOVER]);
 }
 
+/* Menus open below the button, a little apart, like a pull-down menu: one
+ * of its edges lines up with the button's, on the side where the menu fits
+ * in the window (preferring to grow away from the nearer window edge);
+ * centred on the button if it fits neither way. GTK still flips and slides
+ * it if the screen is too small. */
+#define POPOVER_GAP 10
+
+static void
+place_popover (GlassMenuButton *self)
+{
+  GtkWidget *widget = GTK_WIDGET (self);
+  GtkWidget *root = GTK_WIDGET (gtk_widget_get_root (widget));
+  graphene_rect_t bounds;
+  float room_right, room_left;
+  int menu_width = 0;
+  gboolean rtl = gtk_widget_get_direction (widget) == GTK_TEXT_DIR_RTL;
+  GtkAlign align;
+
+  if (root == NULL || !gtk_widget_compute_bounds (widget, root, &bounds))
+    return;
+  gtk_widget_measure (GTK_WIDGET (self->popover), GTK_ORIENTATION_HORIZONTAL, -1, NULL, &menu_width, NULL, NULL);
+
+  /* Room for the menu if its left edge is the button's left edge, and if
+   * its right edge is the button's right edge. */
+  room_right = gtk_widget_get_width (root) - bounds.origin.x;
+  room_left = bounds.origin.x + bounds.size.width;
+  if (room_right >= menu_width && (room_left < menu_width || room_right >= room_left))
+    align = rtl ? GTK_ALIGN_END : GTK_ALIGN_START;   /* grows to the right */
+  else if (room_left >= menu_width)
+    align = rtl ? GTK_ALIGN_START : GTK_ALIGN_END;   /* grows to the left */
+  else
+    align = GTK_ALIGN_CENTER;
+
+  gtk_popover_set_position (self->popover, GTK_POS_BOTTOM);
+  gtk_widget_set_halign (GTK_WIDGET (self->popover), align);
+  gtk_popover_set_offset (self->popover, 0, POPOVER_GAP);
+}
+
 /**
  * glass_menu_button_popup:
  * @self: a menu button
  *
- * Opens the popover.
+ * Opens the popover, below the button. One of its edges lines up with the
+ * button's, on the side where the popover fits in the window (towards the
+ * middle when it fits both ways); it is centred on the button if it fits
+ * neither way.
  */
 void
 glass_menu_button_popup (GlassMenuButton *self)
@@ -369,6 +410,7 @@ glass_menu_button_popup (GlassMenuButton *self)
 
   if (self->popover == NULL)
     return;
+  place_popover (self);
   gtk_widget_set_state_flags (self->button, GTK_STATE_FLAG_CHECKED, FALSE);
   gtk_popover_popup (self->popover);
 }

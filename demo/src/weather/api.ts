@@ -26,6 +26,7 @@ export interface Hour {
     code: number;
     isDay: boolean;
     precipitation: number;   // probability, %
+    rain: number;            // precipitation in the hour, mm
 }
 
 export interface Day {
@@ -44,6 +45,7 @@ export interface Forecast {
     place: Place;
     fetched: number;         // ms since the epoch
     sample: boolean;         // made up (offline)
+    utcOffset: number;       // the place's offset from UTC, s (its local time)
     current: {
         time: string;
         temperature: number;
@@ -61,6 +63,8 @@ export interface Forecast {
 
 const USER_AGENT = 'GlassWeather/0.1 (a glass-lib demo; +https://github.com/ryohsuke1231/glass-lib)';
 const FRESH_MS = 15 * 60 * 1000;
+// Hourly forecast: now and the next 48 hours.
+const HOURS = 49;
 
 let session: Soup.Session | null = null;
 
@@ -110,6 +114,10 @@ function readCache(place: Place): Forecast | null {
         if (!ok)
             return null;
         const forecast = JSON.parse(new TextDecoder().decode(bytes)) as Forecast;
+        // Written by an older version (no local time, fewer hours): stale.
+        if (forecast.utcOffset === undefined || forecast.hourly.length < HOURS ||
+            forecast.hourly[0].rain === undefined)
+            return null;
         forecast.place = place;
         return forecast;
     } catch (e) {
@@ -133,6 +141,7 @@ function parse(place: Place, json: any): Forecast {
         place,
         fetched: Date.now(),
         sample: false,
+        utcOffset: json.utc_offset_seconds ?? 0,
         current: {
             time: c.time,
             temperature: c.temperature_2m,
@@ -150,6 +159,7 @@ function parse(place: Place, json: any): Forecast {
             code: h.weather_code[i],
             isDay: h.is_day[i] === 1,
             precipitation: h.precipitation_probability[i] ?? 0,
+            rain: h.precipitation[i] ?? 0,
         })),
         daily: d.time.map((date: string, i: number) => ({
             date,
@@ -181,10 +191,10 @@ export async function getForecast(place: Place, force: boolean, cancellable: Gio
         `?latitude=${coord(place.latitude)}&longitude=${coord(place.longitude)}` +
         '&current=temperature_2m,apparent_temperature,relative_humidity_2m,is_day,weather_code,' +
         'wind_speed_10m,wind_direction_10m,precipitation' +
-        '&hourly=temperature_2m,weather_code,is_day,precipitation_probability' +
+        '&hourly=temperature_2m,weather_code,is_day,precipitation_probability,precipitation' +
         '&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,' +
         'precipitation_probability_max,precipitation_sum,uv_index_max' +
-        '&timezone=auto&forecast_days=10&forecast_hours=25';
+        `&timezone=auto&forecast_days=10&forecast_hours=${HOURS}`;
     try {
         const forecast = parse(place, await getJson(url, cancellable));
         writeCache(forecast);
@@ -208,12 +218,14 @@ export function sampleForecast(place: Place, sky: SkyKind, isDay: boolean): Fore
     const date = (d: GLib.DateTime) => `${d.get_year()}-${pad(d.get_month())}-${pad(d.get_day_of_month())}`;
     const hour0 = isDay ? 13 : 22;
     const hourly: Hour[] = [];
-    for (let i = 0; i < 25; i++) {
+    for (let i = 0; i < HOURS; i++) {
         const hour = (hour0 + i) % 24;
         const t = 18 + 5 * Math.sin((hour - 9) / 24 * 2 * Math.PI);
-        hourly.push({ time: `${date(today)}T${pad(hour)}:00`, temperature: Math.round(t * 10) / 10,
+        const day = today.add_days(Math.floor((hour0 + i) / 24))!;
+        hourly.push({ time: `${date(day)}T${pad(hour)}:00`, temperature: Math.round(t * 10) / 10,
             code: i % 7 === 3 ? codeFor('cloudy') : code, isDay: hour >= 6 && hour < 18,
-            precipitation: sky === 'rain' || sky === 'storm' ? 60 + (i * 7) % 30 : (i * 13) % 20 });
+            precipitation: sky === 'rain' || sky === 'storm' ? 60 + (i * 7) % 30 : (i * 13) % 20,
+            rain: sky === 'rain' || sky === 'storm' ? [0.4, 1.2, 2.6, 0.8, 0, 0.3][i % 6] : (i % 11 === 5 ? 0.2 : 0) });
     }
     const daily: Day[] = [];
     const codes = [code, 2, 63, 0, 3, 81, 1, 0, 45, 2];
@@ -224,10 +236,13 @@ export function sampleForecast(place: Place, sky: SkyKind, isDay: boolean): Fore
             precipitation: [10, 20, 80, 0, 30, 70, 10, 0, 20, 10][i], precipitationSum: [0, 0.4, 12, 0, 1, 8, 0, 0, 0.2, 0][i],
             uv: [5, 4, 2, 6, 3, 2, 5, 6, 3, 4][i] });
     }
+    // Today's rain is the hours' (the made-up hours and days agree).
+    daily[0].precipitationSum = Math.round(hourly.slice(0, 24).reduce((sum, h) => sum + h.rain, 0) * 10) / 10;
     return {
         place,
         fetched: Date.now(),
         sample: true,
+        utcOffset: Number(today.get_utc_offset()) / 1e6,
         current: { time: hourly[0].time, temperature: hourly[0].temperature, apparent: hourly[0].temperature + 1,
             humidity: sky === 'rain' ? 92 : 58, isDay, code, wind: 12, windDirection: 225, precipitation: 0 },
         hourly,

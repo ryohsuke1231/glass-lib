@@ -76,6 +76,9 @@ typedef struct {
 typedef struct {
   GdkTexture     *texture;         /* transfer none: owned by the panel render */
   graphene_rect_t rect;            /* where to draw it, view coordinates */
+  gboolean        stale;           /* the last glass, not this frame's: every
+                                    * output texture is still held by GTK.
+                                    * Draw again on the next frame. */
 } GlassRenderResult;
 
 GlassRenderer    *glass_renderer_acquire       (GtkNative *native);

@@ -29,6 +29,7 @@
 - `npm` のコマンドは `demo/` の中で実行する（例: `cd demo && npm run build`）。TS ファイルを修正・編集したら `npm run build` を実行してビルドエラーを確認する。
 - デモの起動は `meson devenv -C build -w . gjs -m demo/dist/main.js`（ビルドしたライブラリの typelib を使うため。`-w .` がないと build/ の中で実行されてパスが合わない）。天気アプリは `demo/dist/weather/main.js`。
 - Flatpak と API ドキュメントの作り方は設計書 §15.3・§15.4（gi-docgen はこのマシンに無い）。
+- **見た目の確認のためにアプリを開いたり、スクリーンショットを撮ったりしなくてよい。** 見た目はユーザーが確かめる。Claude はビルド・`meson test`・デモの型検査までを行い、何を見てほしいかを報告する（ユーザーの環境は sway で、確認用の窓が作業中のワークスペースを乱すため）。
 - デモの `npm run build` は、先にビルドしたライブラリの `build/lib/Glass-1.gir` から型（`demo/types/`）を生成する。ライブラリの公開 API を変えたら `meson compile -C build` の後に `npm run build`。
 
 ## ファイル読み取りの許可

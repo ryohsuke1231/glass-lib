@@ -1,31 +1,46 @@
-// Glass Weather's window. The layout, from the back:
+// Glass Weather's window, laid out like macOS's Weather. From the back:
 //
-//   Glass.ToolbarView            the header and the search float over it all
-//   └ Glass.View                 the cards are glass over the sky
-//     ├ content: Sky             drawn in code, moving
-//     └ overlay: ScrolledWindow  the hero text and the cards (Glass.Panel)
+//   Glass.SplitView              the places, on a sidebar of thick glass
+//   └ Glass.ToolbarView          the header floats over the weather
+//     └ Glass.View               the cards are clear glass over the sky
+//       ├ content: Sky           drawn in code, moving
+//       └ overlay: ScrolledWindow  the hero text and the cards
 //
-// Two views, because a view draws every glass body before any foreground:
-// the header's glass is in the outer view, so it refracts the cards and
-// their text as they scroll under it (design.md §6.7, §7.6).
+// Two views for the weather, because a view draws every glass body before
+// any foreground: the header's glass is in the outer view, so it refracts
+// the cards and their text as they scroll under it (design.md §6.7, §7.6).
+//
+//   ┌─────────┬──────────────────────────────────────────────┐
+//   │ search  │              (🔍) (⟳) (⋯)                     │
+//   │ Tokyo   │             Tokyo  18°  Drizzle               │
+//   │ London  │ [ hourly forecast, 48 hours, scrolls sideways ]│
+//   │ …       │ [ 10 days ] [ feels like ] [ wind          ]  │
+//   │         │ [         ] [ rain       ] [ sunrise       ]  │
+//   └─────────┴──────────────────────────────────────────────┘
 
 import Adw from 'gi://Adw?version=1';
 import Gdk from 'gi://Gdk?version=4.0';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
+import Graphene from 'gi://Graphene?version=1.0';
+import Gsk from 'gi://Gsk?version=4.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
 import cairo from 'cairo';
 
-import { Day, Forecast, getForecast, Place, sampleForecast, searchPlaces } from './api.js';
+import { Day, Forecast, getForecast, Place, Result, sampleForecast, searchPlaces } from './api.js';
 import { condition, iconFor, SkyKind } from './conditions.js';
 import { Sky } from './sky.js';
 
 const APP_ID = 'io.github.ryohsuke1231.GlassWeather';
 const REFRESH_MS = 15 * 60 * 1000;
-const TOKYO: Place = { name: 'Tokyo', region: 'Tokyo, Japan', latitude: 35.6895, longitude: 139.6917 };
+const DEFAULT_PLACES: Place[] = [
+    { name: 'Tokyo', region: 'Tokyo, Japan', latitude: 35.6895, longitude: 139.6917 },
+    { name: 'London', region: 'England, United Kingdom', latitude: 51.5085, longitude: -0.1257 },
+    { name: 'New York', region: 'New York, United States', latitude: 40.7143, longitude: -74.006 },
+];
 
 const CSS = `
 .weather-hero { color: white; }
@@ -42,20 +57,26 @@ const CSS = `
 .weather-card separator { background: alpha(currentColor, 0.18); }
 .weather-card .precip { color: #a6d8ff; font-size: 11px; font-weight: 800; }
 glasspanel.glass-light.weather-card .precip { color: #1463b0; }
-.weather-card .value { font-size: 28px; }
+.weather-card .value { font-size: 40px; font-weight: 300; }
+.weather-card .detail { font-size: 15px; opacity: 0.8; }
+.weather-card .rain-hour { font-size: 12px; opacity: 0.7; }
 .weather-hour .temp { font-weight: 700; }
 .weather-day .day { font-weight: 700; }
 .weather-day .temp { font-weight: 700; }
 .weather-attribution { color: white; font-size: 12px; }
 .weather-attribution.on-bright { color: #17212e; }
+.weather-place .place-time { font-size: 12px; opacity: 0.7; }
+.weather-place .place-temp { font-size: 24px; font-weight: 300; }
 .weather-result .region { font-size: 12px; opacity: 0.7; }
 `;
 
 interface State {
     place: Place;
-    recents: Place[];
+    places: Place[];
     fahrenheit: boolean;
 }
+
+const placeKey = (p: Place) => `${p.latitude.toFixed(4)},${p.longitude.toFixed(4)}`;
 
 function statePath(): string {
     return GLib.build_filenamev([GLib.get_user_config_dir(), 'glass-weather', 'state.json']);
@@ -64,13 +85,18 @@ function statePath(): string {
 function loadState(): State {
     try {
         const [, bytes] = GLib.file_get_contents(statePath());
-        const state = JSON.parse(new TextDecoder().decode(bytes)) as State;
-        if (state.place)
-            return { place: state.place, recents: state.recents ?? [], fahrenheit: !!state.fahrenheit };
+        const saved = JSON.parse(new TextDecoder().decode(bytes));
+        if (saved.place) {
+            // Before the sidebar the places were "recents".
+            const places: Place[] = saved.places ?? saved.recents ?? [];
+            if (!places.some(p => placeKey(p) === placeKey(saved.place)))
+                places.unshift(saved.place);
+            return { place: saved.place, places, fahrenheit: !!saved.fahrenheit };
+        }
     } catch (e) {
         // First start.
     }
-    return { place: TOKYO, recents: [TOKYO], fahrenheit: false };
+    return { place: DEFAULT_PLACES[0], places: [...DEFAULT_PLACES], fahrenheit: false };
 }
 
 function saveState(state: State) {
@@ -110,11 +136,28 @@ function roundedBar(cr: cairo.Context, x: number, y: number, w: number, h: numbe
     cr.closePath();
 }
 
+function roundedColumn(cr: cairo.Context, x: number, y: number, w: number, h: number) {
+    const r = Math.min(w / 2, h / 2);
+    cr.newSubPath();
+    cr.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
+    cr.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+    cr.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+    cr.arc(x + r, y + r, r, Math.PI, 3 * Math.PI / 2);
+    cr.closePath();
+}
+
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const pad = (n: number) => String(n).padStart(2, '0');
 
 function clockTime(iso: string): string {
     return iso.slice(11, 16);
+}
+
+// The time now where the place is.
+function localTime(utcOffset: number): string {
+    const d = new Date(Date.now() + utcOffset * 1000);
+    return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
 }
 
 function weekday(date: string, index: number): string {
@@ -124,12 +167,13 @@ function weekday(date: string, index: number): string {
     return WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
 }
 
-function uvText(uv: number): string {
-    return uv < 3 ? 'Low' : uv < 6 ? 'Moderate' : uv < 8 ? 'High' : uv < 11 ? 'Very High' : 'Extreme';
+function removeAll(box: Gtk.Box | Gtk.ListBox) {
+    for (let child = box.get_first_child(); child; child = box.get_first_child())
+        box.remove(child);
 }
 
-// A card: a pane of glass with a small heading.
-function card(icon: string, heading: string, body: Gtk.Widget, extraClass?: string): Glass.Panel {
+// A card: a pane of clear glass with a small heading.
+function card(icon: string, heading: string, body: Gtk.Widget): Glass.Panel {
     const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8,
         margin_top: 12, margin_bottom: 12, margin_start: 16, margin_end: 16 });
     const title = new Gtk.Box({ spacing: 6, css_classes: ['card-heading'] });
@@ -137,58 +181,320 @@ function card(icon: string, heading: string, body: Gtk.Widget, extraClass?: stri
     title.append(new Gtk.Label({ label: heading.toUpperCase(), xalign: 0 }));
     box.append(title);
     box.append(body);
-    const panel = new Glass.Panel({ child: box, corner_radius: 22, css_classes: ['weather-card'] });
-    if (extraClass)
-        panel.add_css_class(extraClass);
-    return panel;
+    return new Glass.Panel({ child: box, corner_radius: 22, material: Glass.Material.CLEAR,
+        css_classes: ['weather-card'] });
 }
 
-// A small square card: a heading, a value and a line under it.
+// Two children side by side, the first on a third of the width and the
+// second on two thirds, or one above the other when the first would not fit
+// on a third. Its minimum width is the stacked layout's, so the window can
+// always get narrower (a homogeneous GtkGrid would demand three times the
+// widest child).
+const GAP = 12;
+const WIDE_MIN = 720;
+
+const ThirdsLayout = GObject.registerClass(class ThirdsLayout extends Gtk.Widget {
+    private first: Gtk.Widget;
+    private second: Gtk.Widget;
+
+    constructor(first: Gtk.Widget, second: Gtk.Widget) {
+        super();
+        this.first = first;
+        this.second = second;
+        first.set_parent(this);
+        second.set_parent(this);
+    }
+
+    private split(width: number): [number, number] | null {
+        const firstWidth = Math.floor((width - GAP) / 3);
+        if (width < WIDE_MIN || firstWidth < this.first.measure(Gtk.Orientation.HORIZONTAL, -1)[0])
+            return null;
+        return [firstWidth, width - GAP - firstWidth];
+    }
+
+    vfunc_get_request_mode(): Gtk.SizeRequestMode {
+        return Gtk.SizeRequestMode.HEIGHT_FOR_WIDTH;
+    }
+
+    vfunc_measure(orientation: Gtk.Orientation, forSize: number): [number, number, number, number] {
+        const [a, b] = [this.first, this.second];
+        if (orientation === Gtk.Orientation.HORIZONTAL) {
+            const [amin, anat] = a.measure(orientation, -1);
+            const [bmin, bnat] = b.measure(orientation, -1);
+            return [Math.max(amin, bmin), anat + GAP + bnat, -1, -1];
+        }
+        const split = forSize > 0 ? this.split(forSize) : null;
+        if (split) {
+            const [amin, anat] = a.measure(orientation, split[0]);
+            const [bmin, bnat] = b.measure(orientation, split[1]);
+            return [Math.max(amin, bmin), Math.max(anat, bnat), -1, -1];
+        }
+        const [amin, anat] = a.measure(orientation, forSize);
+        const [bmin, bnat] = b.measure(orientation, forSize);
+        return [amin + GAP + bmin, anat + GAP + bnat, -1, -1];
+    }
+
+    vfunc_size_allocate(width: number, height: number, _baseline: number) {
+        const split = this.split(width);
+        if (split) {
+            this.first.allocate(split[0], height, -1, null);
+            this.second.allocate(split[1], height, -1,
+                new Gsk.Transform().translate(new Graphene.Point({ x: split[0] + GAP, y: 0 })));
+        } else {
+            const firstHeight = this.first.measure(Gtk.Orientation.VERTICAL, width)[1];
+            this.first.allocate(width, firstHeight, -1, null);
+            this.second.allocate(width, Math.max(height - firstHeight - GAP, 0), -1,
+                new Gsk.Transform().translate(new Graphene.Point({ x: 0, y: firstHeight + GAP })));
+        }
+    }
+
+    vfunc_dispose() {
+        this.first?.unparent();
+        this.second?.unparent();
+        super.vfunc_dispose();
+    }
+});
+
+// A tile: a heading, a big value, a line under it, and a picture that
+// takes the rest of the room.
 class Tile {
     readonly panel: Glass.Panel;
     readonly value = new Gtk.Label({ xalign: 0, css_classes: ['value'] });
-    readonly detail = new Gtk.Label({ xalign: 0, wrap: true, css_classes: ['dim'] });
+    readonly detail = new Gtk.Label({ xalign: 0, wrap: true, css_classes: ['detail'] });
 
-    constructor(icon: string, heading: string) {
+    constructor(icon: string, heading: string, visual: Gtk.Widget) {
         const body = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 4, vexpand: true });
         body.append(this.value);
         body.append(this.detail);
-        this.panel = card(icon, heading, body, 'weather-tile');
-        this.panel.set_hexpand(true);
-        this.panel.set_size_request(-1, 128);
+        visual.set_vexpand(true);
+        visual.set_margin_top(6);
+        body.append(visual);
+        this.panel = card(icon, heading, body);
+    }
+}
+
+// A strip that scrolls sideways, with its scrollbar under it (when the
+// strip does not fit) as a widget of its own, so that it has room: a
+// scrolled window's natural height does not count a scrollbar that may
+// show, which then covered the strip's last row.
+function sidewaysStrip(child: Gtk.Widget): Gtk.Box {
+    const scroller = new Gtk.ScrolledWindow({ child, vscrollbar_policy: Gtk.PolicyType.NEVER,
+        hscrollbar_policy: Gtk.PolicyType.EXTERNAL, propagate_natural_height: true });
+    const adjustment = scroller.get_hadjustment();
+    const scrollbar = new Gtk.Scrollbar({ orientation: Gtk.Orientation.HORIZONTAL, adjustment, visible: false });
+    adjustment.connect('changed', () =>
+        scrollbar.set_visible(adjustment.get_upper() - adjustment.get_page_size() > 1));
+    const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6 });
+    box.append(scroller);
+    box.append(scrollbar);
+    return box;
+}
+
+// Minutes since midnight of a local ISO time ("2026-09-27T05:32").
+function minutes(iso: string): number {
+    return Number(iso.slice(11, 13)) * 60 + Number(iso.slice(14, 16));
+}
+
+// A drawing in the text colour (it follows the glass's light / dark).
+function drawing(draw: (cr: cairo.Context, w: number, h: number, c: Gdk.RGBA) => void): Gtk.DrawingArea {
+    const area = new Gtk.DrawingArea({ hexpand: true });
+    area.set_draw_func((a, cr, w, h) => {
+        draw(cr, w, h, a.get_color());
+        cr.$dispose();
+    });
+    return area;
+}
+
+// A place in the sidebar: its name and local time, its temperature, and a
+// button to remove it that shows on hover.
+class PlaceRow {
+    readonly row: Gtk.ListBoxRow;
+    private time = new Gtk.Label({ xalign: 0, css_classes: ['place-time'] });
+    private temp = new Gtk.Label({ valign: Gtk.Align.CENTER, css_classes: ['place-temp'] });
+    private remove: Gtk.Button;
+
+    constructor(readonly place: Place, onRemove: (place: Place) => void) {
+        const text = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, hexpand: true, valign: Gtk.Align.CENTER });
+        text.append(new Gtk.Label({ label: place.name, xalign: 0, ellipsize: 3, css_classes: ['heading'] }));
+        text.append(this.time);
+        this.remove = new Gtk.Button({ icon_name: 'window-close-symbolic', valign: Gtk.Align.CENTER,
+            tooltip_text: `Remove ${place.name}`, opacity: 0, can_target: false, css_classes: ['flat', 'circular'] });
+        this.remove.connect('clicked', () => onRemove(place));
+
+        const box = new Gtk.Box({ spacing: 8, margin_top: 6, margin_bottom: 6, margin_start: 4,
+            css_classes: ['weather-place'] });
+        box.append(text);
+        box.append(this.temp);
+        box.append(this.remove);
+        this.row = new Gtk.ListBoxRow({ child: box });
+
+        const motion = new Gtk.EventControllerMotion();
+        motion.connect('enter', () => this.setRemovable(true));
+        motion.connect('leave', () => this.setRemovable(false));
+        this.row.add_controller(motion);
+    }
+
+    private setRemovable(shown: boolean) {
+        this.remove.set_opacity(shown ? 1 : 0);
+        this.remove.set_can_target(shown);
+    }
+
+    update(forecast: Forecast | undefined, temp: (celsius: number) => string) {
+        this.time.set_label(forecast ? localTime(forecast.utcOffset) : '—');
+        this.temp.set_label(forecast ? temp(forecast.current.temperature) : '');
     }
 }
 
 export class WeatherWindow {
     readonly window: Adw.ApplicationWindow;
     private state = loadState();
-    private forecast: Forecast | null = null;
-    private error: string | null = null;
+    private results = new Map<string, Result>();
     private preview: string = GLib.getenv('GLASS_WEATHER_SKY') ?? 'live';
     private offline = !!GLib.getenv('GLASS_WEATHER_OFFLINE');
-    private loading: Gio.Cancellable | null = null;
+    private loading = new Map<string, Gio.Cancellable>();
     private searching: Gio.Cancellable | null = null;
 
     private sky = new Sky();
+    private split: Glass.SplitView;
     private toolbar: Glass.ToolbarView;
-    private hero: Gtk.Box;
+    private hero!: Gtk.Box;
     private city = new Gtk.Label({ css_classes: ['city'], ellipsize: 3 });
     private temperature = new Gtk.Label({ css_classes: ['temperature'] });
     private conditionLabel = new Gtk.Label({ css_classes: ['condition'] });
     private hilo = new Gtk.Label({ css_classes: ['hilo'] });
     private notice = new Gtk.Label({ css_classes: ['notice'], wrap: true, justify: Gtk.Justification.CENTER });
     private spinner = new Adw.Spinner({ width_request: 32, height_request: 32 });
-    private hours = new Gtk.Box({ spacing: 4 });
+    private hours = new Gtk.Box({ homogeneous: true, hexpand: true });
     private days = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
     private tiles: Record<string, Tile> = {};
-    private attribution: Gtk.Label;
-    private units: Glass.ToggleGroup;
+    private rainHours = new Gtk.Box({ homogeneous: true, hexpand: true });
+    private humidity = 0;           // %
+    private windFrom = 0;           // degrees
+    private sun = { rise: 360, set: 1080, now: 720 };   // minutes since midnight
 
-    private searchButton: Glass.Button;
-    private searchEntry: Glass.SearchEntry;
-    private results: Glass.Panel;
-    private resultList = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-    private shownPlaces: Place[] = [];
+    // The wind: a compass with an arrow the way the wind blows.
+    private windDial = drawing((cr, w, h, c) => {
+        const r = Math.min(w, h) / 2 - 12, cx = w / 2, cy = h / 2;
+        if (r < 12)
+            return;
+        cr.setSourceRGBA(c.red, c.green, c.blue, 0.25);
+        cr.setLineWidth(1.5);
+        cr.arc(cx, cy, r, 0, 2 * Math.PI);
+        cr.stroke();
+        for (let i = 0; i < 36; i++) {
+            const a = i * Math.PI / 18, long = i % 9 === 0;
+            cr.setSourceRGBA(c.red, c.green, c.blue, long ? 0.8 : 0.3);
+            cr.moveTo(cx + Math.sin(a) * (r - (long ? 9 : 5)), cy - Math.cos(a) * (r - (long ? 9 : 5)));
+            cr.lineTo(cx + Math.sin(a) * r, cy - Math.cos(a) * r);
+            cr.stroke();
+        }
+        cr.setSourceRGBA(c.red, c.green, c.blue, 0.7);
+        cr.setFontSize(11);
+        for (const [label, a] of [['N', 0], ['E', 90], ['S', 180], ['W', 270]] as [string, number][]) {
+            const ext = cr.textExtents(label);
+            const rad = a * Math.PI / 180, d = r - 20;
+            cr.moveTo(cx + Math.sin(rad) * d - ext.width / 2, cy - Math.cos(rad) * d + ext.height / 2);
+            cr.showText(label);
+        }
+        // From where it comes, to where it goes.
+        const to = (this.windFrom + 180) * Math.PI / 180, len = r - 26;
+        const tipX = cx + Math.sin(to) * len, tipY = cy - Math.cos(to) * len;
+        cr.setSourceRGBA(c.red, c.green, c.blue, 0.95);
+        cr.setLineWidth(3);
+        cr.moveTo(cx - Math.sin(to) * len, cy + Math.cos(to) * len);
+        cr.lineTo(tipX, tipY);
+        cr.stroke();
+        cr.moveTo(tipX, tipY);
+        cr.lineTo(tipX - Math.sin(to - 0.5) * 12, tipY + Math.cos(to - 0.5) * 12);
+        cr.lineTo(tipX - Math.sin(to + 0.5) * 12, tipY + Math.cos(to + 0.5) * 12);
+        cr.closePath();
+        cr.fill();
+    });
+
+    // The sun: its path from sunrise to sunset over the horizon, with the
+    // part it has done drawn solid and the sun where it is now.
+    private sunArc = drawing((cr, w, h, c) => {
+        const pad = 14, horizon = h - 18, top = 10, x0 = pad, x1 = w - pad;
+        if (horizon - top < 20)
+            return;
+        const point = (t: number): [number, number] =>
+            [x0 + (x1 - x0) * t, horizon - (horizon - top) * Math.sin(Math.PI * t)];
+        const { rise, set, now } = this.sun;
+        const t = Math.min(Math.max((now - rise) / Math.max(set - rise, 1), 0), 1);
+        const up = now > rise && now < set;
+
+        cr.setSourceRGBA(c.red, c.green, c.blue, 0.3);
+        cr.setLineWidth(1);
+        cr.moveTo(0, horizon);
+        cr.lineTo(w, horizon);
+        cr.stroke();
+        cr.setDash([4, 4], 0);
+        cr.setLineWidth(2);
+        for (let i = 0; i <= 48; i++)
+            cr.lineTo(...point(i / 48));
+        cr.stroke();
+        cr.setDash([], 0);
+        if (t > 0) {
+            cr.setSourceRGBA(1, 0.78, 0.25, 0.9);
+            cr.setLineWidth(3);
+            for (let i = 0; i <= 48; i++)
+                cr.lineTo(...point(t * i / 48));
+            cr.stroke();
+        }
+        const [sx, sy] = point(t);
+        const glow = new cairo.RadialGradient(sx, sy, 0, sx, sy, 18);
+        glow.addColorStopRGBA(0, 1, 0.85, 0.35, up ? 0.7 : 0.2);
+        glow.addColorStopRGBA(1, 1, 0.85, 0.35, 0);
+        cr.setSource(glow);
+        cr.arc(sx, sy, 18, 0, 2 * Math.PI);
+        cr.fill();
+        cr.setSourceRGBA(1, 0.82, 0.3, up ? 1 : 0.45);
+        cr.arc(sx, sy, 7, 0, 2 * Math.PI);
+        cr.fill();
+    });
+
+    // Humidity as a gauge under the "feels like".
+    private humidityGauge(): Gtk.Widget {
+        const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6, valign: Gtk.Align.END });
+        this.humidityLabel = new Gtk.Label({ xalign: 0, css_classes: ['detail'] });
+        box.append(this.humidityLabel);
+        const bar = drawing((cr, w, h, c) => {
+            cr.setSourceRGBA(c.red, c.green, c.blue, 0.16);
+            roundedBar(cr, 0, 0, w, h);
+            cr.fill();
+            const gradient = new cairo.LinearGradient(0, 0, w, 0);
+            gradient.addColorStopRGB(0, 0.55, 0.8, 1);
+            gradient.addColorStopRGB(1, 0.15, 0.45, 0.95);
+            cr.setSource(gradient);
+            roundedBar(cr, 0, 0, Math.max(w * this.humidity / 100, h), h);
+            cr.fill();
+        });
+        bar.set_content_height(8);
+        bar.set_vexpand(false);
+        box.append(bar);
+        this.humidityBar = bar;
+        return box;
+    }
+
+    private humidityLabel!: Gtk.Label;
+    private humidityBar!: Gtk.DrawingArea;
+    private attribution!: Gtk.Label;
+    private units!: Glass.ToggleGroup;
+
+    // The sidebar: the search field, then the places (or what it found).
+    private sidebarSearch!: Glass.SearchEntry;
+    private sidebarStack = new Gtk.Stack({ vexpand: true });
+    private placeList = new Gtk.ListBox({ css_classes: ['navigation-sidebar'] });
+    private foundList = new Gtk.ListBox({ css_classes: ['navigation-sidebar'], selection_mode: Gtk.SelectionMode.NONE });
+    private rows = new Map<string, PlaceRow>();
+
+    // The header's search: a button whose glass becomes a field, and what
+    // it finds in a glass popover under it.
+    private searchButton!: Glass.Button;
+    private headerSearch!: Glass.SearchEntry;
+    private foundPopover!: Glass.Popover;
+    private foundBox = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, css_classes: ['glass-menu'] });
+    private found: Place[] = [];
 
     constructor(app: Adw.Application) {
         const provider = new Gtk.CssProvider();
@@ -197,40 +503,65 @@ export class WeatherWindow {
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         this.window = new Adw.ApplicationWindow({ application: app, title: 'Glass Weather',
-            default_width: 470, default_height: 880, width_request: 360, height_request: 560 });
+            default_width: 1180, default_height: 800, width_request: 360, height_request: 560 });
 
+        this.toolbar = this.buildWeather();
+        const sidebar = this.buildSidebar();
+        this.split = new Glass.SplitView({ sidebar, content: this.toolbar });
+        this.window.set_content(this.split);
+        this.buildHeaders();
+
+        this.addActions();
+        this.fillPlaces();
+        this.refresh(false);
+        this.show();
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, REFRESH_MS, () => {
+            this.refresh(false);
+            return GLib.SOURCE_CONTINUE;
+        });
+        // The places' local times.
+        GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 20, () => {
+            this.updateRows();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    // ── Building ──
+
+    private buildWeather(): Glass.ToolbarView {
         // The hero: the place and the weather now, straight on the sky.
         this.hero = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, halign: Gtk.Align.CENTER,
             margin_top: 18, margin_bottom: 18, css_classes: ['weather-hero'] });
         for (const w of [this.city, this.spinner, this.temperature, this.conditionLabel, this.hilo, this.notice])
             this.hero.append(w);
 
-        // Hourly: a strip that scrolls sideways inside its glass.
-        const hourScroller = new Gtk.ScrolledWindow({ child: this.hours, vscrollbar_policy: Gtk.PolicyType.NEVER,
-            hscrollbar_policy: Gtk.PolicyType.EXTERNAL, propagate_natural_height: true });
+        // Hourly: the whole width; a scrollbar when the hours do not fit.
         const hourBody = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 8 });
         hourBody.append(new Gtk.Separator());
-        hourBody.append(hourScroller);
+        hourBody.append(sidewaysStrip(this.hours));
         const hourly = card('document-open-recent-symbolic', 'Hourly Forecast', hourBody);
 
-        const dayBody = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
-        dayBody.append(this.days);
-        const daily = card('x-office-calendar-symbolic', '10-Day Forecast', dayBody);
+        const daily = card('x-office-calendar-symbolic', '10-Day Forecast', this.days);
 
-        // Small cards, two to a row.
-        const grid = new Gtk.Grid({ column_spacing: 12, row_spacing: 12, column_homogeneous: true });
-        const TILES: [string, string, string][] = [
-            ['feels', 'temperature-symbolic', 'Feels Like'],
-            ['humidity', 'weather-fog-symbolic', 'Humidity'],
-            ['wind', 'weather-windy-symbolic', 'Wind'],
-            ['uv', 'weather-clear-symbolic', 'UV Index'],
-            ['sun', 'daytime-sunset-symbolic', 'Sunrise'],
-            ['rain', 'weather-showers-symbolic', 'Precipitation'],
+        // Four tiles, two by two, each with a picture.
+        const tileGrid = new Gtk.Grid({ column_spacing: 12, row_spacing: 12, column_homogeneous: true,
+            row_homogeneous: true });
+        const rain = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, valign: Gtk.Align.END });
+        rain.append(sidewaysStrip(this.rainHours));
+        const TILES: [string, string, string, Gtk.Widget][] = [
+            ['feels', 'temperature-symbolic', 'Feels Like', this.humidityGauge()],
+            ['wind', 'weather-windy-symbolic', 'Wind', this.windDial],
+            ['rain', 'weather-showers-symbolic', 'Precipitation', rain],
+            ['sun', 'daytime-sunset-symbolic', 'Sunrise & Sunset', this.sunArc],
         ];
-        TILES.forEach(([key, icon, heading], i) => {
-            this.tiles[key] = new Tile(icon, heading);
-            grid.attach(this.tiles[key].panel, i % 2, Math.floor(i / 2), 1, 1);
+        TILES.forEach(([key, icon, heading, visual], i) => {
+            this.tiles[key] = new Tile(icon, heading, visual);
+            tileGrid.attach(this.tiles[key].panel, i % 2, Math.floor(i / 2), 1, 1);
         });
+
+        // The 10 days on the left third, the tiles on the right two thirds;
+        // one above the other when there is no room.
+        const grid = new ThirdsLayout(daily, tileGrid);
 
         // Open-Meteo's licence asks for this next to the data. A plain label
         // that opens the site: a theme colours links, which on the sky would
@@ -244,17 +575,84 @@ export class WeatherWindow {
         this.attribution.add_controller(click);
 
         const column = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 12,
-            margin_start: 16, margin_end: 16, margin_bottom: 96 });
-        for (const w of [this.hero, hourly, daily, grid, this.attribution])
+            margin_start: 16, margin_end: 16, margin_bottom: 24 });
+        for (const w of [this.hero, hourly, grid, this.attribution])
             column.append(w);
-        const scroller = new Gtk.ScrolledWindow({ hscrollbar_policy: Gtk.PolicyType.NEVER,
-            child: new Adw.Clamp({ maximum_size: 560, tightening_threshold: 420, child: column }) });
 
+        const scroller = new Gtk.ScrolledWindow({ hscrollbar_policy: Gtk.PolicyType.NEVER, child: column });
         const view = new Glass.View({ content: this.sky.widget });
         view.add_overlay(scroller);
 
-        // The header: units in the middle, the menu at the end.
+        const toolbar = new Glass.ToolbarView({ content: view });
+        toolbar.set_top_edge_style(Glass.EdgeStyle.NONE);
+        toolbar.bind_property_full('top-bar-height', column, 'margin-top', GObject.BindingFlags.SYNC_CREATE,
+            (_binding, value: number) => [true, value + 4], null);
+        this.column = column;
+        return toolbar;
+    }
+
+    private column!: Gtk.Box;
+
+    private buildSidebar(): Gtk.Widget {
+        // At the top, a search field already open.
+        this.sidebarSearch = new Glass.SearchEntry({ placeholder_text: 'Search for a city',
+            margin_start: 10, margin_end: 10, margin_top: 2, margin_bottom: 8 });
+        this.sidebarSearch.connect('search-changed', () => this.search(this.sidebarSearch.get_text()));
+        this.sidebarSearch.connect('activate', () => {
+            if (this.found.length > 0)
+                this.choose(this.found[0]);
+        });
+        this.sidebarSearch.connect('stop-search', () => this.sidebarSearch.set_text(''));
+
+        this.placeList.connect('row-activated', (_list, row: Gtk.ListBoxRow) => {
+            for (const r of this.rows.values())
+                if (r.row === row)
+                    this.choose(r.place);
+        });
+        this.foundList.connect('row-activated', (_list, row: Gtk.ListBoxRow) => {
+            const place = this.found[row.get_index()];
+            if (place)
+                this.choose(place);
+        });
+        this.sidebarStack.add_named(new Gtk.ScrolledWindow({ child: this.placeList,
+            hscrollbar_policy: Gtk.PolicyType.NEVER }), 'places');
+        this.sidebarStack.add_named(new Gtk.ScrolledWindow({ child: this.foundList,
+            hscrollbar_policy: Gtk.PolicyType.NEVER }), 'found');
+
+        const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL });
+        box.append(this.sidebarSearch);
+        box.append(this.sidebarStack);
+
+        const sidebar = new Glass.ToolbarView({ content: box });
+        sidebar.set_top_edge_style(Glass.EdgeStyle.NONE);
+        sidebar.bind_property('top-bar-height', box, 'margin-top', GObject.BindingFlags.SYNC_CREATE);
+        this.sidebarToolbar = sidebar;
+        return sidebar;
+    }
+
+    private sidebarToolbar!: Glass.ToolbarView;
+
+    // The two header bars, and what shows or hides with the sidebar.
+    private buildHeaders() {
+        const sidebarHeader = new Glass.HeaderBar({ show_title: false, show_end_title_buttons: false });
+        const hide = new Gtk.Button({ icon_name: 'sidebar-show-symbolic', tooltip_text: 'Hide the places' });
+        hide.connect('clicked', () => this.split.set_show_sidebar(false));
+        sidebarHeader.pack_end(hide);
+        this.sidebarToolbar.add_top_bar(sidebarHeader);
+
         const header = new Glass.HeaderBar();
+        const show = new Gtk.Button({ icon_name: 'sidebar-show-symbolic', tooltip_text: 'Show the places' });
+        show.connect('clicked', () => this.split.set_show_sidebar(true));
+        header.pack_start(show);
+        this.split.bind_property('show-sidebar', show, 'visible',
+            GObject.BindingFlags.SYNC_CREATE | GObject.BindingFlags.INVERT_BOOLEAN);
+        this.split.bind_property('show-sidebar', header, 'show-start-title-buttons',
+            GObject.BindingFlags.SYNC_CREATE | GObject.BindingFlags.INVERT_BOOLEAN);
+        for (const widget of [header as Gtk.Widget, this.column])
+            this.split.bind_property_full('content-inset', widget, 'margin-start', GObject.BindingFlags.SYNC_CREATE,
+                (_binding, value: number) => [true, value + (widget === this.column ? 16 : 0)], null);
+
+        // Units in the middle.
         this.units = new Glass.ToggleGroup();
         this.units.append('c', '°C', null);
         this.units.append('f', '°F', null);
@@ -263,60 +661,56 @@ export class WeatherWindow {
             this.state.fahrenheit = this.units.get_active_name() === 'f';
             saveState(this.state);
             this.show();
+            this.updateRows();
         });
         header.set_title_widget(this.units);
+
+        // At the end: the menu, and to its left the search, closed: a glass
+        // button whose glass becomes the field's (morph-id).
         header.pack_end(new Glass.MenuButton({ icon_name: 'open-menu-symbolic', menu_model: this.menu(),
             tooltip_text: 'Menu' }));
-
-        // The search at the bottom: the button's glass becomes the field's
-        // (morph-id), and the list of places comes out of the field.
+        // Refresh: a piece of glass of its own, left of the menu.
+        const refresh = Glass.Button.new_from_icon_name('view-refresh-symbolic');
+        refresh.set_tooltip_text('Refresh');
+        refresh.set_action_name('win.refresh');
+        header.pack_end(refresh);
         this.searchButton = Glass.Button.new_from_icon_name('edit-find-symbolic');
-        this.searchButton.set_morph_id('search');
-        this.searchButton.set_tooltip_text('Search for a City');
-        this.searchButton.connect('clicked', () => this.setSearching(true));
-        // Frosted like the list above it (a group's panels share the first
-        // one's material), so the text reads over the cards.
-        this.searchEntry = new Glass.SearchEntry({ morph_id: 'search', visible: false, width_request: 300,
-            placeholder_text: 'Search for a city', material: Glass.Material.MENU });
-        this.searchEntry.connect('search-changed', () => this.search());
-        this.searchEntry.connect('activate', () => {
-            if (this.shownPlaces.length > 0)
-                this.choose(this.shownPlaces[0]);
+        this.searchButton.set_morph_id('header-search');
+        this.searchButton.set_tooltip_text('Search for a city');
+        this.searchButton.connect('clicked', () => this.setHeaderSearching(true));
+        this.headerSearch = new Glass.SearchEntry({ morph_id: 'header-search', visible: false, width_request: 260,
+            placeholder_text: 'Search for a city' });
+        this.headerSearch.connect('search-changed', () => this.search(this.headerSearch.get_text()));
+        this.headerSearch.connect('activate', () => {
+            if (this.found.length > 0)
+                this.choose(this.found[0]);
         });
-        this.searchEntry.connect('stop-search', () => this.setSearching(false));
-        // A list over busy cards: the menu material, frosted enough to read.
-        this.results = new Glass.Panel({ child: this.resultList, corner_radius: 20, visible: false,
-            width_request: 300, material: Glass.Material.MENU, css_classes: ['weather-card'] });
-        this.resultList.set_margin_top(6);
-        this.resultList.set_margin_bottom(6);
-        const searchRow = new Gtk.Box({ halign: Gtk.Align.CENTER });
+        this.headerSearch.connect('stop-search', () => this.setHeaderSearching(false));
+        const focus = new Gtk.EventControllerFocus();
+        focus.connect('leave', () => {
+            if (this.headerSearch.get_text() === '')
+                this.setHeaderSearching(false);
+        });
+        this.headerSearch.add_controller(focus);
+        const searchRow = new Gtk.Box();
         searchRow.append(this.searchButton);
-        searchRow.append(this.searchEntry);
-        const bottom = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 12, halign: Gtk.Align.CENTER,
-            margin_bottom: 18 });
-        bottom.append(this.results);
-        bottom.append(searchRow);
+        searchRow.append(this.headerSearch);
+        header.pack_end(new Glass.Group({ child: searchRow }));
 
-        this.toolbar = new Glass.ToolbarView({ content: view });
+        // What the header's search finds: a glass popover under the field
+        // that does not take the keyboard from it.
+        this.foundPopover = new Glass.Popover({ autohide: false, position: Gtk.PositionType.BOTTOM,
+            halign: Gtk.Align.END });
+        this.foundPopover.add_css_class('menu');
+        this.foundPopover.set_offset(0, 4);
+        this.foundPopover.set_child(this.foundBox);
+        this.foundPopover.set_parent(this.headerSearch);
+
         this.toolbar.add_top_bar(header);
-        this.toolbar.add_bottom_bar(new Glass.Group({ child: bottom, halign: Gtk.Align.CENTER }));
-        this.toolbar.set_top_edge_style(Glass.EdgeStyle.NONE);
-        this.toolbar.set_bottom_edge_style(Glass.EdgeStyle.NONE);
-        this.toolbar.bind_property_full('top-bar-height', column, 'margin-top', GObject.BindingFlags.SYNC_CREATE,
-            (_binding, value: number) => [true, value + 4], null);
-        this.window.set_content(this.toolbar);
-
-        this.addActions();
-        this.load(false);
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, REFRESH_MS, () => {
-            this.load(false);
-            return GLib.SOURCE_CONTINUE;
-        });
     }
 
     private menu(): Gio.Menu {
         const menu = new Gio.Menu();
-        menu.append('Refresh', 'win.refresh');
         const skies = new Gio.Menu();
         const SKIES: [string, string][] = [
             ['live', 'Live Weather'], ['clear-day', 'Clear'], ['clear-night', 'Clear Night'],
@@ -334,7 +728,7 @@ export class WeatherWindow {
 
     private addActions() {
         const refresh = new Gio.SimpleAction({ name: 'refresh' });
-        refresh.connect('activate', () => this.load(true));
+        refresh.connect('activate', () => this.refresh(true));
         this.window.add_action(refresh);
 
         const sky = new Gio.SimpleAction({ name: 'sky', parameter_type: new GLib.VariantType('s') });
@@ -366,33 +760,97 @@ export class WeatherWindow {
         dialog.present(this.window);
     }
 
+    // ── Places ──
+
+    private fillPlaces() {
+        removeAll(this.placeList);
+        this.rows.clear();
+        for (const place of this.state.places) {
+            const row = new PlaceRow(place, p => this.removePlace(p));
+            this.rows.set(placeKey(place), row);
+            this.placeList.append(row.row);
+        }
+        this.selectRow();
+        this.updateRows();
+    }
+
+    private selectRow() {
+        const row = this.rows.get(placeKey(this.state.place));
+        if (row)
+            this.placeList.select_row(row.row);
+    }
+
+    private updateRows() {
+        for (const [key, row] of this.rows)
+            row.update(this.results.get(key)?.forecast, c => this.temp(c));
+    }
+
+    private removePlace(place: Place) {
+        if (this.state.places.length <= 1)
+            return;
+        const key = placeKey(place);
+        this.state.places = this.state.places.filter(p => placeKey(p) !== key);
+        const row = this.rows.get(key);
+        if (row)
+            this.placeList.remove(row.row);
+        this.rows.delete(key);
+        if (placeKey(this.state.place) === key)
+            this.choose(this.state.places[0]);
+        saveState(this.state);
+    }
+
+    private choose(place: Place) {
+        const key = placeKey(place);
+        if (!this.state.places.some(p => placeKey(p) === key)) {
+            this.state.places.push(place);
+            const row = new PlaceRow(place, p => this.removePlace(p));
+            this.rows.set(key, row);
+            this.placeList.append(row.row);
+            this.load(place, false);
+        }
+        this.state.place = place;
+        saveState(this.state);
+        this.sidebarSearch.set_text('');
+        this.setHeaderSearching(false);
+        this.selectRow();
+        this.preview = 'live';
+        this.show();
+    }
+
     // ── Data ──
 
-    private async load(force: boolean) {
-        this.loading?.cancel();
+    private refresh(force: boolean) {
+        for (const place of this.state.places)
+            this.load(place, force);
+    }
+
+    private async load(place: Place, force: boolean) {
+        const key = placeKey(place);
+        this.loading.get(key)?.cancel();
         const cancellable = new Gio.Cancellable();
-        this.loading = cancellable;
-        this.spinner.set_visible(this.forecast === null);
-        const place = this.state.place;
+        this.loading.set(key, cancellable);
+        this.updateSpinner();
         try {
-            if (this.offline) {
-                this.forecast = sampleForecast(place, 'partly', true);
-                this.error = 'GLASS_WEATHER_OFFLINE is set';
-            } else {
-                const result = await getForecast(place, force, cancellable);
-                this.forecast = result.forecast;
-                this.error = result.error;
-            }
-            this.show();
+            const result = this.offline
+                ? { forecast: sampleForecast(place, 'partly', true), error: 'GLASS_WEATHER_OFFLINE is set' }
+                : await getForecast(place, force, cancellable);
+            this.results.set(key, result);
+            this.rows.get(key)?.update(result.forecast, c => this.temp(c));
+            if (key === placeKey(this.state.place))
+                this.show();
         } catch (e) {
             if (!(e as GLib.Error).matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 logError(e as Error);
         } finally {
-            if (this.loading === cancellable) {
-                this.loading = null;
-                this.spinner.set_visible(false);
-            }
+            if (this.loading.get(key) === cancellable)
+                this.loading.delete(key);
+            this.updateSpinner();
         }
+    }
+
+    private updateSpinner() {
+        const key = placeKey(this.state.place);
+        this.spinner.set_visible(this.loading.has(key) && !this.results.has(key));
     }
 
     private temp(celsius: number): string {
@@ -402,9 +860,16 @@ export class WeatherWindow {
     // ── Showing the forecast ──
 
     private show() {
-        let f = this.forecast;
-        if (!f)
+        this.updateSpinner();
+        const result = this.results.get(placeKey(this.state.place));
+        this.city.set_label(this.state.place.name);
+        this.city.set_tooltip_text(this.state.place.region);
+        if (!result) {
+            for (const w of [this.temperature, this.conditionLabel, this.hilo, this.notice])
+                w.set_label('');
             return;
+        }
+        let f = result.forecast;
 
         // The preview replaces the weather with made-up weather under the
         // chosen sky, to see the glass (and its colours) over every sky.
@@ -425,8 +890,6 @@ export class WeatherWindow {
         }
 
         const today = f.daily[0];
-        this.city.set_label(f.place.name);
-        this.city.set_tooltip_text(f.place.region);
         this.temperature.set_label(this.temp(f.current.temperature));
         this.conditionLabel.set_label(condition(f.current.code).text);
         this.hilo.set_label(`H:${this.temp(today.max)}  L:${this.temp(today.min)}`);
@@ -434,8 +897,8 @@ export class WeatherWindow {
         if (this.preview !== 'live')
             this.notice.set_label('Preview — made-up weather under this sky');
         else if (f.sample)
-            this.notice.set_label(`Sample data — the forecast could not be loaded (${this.error})`);
-        else if (this.error)
+            this.notice.set_label(`Sample data — the forecast could not be loaded (${result.error})`);
+        else if (result.error)
             this.notice.set_label(`Offline — the forecast from ${fetched}`);
         else
             this.notice.set_label(`Updated ${fetched}`);
@@ -446,10 +909,9 @@ export class WeatherWindow {
     }
 
     private showHours(f: Forecast) {
-        for (let child = this.hours.get_first_child(); child; child = this.hours.get_first_child())
-            this.hours.remove(child);
+        removeAll(this.hours);
         f.hourly.forEach((hour, i) => {
-            const column = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6, width_request: 50,
+            const column = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 6, width_request: 56,
                 css_classes: ['weather-hour'] });
             column.append(new Gtk.Label({ label: i === 0 ? 'Now' : clockTime(hour.time).slice(0, 2),
                 css_classes: i === 0 ? ['temp'] : [] }));
@@ -462,8 +924,7 @@ export class WeatherWindow {
     }
 
     private showDays(f: Forecast) {
-        for (let child = this.days.get_first_child(); child; child = this.days.get_first_child())
-            this.days.remove(child);
+        removeAll(this.days);
         const low = Math.min(...f.daily.map(d => d.min));
         const high = Math.max(...f.daily.map(d => d.max));
         f.daily.forEach((day, i) => {
@@ -474,9 +935,9 @@ export class WeatherWindow {
     }
 
     private dayRow(day: Day, index: number, low: number, high: number, now: number | null): Gtk.Widget {
-        const row = new Gtk.Box({ spacing: 10, margin_top: 6, margin_bottom: 6, css_classes: ['weather-day'] });
-        row.append(new Gtk.Label({ label: weekday(day.date, index), xalign: 0, width_chars: 6, css_classes: ['day'] }));
-        const icon = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, width_request: 36, valign: Gtk.Align.CENTER });
+        const row = new Gtk.Box({ spacing: 8, margin_top: 6, margin_bottom: 6, css_classes: ['weather-day'] });
+        row.append(new Gtk.Label({ label: weekday(day.date, index), xalign: 0, width_chars: 5, css_classes: ['day'] }));
+        const icon = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, width_request: 32, valign: Gtk.Align.CENTER });
         icon.append(new Gtk.Image({ icon_name: iconFor(day.code, true), pixel_size: 20 }));
         if (day.precipitation >= 20)
             icon.append(new Gtk.Label({ label: `${day.precipitation}%`, css_classes: ['precip'] }));
@@ -484,7 +945,7 @@ export class WeatherWindow {
         row.append(new Gtk.Label({ label: this.temp(day.min), width_chars: 4, xalign: 1, css_classes: ['dim', 'temp'] }));
 
         // The day's range on the scale of the whole ten days.
-        const bar = new Gtk.DrawingArea({ content_height: 6, hexpand: true, valign: Gtk.Align.CENTER });
+        const bar = new Gtk.DrawingArea({ content_height: 6, content_width: 40, hexpand: true, valign: Gtk.Align.CENTER });
         bar.set_draw_func((area, cr, w, h) => {
             const color = area.get_color();
             const x = (t: number) => (t - low) / Math.max(high - low, 1) * w;
@@ -519,82 +980,127 @@ export class WeatherWindow {
         t.feels.value.set_label(this.temp(c.apparent));
         t.feels.detail.set_label(Math.abs(c.apparent - c.temperature) < 1.5 ? 'Close to the actual temperature.'
             : c.apparent > c.temperature ? 'Humidity makes it feel warmer.' : 'Wind makes it feel colder.');
-        t.humidity.value.set_label(`${Math.round(c.humidity)}%`);
-        t.humidity.detail.set_label(c.humidity > 80 ? 'Very humid.' : c.humidity < 30 ? 'Dry air.' : 'Comfortable.');
+        this.humidity = c.humidity;
+        this.humidityLabel.set_label(`Humidity ${Math.round(c.humidity)}%`);
+        this.humidityBar.queue_draw();
+
         const wind = this.state.fahrenheit ? `${Math.round(c.wind / 1.609)} mph` : `${Math.round(c.wind)} km/h`;
         t.wind.value.set_label(wind);
-        t.wind.detail.set_label(`From the ${COMPASS[Math.round(c.windDirection / 45) % 8]}.`);
-        t.uv.value.set_label(`${Math.round(today.uv)}`);
-        t.uv.detail.set_label(uvText(today.uv));
-        t.sun.value.set_label(clockTime(today.sunrise));
-        t.sun.detail.set_label(`Sunset ${clockTime(today.sunset)}`);
-        t.rain.value.set_label(`${today.precipitationSum.toFixed(today.precipitationSum < 10 ? 1 : 0)} mm`);
-        t.rain.detail.set_label(`Today, with a ${today.precipitation}% chance.`);
+        t.wind.detail.set_label(`From the ${COMPASS[Math.round(c.windDirection / 45) % 8]}`);
+        this.windFrom = c.windDirection;
+        this.windDial.queue_draw();
+
+        t.rain.value.set_label(`${today.precipitationSum.toFixed(today.precipitationSum < 10 ? 1 : 0)} mm today`);
+        t.rain.detail.set_label(`${today.precipitation}% chance · the next 48 hours:`);
+        this.showRain(f);
+
+        t.sun.value.set_label(`↑ ${clockTime(today.sunrise)}`);
+        t.sun.detail.set_label(`↓ Sunset ${clockTime(today.sunset)}`);
+        this.sun = { rise: minutes(today.sunrise), set: minutes(today.sunset), now: minutes(c.time) };
+        this.sunArc.queue_draw();
+    }
+
+    // The rain, hour by hour: a bar for each hour (full at 4 mm, or at the
+    // wettest hour), the amount over it.
+    private showRain(f: Forecast) {
+        removeAll(this.rainHours);
+        const most = Math.max(4, ...f.hourly.map(h => h.rain));
+        f.hourly.forEach((hour, i) => {
+            const column = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 3, width_request: 40 });
+            column.append(new Gtk.Label({ label: hour.rain >= 0.1 ? hour.rain.toFixed(1) : ' ',
+                css_classes: ['precip'] }));
+            const bar = drawing((cr, w, h, c) => {
+                const bw = 10, x = (w - bw) / 2;
+                cr.setSourceRGBA(c.red, c.green, c.blue, 0.12);
+                roundedColumn(cr, x, 0, bw, h);
+                cr.fill();
+                const fill = Math.max(h * Math.min(hour.rain / most, 1), hour.rain > 0 ? bw : 0);
+                if (fill > 0) {
+                    cr.setSourceRGBA(0.3, 0.62, 1, 0.95);
+                    roundedColumn(cr, x, h - fill, bw, fill);
+                    cr.fill();
+                }
+            });
+            bar.set_content_height(44);
+            column.append(bar);
+            column.append(new Gtk.Label({ label: i === 0 ? 'Now' : clockTime(hour.time).slice(0, 2),
+                css_classes: ['rain-hour'] }));
+            this.rainHours.append(column);
+        });
     }
 
     // ── Search ──
 
-    private setSearching(searching: boolean) {
+    // The header's search opens (the button's glass becomes the field's) or
+    // closes; what it found goes with it.
+    private setHeaderSearching(searching: boolean) {
+        if (this.headerSearch.get_visible() === searching)
+            return;
         this.searching?.cancel();
+        this.foundPopover.popdown();
+        if (!searching)
+            this.headerSearch.set_text('');
         this.searchButton.set_visible(!searching);
-        this.searchEntry.set_visible(searching);
-        this.results.set_visible(false);
-        if (searching) {
-            this.searchEntry.set_text('');
-            this.searchEntry.grab_focus();
-            // The recent places come out of the field once it has formed.
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 320, () => {
-                if (this.searchEntry.get_visible() && this.searchEntry.get_text() === '')
-                    this.showPlaces(this.state.recents, null);
-                return GLib.SOURCE_REMOVE;
-            });
-        }
+        this.headerSearch.set_visible(searching);
+        if (searching)
+            this.headerSearch.grab_focus();
     }
 
-    private async search() {
-        const query = this.searchEntry.get_text().trim();
+    private async search(text: string) {
+        const query = text.trim();
         this.searching?.cancel();
         if (query === '') {
-            this.showPlaces(this.state.recents, null);
+            this.showFound([], null);
             return;
         }
         const cancellable = new Gio.Cancellable();
         this.searching = cancellable;
         try {
             const places = await searchPlaces(query, cancellable);
-            this.showPlaces(places, places.length ? null : 'No places found');
+            this.showFound(places, places.length ? null : 'No places found');
         } catch (e) {
             if (!(e as GLib.Error).matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
-                this.showPlaces([], `Cannot search: ${(e as Error).message}`);
+                this.showFound([], `Cannot search: ${(e as Error).message}`);
         }
     }
 
-    private showPlaces(places: Place[], message: string | null) {
-        for (let child = this.resultList.get_first_child(); child; child = this.resultList.get_first_child())
-            this.resultList.remove(child);
-        this.shownPlaces = places;
+    // What the search found: in the sidebar in place of the places, or
+    // under the header's field.
+    private showFound(places: Place[], message: string | null) {
+        this.found = places;
+        const inHeader = this.headerSearch.get_visible();
+        removeAll(this.foundList);
+        removeAll(this.foundBox);
         for (const place of places) {
-            const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, css_classes: ['weather-result'] });
-            box.append(new Gtk.Label({ label: place.name, xalign: 0, css_classes: ['heading'] }));
-            box.append(new Gtk.Label({ label: place.region, xalign: 0, css_classes: ['region'], ellipsize: 3 }));
-            const button = new Gtk.Button({ child: box, has_frame: false, margin_start: 6, margin_end: 6 });
-            button.connect('clicked', () => this.choose(place));
-            this.resultList.append(button);
+            const text = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, css_classes: ['weather-result'] });
+            text.append(new Gtk.Label({ label: place.name, xalign: 0, css_classes: ['heading'] }));
+            text.append(new Gtk.Label({ label: place.region, xalign: 0, css_classes: ['region'], ellipsize: 3 }));
+            if (inHeader) {
+                // (css_classes replaces the .flat that has_frame: false adds)
+                const button = new Gtk.Button({ child: text, can_focus: false,
+                    css_classes: ['flat', 'glass-menu-item'] });
+                button.connect('clicked', () => this.choose(place));
+                this.foundBox.append(button);
+            } else {
+                this.foundList.append(new Gtk.ListBoxRow({ child: text }));
+            }
         }
-        if (message)
-            this.resultList.append(new Gtk.Label({ label: message, wrap: true, margin_top: 8, margin_bottom: 8,
-                margin_start: 16, margin_end: 16, css_classes: ['dim'] }));
-        this.results.set_visible(this.searchEntry.get_visible() && (places.length > 0 || message !== null));
-    }
-
-    private choose(place: Place) {
-        const same = (a: Place, b: Place) => a.latitude === b.latitude && a.longitude === b.longitude;
-        this.state.place = place;
-        this.state.recents = [place, ...this.state.recents.filter(p => !same(p, place))].slice(0, 5);
-        saveState(this.state);
-        this.setSearching(false);
-        this.preview = 'live';
-        this.forecast = null;
-        this.load(false);
+        if (message) {
+            const label = new Gtk.Label({ label: message, wrap: true, xalign: 0, margin_top: 8, margin_bottom: 8,
+                margin_start: 12, margin_end: 12, css_classes: ['dim-label'] });
+            if (inHeader)
+                this.foundBox.append(label);
+            else
+                this.foundList.append(new Gtk.ListBoxRow({ child: label, activatable: false }));
+        }
+        const any = places.length > 0 || message !== null;
+        if (inHeader) {
+            if (any)
+                this.foundPopover.popup();
+            else
+                this.foundPopover.popdown();
+        } else {
+            this.sidebarStack.set_visible_child_name(any ? 'found' : 'places');
+        }
     }
 }
