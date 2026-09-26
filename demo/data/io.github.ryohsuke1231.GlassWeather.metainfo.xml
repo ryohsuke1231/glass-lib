@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ryohsuke1231.GlassWeather</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Glass Weather</name>
+  <summary>The weather on cards of glass</summary>
+  <description>
+    <p>
+      A showcase of glass-lib: the forecast on cards of refracting glass over a
+      moving sky drawn in code. The text on the glass turns dark or light with
+      what is under it.
+    </p>
+    <p>
+      Weather data by Open-Meteo.com (CC BY 4.0). This is an unofficial project,
+      not affiliated with or endorsed by Apple Inc.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.ryohsuke1231.GlassWeather.desktop</launchable>
+  <url type="homepage">https://github.com/ryohsuke1231/glass-lib</url>
+  <developer id="io.github.ryohsuke1231">
+    <name>The glass-lib authors</name>
+  </developer>
+  <content_rating type="oars-1.1" />
+  <supports>
+    <internet>always</internet>
+  </supports>
+  <releases>
+    <release version="0.0.1" date="2026-09-26" />
+  </releases>
+</component>

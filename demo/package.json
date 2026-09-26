@@ -13,6 +13,7 @@
     "@girs/adw-1": "^5.4.0",
     "@girs/gjs": "^5.4.0",
     "@girs/gtk-4.0": "^5.4.0",
+    "@girs/soup-3.0": "^5.4.0",
     "@ts-for-gir/cli": "^5.4.0",
     "typescript": "^6.0.3"
   }

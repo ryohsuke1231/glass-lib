@@ -11,8 +11,10 @@ import Glass from 'gi://Glass?version=1';
 import cairo from 'cairo';
 
 // Photos are not shipped (licences, design.md §14): the system wallpapers,
-// downscaled once and shared by every picture that shows them.
-const PHOTO_DIRS = ['/usr/share/backgrounds', '/usr/share/backgrounds/gnome'];
+// downscaled once and shared by every picture that shows them. In the
+// Flatpak they are the host's, under /run/host (--filesystem=host-os:ro).
+const PHOTO_DIRS = ['/usr/share/backgrounds', '/usr/share/backgrounds/gnome',
+    '/run/host/usr/share/backgrounds', '/run/host/usr/share/backgrounds/gnome'];
 const PHOTO_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
 
 let photoCache: Gdk.Texture[] | null = null;

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Glass Weather
+Comment=The weather on cards of glass (a glass-lib demo)
+Exec=glass-weather
+Icon=io.github.ryohsuke1231.GlassWeather
+Terminal=false
+Type=Application
+Categories=GNOME;GTK;Utility;
+Keywords=weather;forecast;glass;demo;
+StartupNotify=true

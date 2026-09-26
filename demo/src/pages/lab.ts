@@ -1,7 +1,9 @@
-// Lab: every optical parameter as a slider, the renderer switch, reduced
-// transparency, over a background of your choice (design.md §14). The
-// inspector is itself a pane of thick glass.
+// Lab: every optical parameter as a slider, the tint, the renderer switch,
+// reduced transparency, over a background of your choice (design.md §14).
+// The inspector is itself a pane of thick glass. Everything here is set on
+// Glass.Context, so it tunes every piece of glass in the app at once.
 
+import Gdk from 'gi://Gdk?version=4.0';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
@@ -14,8 +16,49 @@ const GROUPS: [string, string[]][] = [
     ['Light', ['specular-intensity', 'shininess', 'rim-width', 'rim-intensity', 'rim-directional-power',
         'rim-power', 'rim-light-color-intensity', 'sheen-intensity', 'light-angle-deg']],
     ['Shadow', ['shadow-radius', 'shadow-intensity', 'ao-intensity', 'ao-radius']],
+    ['Tint', ['tint-strength']],
     ['Blur', ['blur-radius', 'blur-downscale']],
 ];
+
+// The tint colour (Glass.Context:tint-color): unset, each material keeps its
+// own (white, or the theme's window and popover colours).
+class TintColorRow {
+    readonly widget: Gtk.Box;
+    private button: Gtk.ColorDialogButton;
+    private reset: Gtk.Button;
+    private updating = false;
+
+    constructor(private context: Glass.Context) {
+        this.button = new Gtk.ColorDialogButton({
+            dialog: new Gtk.ColorDialog({ title: 'Tint', with_alpha: false }),
+            valign: Gtk.Align.CENTER,
+        });
+        this.button.connect('notify::rgba', () => {
+            if (!this.updating)
+                context.set_tint_color(this.button.get_rgba());
+        });
+
+        this.reset = new Gtk.Button({ icon_name: 'edit-undo-symbolic', tooltip_text: 'Back to the materials\' colours',
+            css_classes: ['flat', 'circular'], valign: Gtk.Align.CENTER });
+        this.reset.connect('clicked', () => context.set_tint_color(null));
+
+        this.widget = new Gtk.Box({ spacing: 4, margin_start: 12, margin_end: 6 });
+        this.widget.append(new Gtk.Label({ label: 'tint-color', xalign: 0, hexpand: true, css_classes: ['caption'] }));
+        this.widget.append(this.button);
+        this.widget.append(this.reset);
+        this.sync();
+    }
+
+    sync() {
+        const [set, color] = this.context.get_tint_color();
+        const shown = new Gdk.RGBA();
+        shown.parse('white');
+        this.updating = true;
+        this.button.set_rgba(set ? color! : shown);
+        this.updating = false;
+        this.reset.set_sensitive(set);
+    }
+}
 
 class ParamRow {
     readonly widget: Gtk.Box;
@@ -119,8 +162,11 @@ export class LabPage {
         this.animation.widget.set_halign(Gtk.Align.CENTER);
         list.append(this.animation.widget);
 
+        const tintColor = new TintColorRow(context);
         for (const [group, keys] of GROUPS) {
             list.append(new Gtk.Label({ label: group, xalign: 0, css_classes: ['heading'], margin_start: 12, margin_top: 8 }));
+            if (group === 'Tint')
+                list.append(tintColor.widget);
             for (const key of keys) {
                 const row = new ParamRow(context, key);
                 rows.push(row);
@@ -131,9 +177,13 @@ export class LabPage {
         resetAll.connect('clicked', () => {
             for (const key of context.list_params())
                 context.reset_param(key);
+            context.set_tint_color(null);
         });
         list.append(resetAll);
-        context.connect('changed', () => rows.forEach(r => r.sync()));
+        context.connect('changed', () => {
+            rows.forEach(r => r.sync());
+            tintColor.sync();
+        });
 
         const inspector = new Glass.Panel({
             child: new Gtk.ScrolledWindow({ child: list, hscrollbar_policy: Gtk.PolicyType.NEVER, propagate_natural_height: false }),

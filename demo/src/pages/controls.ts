@@ -48,15 +48,25 @@ export class ControlsPage {
         settings.append(row('Brightness', brightness));
         this.stage.append(new Glass.Panel({ child: settings, corner_radius: 22, width_request: 420 }));
 
-        // Buttons in a Glass.Group: closer than its spacing, they fuse. The
-        // last one shows two more, which come out of it like drops and go
-        // back into it (design.md §6.8).
-        const drops = new Gtk.Box({ spacing: 8, halign: Gtk.Align.CENTER });
-        for (const icon of ['media-skip-backward-symbolic', 'media-playback-start-symbolic', 'media-skip-forward-symbolic'])
-            drops.append(Glass.Button.new_from_icon_name(icon));
+        // Buttons in a Glass.Group (design.md §6.7, §6.8). The first three
+        // touch, so their glass is one capsule; the two after it stand apart,
+        // further than the group's spacing, as drops of their own. "More"
+        // shows them: they come out of the capsule like drops, and go back
+        // into it when hidden.
+        //
+        //   [ ⏮ ⏵ ⋯ ]  ( ☆ )  ( 🗑 )
+        //
+        // The row keeps the room for the drops, so the capsule stays put
+        // while they come and go (centred, it would jump by half of them).
+        const BUTTON = 44, GAP = 12;
+        const capsule = new Gtk.Box();
+        for (const icon of ['media-skip-backward-symbolic', 'media-playback-start-symbolic'])
+            capsule.append(Glass.Button.new_from_icon_name(icon));
         const more = Glass.Button.new_from_icon_name('view-more-symbolic');
         more.set_tooltip_text('More');
-        drops.append(more);
+        capsule.append(more);
+        const drops = new Gtk.Box({ spacing: GAP });
+        drops.append(capsule);
         const extras = ['starred-symbolic', 'user-trash-symbolic'].map(icon => {
             const button = Glass.Button.new_from_icon_name(icon);
             button.set_visible(false);
@@ -64,17 +74,8 @@ export class ControlsPage {
             return button;
         });
         more.connect('clicked', () => extras.forEach(b => b.set_visible(!b.get_visible())));
-        const group = new Glass.Group({ child: drops, halign: Gtk.Align.CENTER });
-        this.stage.append(group);
-
-        const gap = Glass.Slider.new_with_range(0, 48, 1);
-        gap.set_value(8);
-        gap.set_size_request(260, -1);
-        gap.get_adjustment().connect('value-changed', () => drops.set_spacing(Math.round(gap.get_value())));
-        const gapRow = new Gtk.Box({ spacing: 12, margin_top: 8, margin_bottom: 8, margin_start: 18, margin_end: 18 });
-        gapRow.append(new Gtk.Label({ label: 'Gap', css_classes: ['dim-label'] }));
-        gapRow.append(gap);
-        this.stage.append(new Glass.Panel({ child: gapRow, halign: Gtk.Align.CENTER }));
+        this.stage.append(new Glass.Group({ child: drops, halign: Gtk.Align.CENTER,
+            width_request: 3 * BUTTON + extras.length * (GAP + BUTTON) }));
 
         // A row of buttons in one capsule: each press bulges the glass.
         const buttons = new Glass.ButtonGroup({ halign: Gtk.Align.CENTER });

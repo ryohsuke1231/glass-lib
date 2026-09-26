@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ryohsuke1231.GlassGallery</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Glass Gallery</name>
+  <summary>See and tune glass-lib's refracting glass</summary>
+  <description>
+    <p>
+      The demo and test bench of glass-lib, a GTK 4 and libadwaita library for
+      refracting, Liquid Glass–style glass over an app's own content.
+    </p>
+    <ul>
+      <li>Photos: a grid scrolling under glass bars, in the same frame</li>
+      <li>Playground: panels to drag and resize over test patterns</li>
+      <li>Controls: switches, sliders, fused buttons, menus and dialogs of glass</li>
+      <li>Tabs: a tab bar and a search field that morphs out of a button</li>
+      <li>Lab: every optical parameter and the tint, live</li>
+    </ul>
+    <p>
+      This is an unofficial project, not affiliated with or endorsed by Apple Inc.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.ryohsuke1231.GlassGallery.desktop</launchable>
+  <url type="homepage">https://github.com/ryohsuke1231/glass-lib</url>
+  <developer id="io.github.ryohsuke1231">
+    <name>The glass-lib authors</name>
+  </developer>
+  <content_rating type="oars-1.1" />
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <releases>
+    <release version="0.0.1" date="2026-09-26" />
+  </releases>
+</component>

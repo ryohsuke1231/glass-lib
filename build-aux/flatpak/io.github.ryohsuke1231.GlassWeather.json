@@ -1,0 +1,55 @@
+{
+  "id": "io.github.ryohsuke1231.GlassWeather",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "50",
+  "sdk": "org.gnome.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.node22",
+    "org.freedesktop.Sdk.Extension.typescript"
+  ],
+  "command": "glass-weather",
+  "finish-args": [
+    "--share=ipc",
+    "--share=network",
+    "--socket=fallback-x11",
+    "--socket=wayland",
+    "--device=dri"
+  ],
+  "build-options": {
+    "append-path": "/usr/lib/sdk/node22/bin:/usr/lib/sdk/typescript/bin"
+  },
+  "cleanup": [
+    "/include",
+    "/lib/pkgconfig",
+    "/share/gir-1.0"
+  ],
+  "modules": [
+    {
+      "name": "glass-lib",
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Dtests=false",
+        "-Dspikes=false",
+        "-Dexamples=false",
+        "-Ddemos=weather"
+      ],
+      "sources": [
+        {
+          "type": "dir",
+          "path": "../..",
+          "skip": [
+            ".git",
+            ".flatpak-builder",
+            "build",
+            "_build",
+            "build-flatpak",
+            "repo",
+            "demo/node_modules",
+            "demo/dist",
+            "demo/types"
+          ]
+        }
+      ]
+    }
+  ]
+}

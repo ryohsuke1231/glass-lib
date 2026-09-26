@@ -23,7 +23,22 @@ add_project_arguments(
 
 subdir('shaders')
 subdir('lib')
-subdir('tests')
+
+if get_option('tests')
+  subdir('tests')
+endif
+
+if get_option('examples')
+  subdir('examples')
+endif
+
+if get_option('documentation')
+  subdir('docs/reference')
+endif
+
+if get_option('demos').length() > 0
+  subdir('demo')
+endif
 
 if get_option('spikes')
   subdir('spikes/s1-full-renderer')

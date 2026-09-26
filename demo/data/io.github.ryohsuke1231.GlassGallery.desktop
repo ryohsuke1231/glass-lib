@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Glass Gallery
+Comment=See and tune glass-lib's refracting glass
+Exec=glass-gallery
+Icon=io.github.ryohsuke1231.GlassGallery
+Terminal=false
+Type=Application
+Categories=GNOME;GTK;Development;
+Keywords=glass;liquid;gtk;libadwaita;demo;
+StartupNotify=true

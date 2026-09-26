@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d5cc2"/>
+      <stop offset="1" stop-color="#6ba6e4"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#fff3c4"/>
+      <stop offset="0.6" stop-color="#ffd23f"/>
+      <stop offset="1" stop-color="#ffb400"/>
+    </radialGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.28"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#sky)"/>
+  <circle cx="78" cy="48" r="22" fill="url(#sun)"/>
+  <path d="M34 92 h56 a16 16 0 0 0 0 -32 a22 22 0 0 0 -41 -6 a18 18 0 0 0 -15 38 z"
+        fill="#000000" opacity="0.12" transform="translate(0 4)"/>
+  <path d="M34 92 h56 a16 16 0 0 0 0 -32 a22 22 0 0 0 -41 -6 a18 18 0 0 0 -15 38 z" fill="url(#glass)"/>
+  <path d="M34 92 h56 a16 16 0 0 0 0 -32 a22 22 0 0 0 -41 -6 a18 18 0 0 0 -15 38 z"
+        fill="none" stroke="url(#rim)" stroke-width="2"/>
+</svg>

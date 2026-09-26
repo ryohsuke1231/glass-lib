@@ -99,6 +99,10 @@ function buildWindow(app: Adw.Application) {
     if (pattern)
         [playground, controls, lab].forEach(p => p.setPattern(pattern as Pattern));
 
+    // Screenshots at the default size, whatever the window manager does
+    // with new windows.
+    if (GLib.getenv('GLASS_GALLERY_SCREENSHOT'))
+        window.set_resizable(false);
     window.present();
 
     // GLASS_GALLERY_AUTOSCROLL=1: the photos scroll up and down forever
