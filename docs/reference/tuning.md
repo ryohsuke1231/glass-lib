@@ -9,7 +9,8 @@ Each panel has a [enum@Glass.Material], which sets how it looks:
 
 - `REGULAR` (the default): toolbars, buttons, cards. Light blur, a faint
   white tint, colours that follow the backdrop.
-- `CLEAR`: over photos and video. Less blur and tint.
+- `CLEAR`: over photos and video. Less blur and tint, and a thicker lens
+  (like the desktop widgets of macOS; the others have the Dock's).
 - `THICK`: large panes such as sidebars. Strong blur, tinted with the window
   colour, the theme's text colours.
 - `MENU`: popovers and menus. Between `REGULAR` and `THICK`.
@@ -39,9 +40,14 @@ const context = Glass.Context.get_default();
 context.set_param(Glass.PARAM_BLUR_RADIUS, 3);   // all glass a little blurrier
 
 const hero = new Glass.Panel({ child: card, corner_radius: 28 });
-hero.set_param(Glass.PARAM_DISPLACEMENT_SCALE, 70);  // this one bends more
+hero.set_param(Glass.PARAM_DISPLACEMENT_SCALE, 26);  // this one bends more
 hero.set_param(Glass.PARAM_SHADOW_INTENSITY, 0.15);
 ```
+
+The lens acts in a band about 22 px wide along the edge, whatever the corner
+radius; on glass thinner than twice that, the whole lens is scaled down with
+it. `displacement-scale`, `max-z` and `profile-shape-n` shape the lens inside
+the band.
 
 Each key has a constant, `Glass.PARAM_BLUR_RADIUS` for `'blur-radius'` and so
 on (`GLASS_PARAM_BLUR_RADIUS` in C): a misspelt constant is an error at once,
