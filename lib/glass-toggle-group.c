@@ -419,21 +419,121 @@ glass_toggle_group_append_item (GlassToggleGroup *self,
   return button;
 }
 
-/* Private: removes every toggle. */
+/**
+ * glass_toggle_group_remove:
+ * @self: a toggle group
+ * @index: the index of the toggle to remove
+ *
+ * Removes a toggle. If it was the active one, the toggle that takes its
+ * place (or the one before it, if it was the last) becomes active.
+ */
+void
+glass_toggle_group_remove (GlassToggleGroup *self,
+                           guint             index)
+{
+  GtkWidget *button;
+  guint old_active;
+
+  g_return_if_fail (GLASS_IS_TOGGLE_GROUP (self));
+  g_return_if_fail (index < self->buttons->len);
+
+  old_active = self->active;
+  button = g_ptr_array_steal_index (self->buttons, index);
+  g_signal_handlers_disconnect_by_func (button, button_clicked, self);
+  glass_pill_box_remove (GLASS_PILL_BOX (self->box), button);
+  g_ptr_array_remove_index (self->names, index);
+
+  if (index < old_active)
+    self->active--;
+  else if (index == old_active)
+    {
+      /* The plate jumps: it has nowhere to slide from. */
+      self->active = MIN (index, self->buttons->len > 0 ? self->buttons->len - 1 : 0);
+      self->have_from = FALSE;
+      if (self->active < self->buttons->len)
+        mark (g_ptr_array_index (self->buttons, self->active), TRUE);
+    }
+  gtk_widget_queue_allocate (GTK_WIDGET (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_N_TOGGLES]);
+  /* Also when the index stays: another toggle is active now. */
+  if (self->active != old_active || index == old_active)
+    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ACTIVE]);
+  if (index == old_active)
+    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ACTIVE_NAME]);
+}
+
+/**
+ * glass_toggle_group_remove_all:
+ * @self: a toggle group
+ *
+ * Removes every toggle.
+ */
 void
 glass_toggle_group_remove_all (GlassToggleGroup *self)
 {
+  guint old_active;
+
+  g_return_if_fail (GLASS_IS_TOGGLE_GROUP (self));
+
+  if (self->buttons->len == 0)
+    return;
+  old_active = self->active;
   while (self->buttons->len > 0)
     {
       GtkWidget *button = g_ptr_array_steal_index (self->buttons, self->buttons->len - 1);
 
+      g_signal_handlers_disconnect_by_func (button, button_clicked, self);
       glass_pill_box_remove (GLASS_PILL_BOX (self->box), button);
       g_ptr_array_remove_index (self->names, self->names->len - 1);
     }
   self->active = 0;
   self->have_from = FALSE;
   gtk_widget_queue_allocate (GTK_WIDGET (self));
+
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_N_TOGGLES]);
+  if (old_active != 0)
+    g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ACTIVE]);
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_ACTIVE_NAME]);
+}
+
+/**
+ * glass_toggle_group_get_tooltip:
+ * @self: a toggle group
+ * @index: the index of a toggle
+ *
+ * Gets a toggle's tooltip.
+ *
+ * Returns: (nullable): the toggle's tooltip
+ */
+const char *
+glass_toggle_group_get_tooltip (GlassToggleGroup *self,
+                                guint             index)
+{
+  g_return_val_if_fail (GLASS_IS_TOGGLE_GROUP (self), NULL);
+  g_return_val_if_fail (index < self->buttons->len, NULL);
+
+  return gtk_widget_get_tooltip_text (g_ptr_array_index (self->buttons, index));
+}
+
+/**
+ * glass_toggle_group_set_tooltip:
+ * @self: a toggle group
+ * @index: the index of a toggle
+ * @tooltip: (nullable): the tooltip, or %NULL for none
+ *
+ * Sets a toggle's tooltip. A toggle with an icon and no label has its name
+ * as its tooltip until one is set.
+ */
+void
+glass_toggle_group_set_tooltip (GlassToggleGroup *self,
+                                guint             index,
+                                const char       *tooltip)
+{
+  g_return_if_fail (GLASS_IS_TOGGLE_GROUP (self));
+  g_return_if_fail (index < self->buttons->len);
+
+  gtk_widget_set_tooltip_text (g_ptr_array_index (self->buttons, index), tooltip);
 }
 
 static void

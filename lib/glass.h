@@ -11,6 +11,7 @@
 #include "glass-version.h"
 #include "glass-enums.h"
 #include "glass-enum-types.h"
+#include "glass-params.h"
 #include "glass-main.h"
 #include "glass-context.h"
 #include "glass-view.h"

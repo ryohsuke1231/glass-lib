@@ -8,7 +8,7 @@ import sys
 
 
 def c_ident(key):
-    return 'GLASS_PARAM_' + key.upper().replace('-', '_')
+    return 'GLASS_PARAM_ID_' + key.upper().replace('-', '_')
 
 
 def c_double(v):

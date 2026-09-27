@@ -274,6 +274,77 @@ test_toggle_group (void)
   g_object_unref (group);
 }
 
+static void
+count_notify (GObject *object, GParamSpec *pspec, int *count)
+{
+  (*count)++;
+}
+
+static void
+test_toggle_group_remove (void)
+{
+  GlassToggleGroup *group = GLASS_TOGGLE_GROUP (g_object_ref_sink (glass_toggle_group_new ()));
+  int notified = 0;
+
+  glass_toggle_group_append (group, "a", "A", NULL);
+  glass_toggle_group_append (group, "b", NULL, "view-grid-symbolic");
+  glass_toggle_group_append (group, "c", "C", NULL);
+  glass_toggle_group_append (group, "d", "D", NULL);
+
+  /* Tooltips: an icon-only toggle has its name until one is set. */
+  g_assert_null (glass_toggle_group_get_tooltip (group, 0));
+  g_assert_cmpstr (glass_toggle_group_get_tooltip (group, 1), ==, "b");
+  glass_toggle_group_set_tooltip (group, 0, "Alpha");
+  glass_toggle_group_set_tooltip (group, 1, NULL);
+  g_assert_cmpstr (glass_toggle_group_get_tooltip (group, 0), ==, "Alpha");
+  g_assert_null (glass_toggle_group_get_tooltip (group, 1));
+
+  g_signal_connect (group, "notify::active", G_CALLBACK (count_notify), &notified);
+  glass_toggle_group_set_active_name (group, "c");
+  notified = 0;
+
+  /* Before the active one: the same toggle stays active, one place on. */
+  glass_toggle_group_remove (group, 0);
+  g_assert_cmpuint (glass_toggle_group_get_n_toggles (group), ==, 3);
+  g_assert_cmpuint (glass_toggle_group_get_active (group), ==, 1);
+  g_assert_cmpstr (glass_toggle_group_get_active_name (group), ==, "c");
+  g_assert_cmpint (notified, ==, 1);
+
+  /* After it: nothing changes. */
+  glass_toggle_group_remove (group, 2);
+  g_assert_cmpstr (glass_toggle_group_get_active_name (group), ==, "c");
+  g_assert_cmpint (notified, ==, 1);
+
+  /* The active one, the last: the one before takes over. */
+  glass_toggle_group_remove (group, 1);
+  g_assert_cmpuint (glass_toggle_group_get_active (group), ==, 0);
+  g_assert_cmpstr (glass_toggle_group_get_active_name (group), ==, "b");
+  g_assert_cmpint (notified, ==, 2);
+
+  /* The active one in the middle: the next takes its place (and the
+   * index stays, but :active is notified). */
+  glass_toggle_group_append (group, "e", "E", NULL);
+  glass_toggle_group_append (group, "f", "F", NULL);
+  glass_toggle_group_set_active_name (group, "e");
+  notified = 0;
+  glass_toggle_group_remove (group, 1);
+  g_assert_cmpuint (glass_toggle_group_get_active (group), ==, 1);
+  g_assert_cmpstr (glass_toggle_group_get_active_name (group), ==, "f");
+  g_assert_cmpint (notified, ==, 1);
+  g_assert_cmpint (count_buttons (GTK_WIDGET (group), FALSE), ==, 2);
+
+  glass_toggle_group_remove_all (group);
+  g_assert_cmpuint (glass_toggle_group_get_n_toggles (group), ==, 0);
+  g_assert_null (glass_toggle_group_get_active_name (group));
+  g_assert_cmpint (count_buttons (GTK_WIDGET (group), FALSE), ==, 0);
+
+  /* It fills again as a new group. */
+  glass_toggle_group_append (group, "g", "G", NULL);
+  g_assert_cmpstr (glass_toggle_group_get_active_name (group), ==, "g");
+
+  g_object_unref (group);
+}
+
 /* The toolbar view reports how much the bars cover. */
 static void
 test_toolbar_view (void)
@@ -392,12 +463,6 @@ test_button_group (void)
 }
 
 static void
-count_notify (GObject *object, GParamSpec *pspec, int *count)
-{
-  (*count)++;
-}
-
-static void
 test_switch (void)
 {
   GtkWidget *sw = g_object_ref_sink (glass_switch_new ());
@@ -415,6 +480,43 @@ test_switch (void)
   g_assert_cmpint (notified, ==, 2);
 
   g_object_unref (sw);
+}
+
+/* With a boolean stateful action, the switch follows its state, turning it
+ * changes the state, and a disabled action makes it insensitive. */
+static void
+test_switch_action (void)
+{
+  GtkWidget *box = g_object_ref_sink (gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0));
+  GtkWidget *sw = glass_switch_new ();
+  GSimpleActionGroup *actions = g_simple_action_group_new ();
+  GSimpleAction *action = g_simple_action_new_stateful ("flag", NULL, g_variant_new_boolean (FALSE));
+  g_autoptr (GVariant) state = NULL;
+
+  g_action_map_add_action (G_ACTION_MAP (actions), G_ACTION (action));
+  gtk_widget_insert_action_group (box, "test", G_ACTION_GROUP (actions));
+  /* Named before it has a parent, as a builder file or a constructor does
+   * (地雷44). */
+  gtk_actionable_set_action_name (GTK_ACTIONABLE (sw), "test.flag");
+  gtk_box_append (GTK_BOX (box), sw);
+  g_assert_cmpstr (gtk_actionable_get_action_name (GTK_ACTIONABLE (sw)), ==, "test.flag");
+
+  g_simple_action_set_state (action, g_variant_new_boolean (TRUE));
+  g_assert_true (glass_switch_get_active (GLASS_SWITCH (sw)));
+
+  glass_switch_set_active (GLASS_SWITCH (sw), FALSE);
+  state = g_action_get_state (G_ACTION (action));
+  g_assert_false (g_variant_get_boolean (state));
+  g_assert_false (glass_switch_get_active (GLASS_SWITCH (sw)));
+
+  g_simple_action_set_enabled (action, FALSE);
+  g_assert_false (gtk_widget_get_sensitive (sw));
+  g_simple_action_set_enabled (action, TRUE);
+  g_assert_true (gtk_widget_get_sensitive (sw));
+
+  g_object_unref (action);
+  g_object_unref (actions);
+  g_object_unref (box);
 }
 
 static void
@@ -485,6 +587,52 @@ test_menu (void)
   g_object_unref (section);
   g_object_unref (sub);
   return G_MENU_MODEL (menu);
+}
+
+static void
+activated (GSimpleAction *action, GVariant *parameter, int *count)
+{
+  (*count)++;
+}
+
+/* The menu button's action: its enabled state and its activation. */
+static void
+test_menu_button_action (void)
+{
+  GtkWidget *box = g_object_ref_sink (gtk_box_new (GTK_ORIENTATION_HORIZONTAL, 0));
+  GtkWidget *mb = glass_menu_button_new ();
+  GSimpleActionGroup *actions = g_simple_action_group_new ();
+  GSimpleAction *action = g_simple_action_new ("menu", NULL);
+  GtkWidget *button;
+  int count = 0;
+
+  g_signal_connect (action, "activate", G_CALLBACK (activated), &count);
+  g_action_map_add_action (G_ACTION_MAP (actions), G_ACTION (action));
+  gtk_widget_insert_action_group (box, "test", G_ACTION_GROUP (actions));
+  g_object_set (mb, "action-name", "test.menu", NULL);
+  gtk_box_append (GTK_BOX (box), mb);
+  g_assert_cmpstr (gtk_actionable_get_action_name (GTK_ACTIONABLE (mb)), ==, "test.menu");
+
+  button = gtk_widget_get_first_child (mb);
+  g_assert_true (GTK_IS_BUTTON (button));
+  g_signal_emit_by_name (button, "clicked");
+  g_assert_cmpint (count, ==, 1);
+
+  g_simple_action_set_enabled (action, FALSE);
+  g_assert_false (gtk_widget_get_sensitive (button));
+
+  /* GlassButton forwards the same way. */
+  g_simple_action_set_enabled (action, TRUE);
+  count = 0;
+  button = glass_button_new_from_icon_name ("go-next-symbolic");
+  gtk_actionable_set_action_name (GTK_ACTIONABLE (button), "test.menu");
+  gtk_box_append (GTK_BOX (box), button);
+  g_signal_emit_by_name (glass_panel_get_child (GLASS_PANEL (button)), "clicked");
+  g_assert_cmpint (count, ==, 1);
+
+  g_object_unref (action);
+  g_object_unref (actions);
+  g_object_unref (box);
 }
 
 static void
@@ -875,11 +1023,14 @@ main (int argc, char **argv)
   g_test_add_func ("/widgets/panel-params", test_panel_params);
   g_test_add_func ("/widgets/css-classes", test_css_classes);
   g_test_add_func ("/widgets/toggle-group", test_toggle_group);
+  g_test_add_func ("/widgets/toggle-group-remove", test_toggle_group_remove);
   g_test_add_func ("/widgets/toolbar-view", test_toolbar_view);
   g_test_add_func ("/widgets/split-view", test_split_view);
   g_test_add_func ("/widgets/header-capsules", test_header_capsules);
   g_test_add_func ("/widgets/button-group", test_button_group);
   g_test_add_func ("/widgets/switch", test_switch);
+  g_test_add_func ("/widgets/switch-action", test_switch_action);
+  g_test_add_func ("/widgets/menu-button-action", test_menu_button_action);
   g_test_add_func ("/widgets/slider", test_slider);
   g_test_add_func ("/widgets/group", test_group);
   g_test_add_func ("/widgets/popover-menu", test_popover_menu);

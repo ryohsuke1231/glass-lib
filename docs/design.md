@@ -1,7 +1,10 @@
 # glass-lib 設計書
 
 - 版: **v0.8（v1 の仕上げ: ティント・パネルごとのパラメータ・フォールバックの Adaptive・API ドキュメント・Flatpak・天気アプリ。ロードマップの残りを破棄した版）**
-- 日付: 2026-09-26
+- 日付: 2026-09-26（v0.8.1: 2026-09-27）
+- v0.8.1 の変更（公開前のレビューでの指摘、2026-09-27）:
+  - パラメータのキーの定数 `GLASS_PARAM_BLUR_RADIUS` など（`Glass.PARAM_BLUR_RADIUS`）。`spec/params.json` から公開ヘッダ `glass-params.h` を生成する（§6.1・§11.1）
+  - `GlassSwitch`・`GlassMenuButton` を `GtkActionable` に（§6.7）。`GlassToggleGroup` に削除・全消去・項目ごとのツールチップ（§6.6）
 - v0.7 からの変更（ユーザーの指示、2026-09-26）:
   - 既定値: アプリ内の縁の値（`crisp-soft`）の `max_z` 50 → 35、`profile_shape_n` 7 → 2.4、`rim_directional_power` 1.6 を追加（拡張の 2.7 から。§11.2）
   - ティント（色・強さ）を調整できる設定にした: 強さは光学パラメータのキー `tint-strength`、色は `GlassContext:tint-color`（§11.1・§11.2）。デモの Lab に入れた
@@ -226,7 +229,8 @@ void            glass_context_set_renderer      (GlassContext *self, GlassRender
 GlassRendererMode glass_context_get_renderer    (GlassContext *self);
 void            glass_context_set_reduce_transparency (GlassContext *self, gboolean reduce);
 gboolean        glass_context_get_reduce_transparency (GlassContext *self);
-/* 光学パラメータ（上級者・デモの Lab 用）。キーは §11.1 の表。範囲外は clamp して警告 */
+/* 光学パラメータ（上級者・デモの Lab 用）。キーは §11.1 の表。範囲外は clamp して警告。
+ * キーごとに定数がある: GLASS_PARAM_BLUR_RADIUS = "blur-radius"（glass-params.h、生成。v0.8.1） */
 gboolean        glass_context_set_param         (GlassContext *self, const char *key, double value);
 double          glass_context_get_param         (GlassContext *self, const char *key);
 gboolean        glass_context_is_param_set      (GlassContext *self, const char *key);
@@ -378,7 +382,7 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
 | `GlassToolbarView` | `AdwToolbarView` | 中身がバーの下まで伸びる（常に）。上下のバーは中身の上に浮く。**スクロール端の効果**（`top-edge-style`・`bottom-edge-style`）: `SOFT` = バーの下の帯で中身をぼかしながら薄めて、背景の色へ溶かす（既定）。`HARD` = 同じ帯を均一にぼかして区切り線を引く。`NONE` = なし。バーの高さは `top-bar-height`・`bottom-bar-height`（読み取り専用）で出すので、アプリはスクロールする中身の先頭にその分の余白を付ける（libadwaita の `extend-content-to-top-edge` と同じ扱い） |
 | `GlassHeaderBar` | `AdwHeaderBar` | `pack_start`・`pack_end` の部品は、それぞれ**1 つのガラスのカプセル**にまとめて浮かせる。それ自体がガラスの部品（`GlassPanel`・`GlassButton`・`GlassGroup`）は、カプセルに入れず（ガラスの上のガラスにしない）カプセルの内側の隣に置く（v0.8。高さはカプセルにそろえる）。タイトルはガラスなし（スクロール端の効果の上に載る）。窓のボタン（閉じる等）も小さなカプセルに入れる（どんな中身の上でも見えるように）。空の所はドラッグで窓を動かせる（`GtkWindowHandle`） |
 | `GlassSplitView` | `AdwOverlaySplitView` | サイドバーは**窓の中に浮く角丸の板**（材質 `THICK`、窓の縁から 8px 内側、半径 14px）。中身はサイドバーの下まで伸び、サイドバーが覆う幅は `content-inset`（読み取り専用）で出す。`show-sidebar` でスライドして出し入れする |
-| `GlassToggleGroup` | `AdwToggleGroup` | カプセルの中に並んだトグル。選ばれたものの下を丸い板がスライドする。**板はガラスの上のガラス**（§6.7 の層。押している間は膨らむ）。トグルは `GtkToggleButton` ではなく `GtkButton`＋`.active` クラス（テーマの `button:checked` の塗りが板を覆うため。memo 地雷12） |
+| `GlassToggleGroup` | `AdwToggleGroup` | カプセルの中に並んだトグル。選ばれたものの下を丸い板がスライドする。**板はガラスの上のガラス**（§6.7 の層。押している間は膨らむ）。トグルは `GtkToggleButton` ではなく `GtkButton`＋`.active` クラス（テーマの `button:checked` の塗りが板を覆うため。memo 地雷12）。項目は添字で扱う: `append`・`remove`（選ばれていた項目なら、その位置に来た項目か、末尾なら 1 つ前が選ばれる）・`remove_all`・`set_tooltip`（v0.8.1） |
 | `GlassButton` | `GtkButton` ＋ `.circular` / `.pill` | それ自体がガラスのボタン（アイコンか文字）。押している間はガラスが少し明るくなる。`GtkActionable` |
 
 - 部品の中のボタンは自動で `flat` の見た目になる（ガラスの上に libadwaita の塗りの背景を重ねない）。前景色は Adaptive に従う。
@@ -411,6 +415,8 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
 - **`GlassSwitch`・`GlassSlider`**: トラック（レール）は CSS の色で描き、つまみを `GlassPanel` にする。普段のつまみは白い板（ティントが濃い）で、
   つかんでいる間はティントが薄くなってレンズになる（Apple のスイッチ・スライダーと同じ）。つまみがトラックの外で屈折できるよう、内部の `GlassView` をトラックより一回り大きく置く
   （その背景色は取り込みにだけ入れる）。アクセシビリティの役割は `SWITCH`・`SLIDER`。
+  どちらも `GtkActionable`（v0.8.1）。スイッチは `GtkSwitch` と同じく真偽値の状態を持つアクションに従う: GTK にはアクションの状態を見る公開 API が無いので、
+  隠した `GtkSwitch` を子に持ち、その `active` と相互に写す（アクションの扱いは GTK のものをそのまま使う）。
   🔒 つまみのぼかしは既定で 0（レンズは曇らせない。ユーザーの決定、2026-09-25）。パネル自身の既定値として持つ（§11.2）ので、アプリが `blur-radius` を明示すればつまみにも効く。
 - **`GlassPopover`・`GlassMenuButton`**: ポップオーバーは別のサーフェス（xdg_popup）なので `GlassView` の中に入らない。
   **親の窓の、今のフレームのノード**を `GtkWidgetPaintable` で借りて取り込み、自分のサーフェスの位置（`gdk_popup_get_position_x/y` と `gtk_native_get_surface_transform`）に合わせて THICK のガラスを描く。
@@ -419,6 +425,8 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
     項目の `gtk_widget_queue_draw()` はポップオーバーを越えて窓まで遡り、窓の描画ノードを捨てる（ポップオーバーの親は窓の中のボタン）。窓が描き直す前にポップオーバーが描かれると、ガラスの背景が無く、ふつうのポップオーバーの見た目に落ちていた。memo 地雷36。
   - ガラスの上の中身は、`contents` の**内容の箱**を原点に置く（`gtk_widget_snapshot_child()` の子の位置はそこから。`compute_bounds` は枠の箱なので、パディングと枠の分だけ左上にずれていた。memo 地雷37）。
   - 窓の外にはみ出した部分の背景は、ティントの色（不透明）で埋める（見えないものは屈折させない。黒くなっていた）。
+  - `GlassMenuButton` は `GtkActionable`（v0.8.1。中のボタンに渡す）: アクションが無効ならボタンは押せず、押すとアクションを起動してからメニューを開く。
+    アクションを中の部品に渡す部品（`GlassButton` も）は、自分にもアクションの muxer を先に作っておく（無いと、窓に入る前に付けたアクション名が窓のアクションに届かない。memo 地雷44）。
   - `GlassMenuButton` のメニューはボタンの下（10px 空けて）に開き、端をボタンの端にそろえる: メニューの幅が収まる側へ開く（両方に収まるなら窓の端から遠い方、どちらにも収まらなければボタンの中央。v0.8。ユーザーの指示）。
 - **`GlassDialog`**: `AdwDialog` はダイアログのホストが窓の中身の上に描くので、`GlassView` の中に入らない。
   中身の下に、**ホストの中身（ダイアログ以外の子）の今のフレームのノード**から THICK のガラスを描く。
@@ -812,6 +820,8 @@ shaders/
 - **光学の設定はこれ以上増やさない**（既存拡張の方針 7）。`EDGE_LENS_FALLOFF`・`EDGE_LENS_REACH` は定数のまま。
   `tint-strength`（v0.8）は新しい光学の設定ではなく、材質が持っていたティントの強さを調整できるキーにしたもの（ユーザーの指示、2026-09-26）。
 - 定義は `spec/params.json` に 1 か所で書き、C のヘッダ（と API ドキュメントの表、`tools/gen-params-doc.py`）をビルド時に生成する。
+  公開ヘッダ `glass-params.h`（`tools/gen-params-header.py`）はキーごとの文字列の定数（`GLASS_PARAM_BLUR_RADIUS`、GI では `Glass.PARAM_BLUR_RADIUS`）で、キーの打ち間違いをコンパイル時（バインディングでは属性のエラー）に見つけるためのもの。
+  内部の列挙（配列の添字）は `GLASS_PARAM_ID_BLUR_RADIUS` と名付けて区別する（v0.8.1）。
 
 ### 11.2 材質（v1 は 4 種類）
 

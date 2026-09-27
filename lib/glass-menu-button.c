@@ -20,6 +20,12 @@
  *
  * `GlassMenuButton` has a CSS node with name `glassmenubutton`, holding a
  * `button`.
+ *
+ * ## Actions
+ *
+ * `GlassMenuButton` is a `GtkActionable`: with [property@Gtk.Actionable:action-name]
+ * set, the button is insensitive while the action is disabled, and a click
+ * activates the action as well as opening the popover.
  */
 
 struct _GlassMenuButton {
@@ -36,12 +42,18 @@ enum {
   PROP_LABEL,
   PROP_MENU_MODEL,
   PROP_POPOVER,
-  N_PROPS
+  N_PROPS,
+  /* GtkActionable */
+  PROP_ACTION_NAME = N_PROPS,
+  PROP_ACTION_TARGET,
 };
 
 static GParamSpec *props[N_PROPS];
 
-G_DEFINE_FINAL_TYPE (GlassMenuButton, glass_menu_button, GTK_TYPE_WIDGET)
+static void glass_menu_button_actionable_init (GtkActionableInterface *iface);
+
+G_DEFINE_FINAL_TYPE_WITH_CODE (GlassMenuButton, glass_menu_button, GTK_TYPE_WIDGET,
+                               G_IMPLEMENT_INTERFACE (GTK_TYPE_ACTIONABLE, glass_menu_button_actionable_init))
 
 static void
 popover_closed (GtkPopover *popover, GlassMenuButton *self)
@@ -53,6 +65,43 @@ static void
 clicked (GtkButton *button, GlassMenuButton *self)
 {
   glass_menu_button_popup (self);
+}
+
+/* ── GtkActionable, forwarded to the inner button ── */
+
+static const char *
+get_action_name (GtkActionable *actionable)
+{
+  return gtk_actionable_get_action_name (GTK_ACTIONABLE (GLASS_MENU_BUTTON (actionable)->button));
+}
+
+static void
+set_action_name (GtkActionable *actionable, const char *name)
+{
+  gtk_actionable_set_action_name (GTK_ACTIONABLE (GLASS_MENU_BUTTON (actionable)->button), name);
+  g_object_notify (G_OBJECT (actionable), "action-name");
+}
+
+static GVariant *
+get_action_target_value (GtkActionable *actionable)
+{
+  return gtk_actionable_get_action_target_value (GTK_ACTIONABLE (GLASS_MENU_BUTTON (actionable)->button));
+}
+
+static void
+set_action_target_value (GtkActionable *actionable, GVariant *target)
+{
+  gtk_actionable_set_action_target_value (GTK_ACTIONABLE (GLASS_MENU_BUTTON (actionable)->button), target);
+  g_object_notify (G_OBJECT (actionable), "action-target");
+}
+
+static void
+glass_menu_button_actionable_init (GtkActionableInterface *iface)
+{
+  iface->get_action_name = get_action_name;
+  iface->set_action_name = set_action_name;
+  iface->get_action_target_value = get_action_target_value;
+  iface->set_action_target_value = set_action_target_value;
 }
 
 static void
@@ -104,6 +153,12 @@ glass_menu_button_get_property (GObject *object, guint prop_id, GValue *value, G
     case PROP_POPOVER:
       g_value_set_object (value, self->popover);
       break;
+    case PROP_ACTION_NAME:
+      g_value_set_string (value, get_action_name (GTK_ACTIONABLE (self)));
+      break;
+    case PROP_ACTION_TARGET:
+      g_value_set_variant (value, get_action_target_value (GTK_ACTIONABLE (self)));
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
@@ -127,6 +182,12 @@ glass_menu_button_set_property (GObject *object, guint prop_id, const GValue *va
       break;
     case PROP_POPOVER:
       glass_menu_button_set_popover (self, g_value_get_object (value));
+      break;
+    case PROP_ACTION_NAME:
+      set_action_name (GTK_ACTIONABLE (self), g_value_get_string (value));
+      break;
+    case PROP_ACTION_TARGET:
+      set_action_target_value (GTK_ACTIONABLE (self), g_value_get_variant (value));
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -183,6 +244,8 @@ glass_menu_button_class_init (GlassMenuButtonClass *klass)
                          G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (object_class, N_PROPS, props);
+  g_object_class_override_property (object_class, PROP_ACTION_NAME, "action-name");
+  g_object_class_override_property (object_class, PROP_ACTION_TARGET, "action-target");
 
   gtk_widget_class_set_css_name (widget_class, "glassmenubutton");
 }
@@ -190,6 +253,7 @@ glass_menu_button_class_init (GlassMenuButtonClass *klass)
 static void
 glass_menu_button_init (GlassMenuButton *self)
 {
+  glass_ensure_action_muxer (GTK_WIDGET (self));
   self->button = gtk_button_new_from_icon_name ("open-menu-symbolic");
   /* On glass: no background of its own at rest (docs/memo.md 地雷27). */
   gtk_button_set_has_frame (GTK_BUTTON (self->button), FALSE);

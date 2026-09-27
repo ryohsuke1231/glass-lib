@@ -23,6 +23,16 @@ typedef enum {
 
 GlassDebugFlags glass_get_debug_flags (void);
 
+/* For a part that forwards GtkActionable to an inner widget: gives @widget
+ * an action muxer of its own now. Without one, an action name set before
+ * the part is in a window never reaches the window's actions (the inner
+ * widget's muxer is left with no parent; docs/memo.md 地雷44). */
+static inline void
+glass_ensure_action_muxer (GtkWidget *widget)
+{
+  gtk_widget_insert_action_group (widget, "glass-private", NULL);
+}
+
 /* ── Style ── */
 #define GLASS_TYPE_STYLE_NODE (glass_style_node_get_type ())
 G_DECLARE_FINAL_TYPE (GlassStyleNode, glass_style_node, GLASS, STYLE_NODE, GtkWidget)
@@ -43,11 +53,10 @@ void        glass_pill_box_remove          (GlassPillBox *self,
                                             GtkWidget    *child);
 
 /* GlassToggleGroup, for GlassTabBar: a toggle showing @content (returns
- * its button), and removing them all. */
+ * its button). */
 GtkWidget  *glass_toggle_group_append_item (GlassToggleGroup *self,
                                             const char       *name,
                                             GtkWidget        *content);
-void        glass_toggle_group_remove_all  (GlassToggleGroup *self);
 
 /* GlassButtonGroup: whether any of its widgets is visible. */
 gboolean    glass_button_group_has_visible_child (GlassButtonGroup *self);

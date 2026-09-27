@@ -430,8 +430,8 @@ area (const graphene_rect_t *r)
 static guint
 group_for (GArray *groups, const Item *item)
 {
-  double blur = item->params[GLASS_PARAM_BLUR_RADIUS];
-  int downscale = (int) item->params[GLASS_PARAM_BLUR_DOWNSCALE];
+  double blur = item->params[GLASS_PARAM_ID_BLUR_RADIUS];
+  int downscale = (int) item->params[GLASS_PARAM_ID_BLUR_DOWNSCALE];
 
   for (guint g = 0; g < groups->len; g++)
     {
@@ -717,7 +717,7 @@ plan_panels (GlassView             *self,
     {
       Item *item = &g_array_index (items, Item, i);
 
-      if (!glass_capture_rect_for_panel (&item->P, item->params[GLASS_PARAM_BLUR_RADIUS],
+      if (!glass_capture_rect_for_panel (&item->P, item->params[GLASS_PARAM_ID_BLUR_RADIUS],
                                          view_rect, &item->C))
         {
           g_array_remove_index (items, i--);
@@ -874,8 +874,8 @@ draw_panels (GlassView             *self,
 
           item->capture = composed_capture (self, composed_index++);
           if (!glass_renderer_compose (self->renderer, item->capture, &item->C, scale,
-                                       (int) item->params[GLASS_PARAM_BLUR_DOWNSCALE],
-                                       item->params[GLASS_PARAM_BLUR_RADIUS],
+                                       (int) item->params[GLASS_PARAM_ID_BLUR_DOWNSCALE],
+                                       item->params[GLASS_PARAM_ID_BLUR_RADIUS],
                                        (GlassLayerSource *) sources->data, sources->len))
             continue;
           draw_item (self, snapshot, item, view_rect, scale);

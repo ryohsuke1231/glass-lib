@@ -19,6 +19,15 @@ glass_params_table = custom_target('glass-params-table',
   command: [find_program(meson.project_source_root() / 'tools' / 'gen-params.py'), '@INPUT@', '@OUTPUT@'],
 )
 
+# spec/params.json -> the public key constants (GLASS_PARAM_BLUR_RADIUS ...).
+glass_params_h = custom_target('glass-params-h',
+  input: meson.project_source_root() / 'spec' / 'params.json',
+  output: 'glass-params.h',
+  command: [find_program(meson.project_source_root() / 'tools' / 'gen-params-header.py'), '@INPUT@', '@OUTPUT@'],
+  install: true,
+  install_dir: get_option('includedir') / 'glass-lib-1',
+)
+
 glass_public_headers = files(
   'glass.h',
   'glass-enums.h',
@@ -94,6 +103,7 @@ libglass = shared_library('glass-lib-1',
   glass_enums,
   glass_resources,
   glass_params_table,
+  glass_params_h,
   glass_version_h,
   include_directories: glass_inc,
   c_args: ['-DGLASS_COMPILATION', '-DG_LOG_DOMAIN="glass"'],
@@ -107,7 +117,7 @@ install_headers(glass_public_headers, glass_version_h, subdir: 'glass-lib-1')
 glass_dep = declare_dependency(
   link_with: libglass,
   include_directories: glass_inc,
-  sources: [glass_enums[1], glass_version_h],
+  sources: [glass_enums[1], glass_params_h, glass_version_h],
   dependencies: [gtk_dep],
 )
 
@@ -122,7 +132,7 @@ pkgconfig.generate(libglass,
 
 if get_option('introspection')
   glass_gir = gnome.generate_gir(libglass,
-    sources: [glass_public_headers, glass_public_sources, glass_enums, glass_version_h],
+    sources: [glass_public_headers, glass_public_sources, glass_enums, glass_params_h, glass_version_h],
     namespace: 'Glass',
     nsversion: '1',
     identifier_prefix: 'Glass',

@@ -129,8 +129,10 @@ rebuild (GlassTabBar *self)
   guint n;
 
   unwatch (self);
-  glass_toggle_group_remove_all (GLASS_TOGGLE_GROUP (self->group));
+  /* Positions first: removing the toggles notifies :active, which
+   * active_changed() must not map to a page. */
   g_array_set_size (self->positions, 0);
+  glass_toggle_group_remove_all (GLASS_TOGGLE_GROUP (self->group));
   if (self->pages == NULL)
     return;
 

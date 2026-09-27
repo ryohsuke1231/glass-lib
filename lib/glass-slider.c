@@ -358,7 +358,7 @@ glass_slider_init (GlassSlider *self)
   glass_panel_set_press_grow (GLASS_PANEL (self->knob), 18.0, 0.5);
   /* A lens over the track: sharp, not frosted (unless the app sets a blur
    * for all glass; design.md §6.7). */
-  glass_panel_set_param_default (GLASS_PANEL (self->knob), GLASS_PARAM_BLUR_RADIUS, 0.0);
+  glass_panel_set_param_default (GLASS_PANEL (self->knob), GLASS_PARAM_ID_BLUR_RADIUS, 0.0);
   glass_view_add_overlay (GLASS_VIEW (self->view), self->knob);
 
   /* The params and the target are the animation's (transfer full). */

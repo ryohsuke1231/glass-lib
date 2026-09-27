@@ -1219,7 +1219,7 @@ glass_panel_get_tint_rgba (GlassPanel    *self,
     }
   else
     glass_context_resolve_tint (glass_context_get_default (), priv->material,
-                                params[GLASS_PARAM_TINT_STRENGTH], theme_bg, out);
+                                params[GLASS_PARAM_ID_TINT_STRENGTH], theme_bg, out);
 
   /* Pressed: a little more of a lighter tint. */
   if (MAX (priv->highlight, priv->press) > 0.0)
@@ -1837,7 +1837,7 @@ glass_panel_get_tint (GlassPanel *self,
     {
       glass_panel_resolve_params (self, glass_context_get_default (), params);
       glass_context_resolve_tint (glass_context_get_default (), priv->material,
-                                  params[GLASS_PARAM_TINT_STRENGTH], NULL, rgba);
+                                  params[GLASS_PARAM_ID_TINT_STRENGTH], NULL, rgba);
       *tint = (GdkRGBA) { rgba[0], rgba[1], rgba[2], rgba[3] };
     }
   return priv->tint_set;
@@ -1876,7 +1876,8 @@ glass_panel_set_tint (GlassPanel    *self,
 /**
  * glass_panel_set_param:
  * @self: a panel
- * @key: a parameter, one of [method@Context.list_params]
+ * @key: a parameter, one of [method@Context.list_params]; the
+ *   `GLASS_PARAM_…` constants name them (%GLASS_PARAM_BLUR_RADIUS …)
  * @value: its value
  *
  * Sets a parameter for this panel's glass only: it takes precedence over

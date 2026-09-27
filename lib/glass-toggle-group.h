@@ -22,6 +22,16 @@ void        glass_toggle_group_append          (GlassToggleGroup *self,
                                                 const char       *label,
                                                 const char       *icon_name);
 
+void        glass_toggle_group_remove          (GlassToggleGroup *self,
+                                                guint             index);
+void        glass_toggle_group_remove_all      (GlassToggleGroup *self);
+
+const char *glass_toggle_group_get_tooltip     (GlassToggleGroup *self,
+                                                guint             index);
+void        glass_toggle_group_set_tooltip     (GlassToggleGroup *self,
+                                                guint             index,
+                                                const char       *tooltip);
+
 guint       glass_toggle_group_get_n_toggles   (GlassToggleGroup *self);
 
 guint       glass_toggle_group_get_active      (GlassToggleGroup *self);

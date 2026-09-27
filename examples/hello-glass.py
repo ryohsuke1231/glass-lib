@@ -56,7 +56,7 @@ def activate(app):
 
     # Tuning: this one capsule bends what is under it more than the rest.
     # Glass.Context.get_default().set_param() would change all the glass.
-    buttons.set_param('displacement-scale', 70)
+    buttons.set_param(Glass.PARAM_DISPLACEMENT_SCALE, 70)
 
     Adw.ApplicationWindow(application=app, title='Hello, Glass', default_width=720,
                           default_height=540, content=toolbar).present()

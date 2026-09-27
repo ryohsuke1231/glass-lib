@@ -89,7 +89,8 @@ def panel():
     expect(p.props.tint is None, 'tint back to the material')
     ok, got = p.get_tint()
     expect(not ok and abs(got.alpha - 0.04) < 1e-6, f'get_tint (CLEAR): {ok} {got}')
-    expect(p.set_param('displacement-scale', 90.0), 'panel set_param')
+    expect(Glass.PARAM_DISPLACEMENT_SCALE == 'displacement-scale', 'PARAM_ constants')
+    expect(p.set_param(Glass.PARAM_DISPLACEMENT_SCALE, 90.0), 'panel set_param')
     expect(p.is_param_set('displacement-scale') and p.get_param('displacement-scale') == 90.0, 'panel get_param')
     expect(p.get_effective_param('displacement-scale') == 90.0, 'panel get_effective_param')
     p.reset_param('displacement-scale')
@@ -117,7 +118,38 @@ def subclass():
     expect(isinstance(b, Glass.Panel) and b.get_corner_radius() == 10.0, 'subclass')
 
 
+def toggle_group_edit():
+    g = Glass.ToggleGroup()
+    for name in 'abc':
+        g.append(name, name.upper(), None)
+    g.set_tooltip(1, 'Bee')
+    expect(g.get_tooltip(1) == 'Bee', 'set_tooltip')
+    g.set_active_name('b')
+    g.remove(1)
+    expect(g.props.n_toggles == 2 and g.get_active_name() == 'c', f'remove: {g.get_active_name()}')
+    g.remove_all()
+    expect(g.props.n_toggles == 0, 'remove_all')
+
+
+def actions():
+    group = Gio.SimpleActionGroup()
+    flag = Gio.SimpleAction.new_stateful('flag', None, GLib.Variant.new_boolean(False))
+    group.add_action(flag)
+    box = Gtk.Box()
+    box.insert_action_group('test', group)
+    sw = Glass.Switch(action_name='test.flag')
+    box.append(sw)
+    flag.set_state(GLib.Variant.new_boolean(True))
+    expect(sw.props.active, 'switch follows the action')
+    sw.props.active = False
+    expect(not flag.get_state().get_boolean(), 'switch changes the action')
+    mb = Glass.MenuButton(action_name='test.flag')
+    expect(isinstance(mb, Gtk.Actionable) and mb.get_action_name() == 'test.flag', 'menu button actionable')
+
+
 check('context', context)
+check('toggle group edit', toggle_group_edit)
+check('actions', actions)
 check('enums', enums)
 check('panel', panel)
 check('subclass', subclass)

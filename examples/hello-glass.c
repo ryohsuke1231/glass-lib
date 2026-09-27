@@ -87,7 +87,7 @@ activate (GtkApplication *app)
 
   /* Tuning: this one capsule bends what is under it more than the rest.
    * glass_context_set_param() would change all the glass. */
-  glass_panel_set_param (GLASS_PANEL (buttons), "displacement-scale", 70.0);
+  glass_panel_set_param (GLASS_PANEL (buttons), GLASS_PARAM_DISPLACEMENT_SCALE, 70.0);
 
   window = adw_application_window_new (app);
   gtk_window_set_title (GTK_WINDOW (window), "Hello, Glass");

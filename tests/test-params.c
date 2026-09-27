@@ -49,35 +49,35 @@ test_materials (void)
   double v[GLASS_N_PARAMS];
 
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_BLUR_RADIUS], ==, 2.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_PROFILE_SHAPE_N], ==, 2.4);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 35.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_RIM_DIRECTIONAL_POWER], ==, 1.6);
-  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.12);
-  g_assert_cmpfloat (v[GLASS_PARAM_SHEEN_INTENSITY], ==, 0.08);
-  g_assert_cmpfloat (v[GLASS_PARAM_SHADOW_INTENSITY], ==, 0.07);
-  g_assert_cmpfloat (v[GLASS_PARAM_DISPLACEMENT_SCALE], ==, 45.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_RIM_WIDTH], ==, 2.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_SHADOW_RADIUS], ==, 16.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_IOR], ==, 2.4);               /* not a material key */
-  g_assert_cmpfloat (v[GLASS_PARAM_BLUR_DOWNSCALE], ==, 2.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 2.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_PROFILE_SHAPE_N], ==, 2.4);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 35.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_RIM_DIRECTIONAL_POWER], ==, 1.6);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.12);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_SHEEN_INTENSITY], ==, 0.08);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_SHADOW_INTENSITY], ==, 0.07);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_DISPLACEMENT_SCALE], ==, 45.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_RIM_WIDTH], ==, 2.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_SHADOW_RADIUS], ==, 16.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_IOR], ==, 2.4);               /* not a material key */
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_DOWNSCALE], ==, 2.0);
 
   glass_context_resolve (ctx, GLASS_MATERIAL_CLEAR, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_BLUR_DOWNSCALE], ==, 1.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.04);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_DOWNSCALE], ==, 1.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.04);
 
   glass_context_resolve (ctx, GLASS_MATERIAL_THICK, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_BLUR_RADIUS], ==, 12.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.55);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 12.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.55);
   g_assert_true (glass_material_specs[GLASS_MATERIAL_THICK].tint_from_theme);
   g_assert_false (glass_material_specs[GLASS_MATERIAL_THICK].adaptive);
 
   /* Menus: lighter than THICK, the theme's colours. */
   g_assert_cmpint (GLASS_N_MATERIALS, ==, GLASS_MATERIAL_MENU + 1);
   glass_context_resolve (ctx, GLASS_MATERIAL_MENU, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_BLUR_RADIUS], ==, 8.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 35.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.45);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 8.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 35.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.45);
   g_assert_true (glass_material_specs[GLASS_MATERIAL_MENU].tint_from_theme);
   g_assert_false (glass_material_specs[GLASS_MATERIAL_MENU].adaptive);
 }
@@ -90,18 +90,21 @@ test_override (void)
   double v[GLASS_N_PARAMS];
   guint gen = glass_context_get_generation (ctx);
 
-  g_assert_true (glass_context_set_param (ctx, "max-z", 30.0));
+  /* The public constants are the keys (glass-params.h). */
+  g_assert_cmpstr (GLASS_PARAM_MAX_Z, ==, "max-z");
+  g_assert_cmpstr (GLASS_PARAM_BLUR_RADIUS, ==, glass_param_specs[GLASS_PARAM_ID_BLUR_RADIUS].key);
+  g_assert_true (glass_context_set_param (ctx, GLASS_PARAM_MAX_Z, 30.0));
   g_assert_cmpuint (glass_context_get_generation (ctx), >, gen);
   g_assert_true (glass_context_is_param_set (ctx, "max-z"));
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 30.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 30.0);
   glass_context_resolve (ctx, GLASS_MATERIAL_THICK, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 30.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 30.0);
 
   glass_context_reset_param (ctx, "max-z");
   g_assert_false (glass_context_is_param_set (ctx, "max-z"));
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_MAX_Z], ==, 35.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 35.0);
 }
 
 /* The tint: the context's colour (else the material's, or the theme's for
@@ -118,7 +121,7 @@ test_tint (void)
   guint gen;
 
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
-  glass_context_resolve_tint (ctx, GLASS_MATERIAL_REGULAR, v[GLASS_PARAM_TINT_STRENGTH], &theme, t);
+  glass_context_resolve_tint (ctx, GLASS_MATERIAL_REGULAR, v[GLASS_PARAM_ID_TINT_STRENGTH], &theme, t);
   g_assert_cmpfloat (t[0], ==, 1.0f);
   g_assert_cmpfloat (t[3], ==, 0.12f);
   glass_context_resolve_tint (ctx, GLASS_MATERIAL_THICK, 0.55, &theme, t);
@@ -139,7 +142,7 @@ test_tint (void)
 
   glass_context_set_param (ctx, "tint-strength", 0.3);
   glass_context_resolve (ctx, GLASS_MATERIAL_THICK, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_TINT_STRENGTH], ==, 0.3);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.3);
 
   glass_context_reset_param (ctx, "tint-strength");
   glass_context_set_tint_color (ctx, NULL);

@@ -1498,7 +1498,7 @@ glass_renderer_render_panel (GlassRenderer            *self,
   if (!cap->valid)
     return FALSE;
 
-  shadow_room = req->has_shadow ? params[GLASS_PARAM_SHADOW_RADIUS] + SHADOW_ROOM_EXTRA : EDGE_ROOM;
+  shadow_room = req->has_shadow ? params[GLASS_PARAM_ID_SHADOW_RADIUS] + SHADOW_ROOM_EXTRA : EDGE_ROOM;
 
   /* O: the panel plus room for its shadow, the texture handed to GTK. */
   O = P;

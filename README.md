@@ -99,8 +99,8 @@ view.add_overlay(new Glass.Panel({ child: myToolbarBox, halign: Gtk.Align.CENTER
     valign: Gtk.Align.END, margin_bottom: 16 }));
 
 // Tuning: all the glass, or one panel.
-Glass.Context.get_default().set_param('blur-radius', 3);
-myPanel.set_param('displacement-scale', 70);
+Glass.Context.get_default().set_param(Glass.PARAM_BLUR_RADIUS, 3);
+myPanel.set_param(Glass.PARAM_DISPLACEMENT_SCALE, 70);
 ```
 
 - [`examples/`](examples): the same small app in C, Python and GJS.

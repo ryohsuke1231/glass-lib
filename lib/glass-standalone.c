@@ -112,11 +112,11 @@ glass_standalone_draw (GlassStandalone       *self,
 
   scale = gdk_surface_get_scale (gtk_native_get_surface (native));
   glass_context_resolve (context, material, params);
-  glass_context_resolve_tint (context, material, params[GLASS_PARAM_TINT_STRENGTH], theme_bg, req.tint);
+  glass_context_resolve_tint (context, material, params[GLASS_PARAM_ID_TINT_STRENGTH], theme_bg, req.tint);
   if (glass_context_get_reduce_transparency (context))
     glass_reduce_transparency (params, req.tint);
 
-  if (!glass_capture_rect_for_panel (rect, params[GLASS_PARAM_BLUR_RADIUS], &view_rect, &creq.rect))
+  if (!glass_capture_rect_for_panel (rect, params[GLASS_PARAM_ID_BLUR_RADIUS], &view_rect, &creq.rect))
     return FALSE;
 
   glass_renderer_make_current (self->renderer);
@@ -125,8 +125,8 @@ glass_standalone_draw (GlassStandalone       *self,
   creq.key_dx = dx;
   creq.key_dy = dy;
   creq.scale = scale;
-  creq.blur_radius = params[GLASS_PARAM_BLUR_RADIUS];
-  creq.downscale = (int) params[GLASS_PARAM_BLUR_DOWNSCALE];
+  creq.blur_radius = params[GLASS_PARAM_ID_BLUR_RADIUS];
+  creq.downscale = (int) params[GLASS_PARAM_ID_BLUR_DOWNSCALE];
   if (!glass_renderer_capture_all (self->renderer, &self->capture, &creq, 1))
     return FALSE;
 

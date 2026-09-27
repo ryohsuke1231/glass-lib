@@ -36,12 +36,16 @@ out:
 
 ```js
 const context = Glass.Context.get_default();
-context.set_param('blur-radius', 3);          // all glass a little blurrier
+context.set_param(Glass.PARAM_BLUR_RADIUS, 3);   // all glass a little blurrier
 
 const hero = new Glass.Panel({ child: card, corner_radius: 28 });
-hero.set_param('displacement-scale', 70);     // this one bends more
-hero.set_param('shadow-intensity', 0.15);
+hero.set_param(Glass.PARAM_DISPLACEMENT_SCALE, 70);  // this one bends more
+hero.set_param(Glass.PARAM_SHADOW_INTENSITY, 0.15);
 ```
+
+Each key has a constant, `Glass.PARAM_BLUR_RADIUS` for `'blur-radius'` and so
+on (`GLASS_PARAM_BLUR_RADIUS` in C): a misspelt constant is an error at once,
+where a misspelt string is only a warning when it runs. The strings work too.
 
 Values out of range are clamped, with a warning; `blur-downscale` snaps to 1,
 2 or 4. [method@Glass.Context.reset_param] and [method@Glass.Panel.reset_param]
@@ -63,7 +67,7 @@ which colour is the first of:
 const pink = new Gdk.RGBA();
 pink.parse('#ff5a8c');
 Glass.Context.get_default().set_tint_color(pink);        // every panel
-Glass.Context.get_default().set_param('tint-strength', 0.2);
+Glass.Context.get_default().set_param(Glass.PARAM_TINT_STRENGTH, 0.2);
 ```
 
 ## Trying values without changing code

@@ -419,7 +419,8 @@ glass_param_find (const char *key)
 /**
  * glass_context_set_param:
  * @self: a context
- * @key: a parameter, one of [method@Context.list_params]
+ * @key: a parameter, one of [method@Context.list_params]; the
+ *   `GLASS_PARAM_…` constants name them (%GLASS_PARAM_BLUR_RADIUS …)
  * @value: its value
  *
  * Sets a parameter for every panel, whatever its material (a panel's own
@@ -613,9 +614,9 @@ void
 glass_reduce_transparency (double params[GLASS_N_PARAMS],
                            float  tint[4])
 {
-  params[GLASS_PARAM_DISPLACEMENT_SCALE] = 0.0;
-  params[GLASS_PARAM_CHROMA_STRENGTH] = 0.0;
-  params[GLASS_PARAM_BLUR_RADIUS] = MIN (MAX (params[GLASS_PARAM_BLUR_RADIUS] * 3.0, 8.0), 30.0);
+  params[GLASS_PARAM_ID_DISPLACEMENT_SCALE] = 0.0;
+  params[GLASS_PARAM_ID_CHROMA_STRENGTH] = 0.0;
+  params[GLASS_PARAM_ID_BLUR_RADIUS] = MIN (MAX (params[GLASS_PARAM_ID_BLUR_RADIUS] * 3.0, 8.0), 30.0);
   tint[3] = MAX (tint[3], 0.6f);
 }
 

@@ -209,6 +209,7 @@ glass_button_class_init (GlassButtonClass *klass)
 static void
 glass_button_init (GlassButton *self)
 {
+  glass_ensure_action_muxer (GTK_WIDGET (self));
   self->button = gtk_button_new ();
   gtk_widget_add_css_class (self->button, "flat");
   glass_panel_set_child (GLASS_PANEL (self), self->button);
