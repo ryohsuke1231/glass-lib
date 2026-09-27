@@ -3,11 +3,48 @@
 // scrolling content, the scroll edge effect and the adaptive colours.
 
 import Gdk from 'gi://Gdk?version=4.0';
-import Gio from 'gi://Gio';
+import GObject from 'gi://GObject';
+import Graphene from 'gi://Graphene';
+import Gsk from 'gi://Gsk?version=4.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
-import { bindInset, loadTexture, photos } from '../util.js';
+import { bindInset, openImage, photos } from '../util.js';
+
+// One photo at the full height it is given, as wide as that makes it (a
+// GtkPicture fits both ways). Width-for-height, so a horizontal scrolled
+// window measures it at the viewport's height and scrolls what is wider;
+// narrower photos are centred.
+const PhotoView = GObject.registerClass(class PhotoView extends Gtk.Widget {
+    private texture: Gdk.Texture | null = null;
+
+    setTexture(texture: Gdk.Texture) {
+        this.texture = texture;
+        this.queue_resize();
+    }
+
+    vfunc_get_request_mode(): Gtk.SizeRequestMode {
+        return Gtk.SizeRequestMode.WIDTH_FOR_HEIGHT;
+    }
+
+    vfunc_measure(orientation: Gtk.Orientation, forSize: number): [number, number, number, number] {
+        if (orientation === Gtk.Orientation.HORIZONTAL && this.texture && forSize > 0) {
+            const width = Math.ceil(forSize * this.texture.get_width() / this.texture.get_height());
+            return [width, width, -1, -1];
+        }
+        return [0, 0, -1, -1];
+    }
+
+    vfunc_snapshot(snapshot: Gtk.Snapshot) {
+        const h = this.get_height();
+        if (!this.texture || h <= 0)
+            return;
+        const w = h * this.texture.get_width() / this.texture.get_height();
+        const x = Math.max(0, (this.get_width() - w) / 2);
+        snapshot.append_scaled_texture(this.texture, Gsk.ScalingFilter.TRILINEAR,
+            new Graphene.Rect().init(x, 0, w, h));
+    }
+});
 
 export class PhotosPage {
     readonly toolbar: Glass.ToolbarView;
@@ -15,6 +52,9 @@ export class PhotosPage {
     private flow: Gtk.FlowBox;
     private scrolled: Gtk.ScrolledWindow;
     private actions: Gtk.Box;
+    private stack: Gtk.Stack;
+    private photo: InstanceType<typeof PhotoView>;
+    private photoScrolled: Gtk.ScrolledWindow;
 
     constructor() {
         this.flow = new Gtk.FlowBox({
@@ -35,15 +75,28 @@ export class PhotosPage {
             vexpand: true,
         });
 
-        this.toolbar = new Glass.ToolbarView({ content: this.scrolled });
+        // One opened photo, large, under the bars.
+        this.photo = new PhotoView();
+        this.photoScrolled = new Gtk.ScrolledWindow({
+            child: this.photo,
+            hscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            vscrollbar_policy: Gtk.PolicyType.NEVER,
+            hexpand: true,
+            vexpand: true,
+        });
+        this.stack = new Gtk.Stack({ transition_type: Gtk.StackTransitionType.CROSSFADE });
+        this.stack.add_named(this.scrolled, 'grid');
+        this.stack.add_named(this.photoScrolled, 'photo');
+
+        this.toolbar = new Glass.ToolbarView({ content: this.stack });
 
         this.header = new Glass.HeaderBar();
         const open = new Gtk.Button({ icon_name: 'folder-open-symbolic', tooltip_text: 'Open a folder of photos' });
         open.connect('clicked', () => this.openFolder());
         this.header.pack_start(open);
-        const openImages = new Gtk.Button({ icon_name: 'image-x-generic-symbolic', tooltip_text: 'Open photos' });
-        openImages.connect('clicked', () => this.openImages());
-        this.header.pack_start(openImages);
+        const openImage = new Gtk.Button({ icon_name: 'image-x-generic-symbolic', tooltip_text: 'Open a photo' });
+        openImage.connect('clicked', () => this.openImage());
+        this.header.pack_start(openImage);
         this.header.pack_start(new Gtk.Button({ icon_name: 'view-refresh-symbolic', tooltip_text: 'Reload' }));
 
         const layout = new Glass.ToggleGroup();
@@ -53,6 +106,7 @@ export class PhotosPage {
             const list = layout.get_active_name() === 'list';
             this.flow.set_max_children_per_line(list ? 1 : 4);
             this.flow.set_min_children_per_line(list ? 1 : 2);
+            this.stack.set_visible_child_name('grid');
         });
         this.header.set_title_widget(layout);
 
@@ -77,6 +131,7 @@ export class PhotosPage {
     // The split view's sidebar covers the start of the page.
     setInsetSource(split: Glass.SplitView) {
         bindInset(split, 'content-inset', this.flow, 'margin-start', 0);
+        bindInset(split, 'content-inset', this.photo, 'margin-start', 0);
         bindInset(split, 'content-inset', this.header, 'margin-start', 0);
         bindInset(split, 'content-inset', this.actions, 'margin-start', 0);
     }
@@ -107,29 +162,13 @@ export class PhotosPage {
         }
     }
 
-    // Any image files, one or several.
-    private openImages() {
-        const images = new Gtk.FileFilter({ name: 'Images' });
-        images.add_mime_type('image/*');
-        const filters = new Gio.ListStore({ item_type: Gtk.FileFilter.$gtype });
-        filters.append(images);
-        const dialog = new Gtk.FileDialog({ title: 'Open photos', filters, default_filter: images });
-        dialog.open_multiple(this.toolbar.get_root() as Gtk.Window, null, (_d, result) => {
-            let files: Gio.ListModel | null = null;
-            try {
-                files = dialog.open_multiple_finish(result);
-            } catch (e) {
-                return;   // Cancelled.
-            }
-            const textures: Gdk.Texture[] = [];
-            for (let i = 0; files && i < files.get_n_items(); i++) {
-                const path = (files.get_item(i) as Gio.File).get_path();
-                const texture = path ? loadTexture(path, 960) : null;
-                if (texture)
-                    textures.push(texture);
-            }
-            if (textures.length)
-                this.fill(textures);
+    // Any image file, shown alone at the page's height; the grid comes back with the
+    // layout toggle or a folder.
+    private openImage() {
+        openImage(this.toolbar, 2560, texture => {
+            this.photo.setTexture(texture);
+            this.photoScrolled.get_hadjustment().set_value(0);
+            this.stack.set_visible_child_name('photo');
         });
     }
 
@@ -138,8 +177,10 @@ export class PhotosPage {
         dialog.select_folder(this.toolbar.get_root() as Gtk.Window, null, (_d, result) => {
             try {
                 const folder = dialog.select_folder_finish(result);
-                if (folder?.get_path())
+                if (folder?.get_path()) {
                     this.fill(photos(folder.get_path(), 48));
+                    this.stack.set_visible_child_name('grid');
+                }
             } catch (e) {
                 // Cancelled.
             }

@@ -31,6 +31,30 @@ export function loadTexture(path: string, maxSide: number): Gdk.Texture | null {
     }
 }
 
+// Asks for any image file and loads it, its longest side at most maxSide.
+// Cancelling calls nothing; a file that does not load is only logged.
+export function openImage(parent: Gtk.Widget, maxSide: number, done: (texture: Gdk.Texture) => void) {
+    const images = new Gtk.FileFilter({ name: 'Images' });
+    images.add_mime_type('image/*');
+    const filters = new Gio.ListStore({ item_type: Gtk.FileFilter.$gtype });
+    filters.append(images);
+    const dialog = new Gtk.FileDialog({ title: 'Open a photo', filters, default_filter: images });
+    dialog.open(parent.get_root() as Gtk.Window, null, (_d, result) => {
+        let file: Gio.File | null = null;
+        try {
+            file = dialog.open_finish(result);
+        } catch (e) {
+            return;   // Cancelled.
+        }
+        const path = file?.get_path() ?? null;
+        const texture = path ? loadTexture(path, maxSide) : null;
+        if (texture)
+            done(texture);
+        else
+            console.warn(`Cannot load ${file?.get_uri()}`);
+    });
+}
+
 export function photos(folder: string | null = null, max = 12): Gdk.Texture[] {
     if (folder === null && photoCache !== null)
         return photoCache;
@@ -143,6 +167,11 @@ export class Canvas {
         this.widget = new Gtk.Stack({ hexpand: true, vexpand: true });
         this.widget.add_named(this.area, 'pattern');
         this.widget.add_named(this.picture, 'photo');
+    }
+
+    // The picture of the 'photo' pattern.
+    setPhoto(texture: Gdk.Texture) {
+        this.picture.set_paintable(texture);
     }
 
     setPattern(pattern: Pattern) {

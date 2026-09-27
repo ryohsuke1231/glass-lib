@@ -5,7 +5,10 @@ import Graphene from 'gi://Graphene';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
-import { AnimationBar, bindInset, Canvas, PATTERNS, Pattern } from '../util.js';
+import { AnimationBar, bindInset, Canvas, openImage, PATTERNS, Pattern } from '../util.js';
+
+const PANEL_WIDTH = 260;
+const CIRCLE = 260;
 
 export class PlaygroundPage {
     readonly toolbar: Glass.ToolbarView;
@@ -24,7 +27,7 @@ export class PlaygroundPage {
         this.stage = new Glass.View({ content: this.canvas.widget });
 
         const label = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 4,
-            margin_top: 14, margin_bottom: 14, margin_start: 22, margin_end: 22 });
+            valign: Gtk.Align.CENTER, margin_top: 14, margin_bottom: 14, margin_start: 22, margin_end: 22 });
         label.append(new Gtk.Label({ label: 'Drag me', css_classes: ['title-3'] }));
         label.append(new Gtk.Label({ label: 'glass over the background', css_classes: ['dim-label'] }));
         this.panel = new Glass.Panel({
@@ -33,7 +36,7 @@ export class PlaygroundPage {
             valign: Gtk.Align.START,
             margin_start: 340,
             margin_top: 140,
-            width_request: 260,
+            width_request: PANEL_WIDTH,
         });
         this.makeDraggable(this.panel);
         this.stage.add_overlay(this.panel);
@@ -58,6 +61,13 @@ export class PlaygroundPage {
             this.canvas.setPattern(background.get_active_name() as Pattern));
         this.header.set_title_widget(background);
         this.background = background;
+        // Any image as the background: shown by the Photo pattern.
+        const open = new Gtk.Button({ icon_name: 'document-open-symbolic', tooltip_text: 'Open a photo' });
+        open.connect('clicked', () => openImage(this.toolbar, 2560, texture => {
+            this.canvas.setPhoto(texture);
+            background.set_active_name('photo');
+        }));
+        this.header.pack_start(open);
         this.toolbar.add_top_bar(this.header);
 
         // Material, shape and shadow, each a glass control of its own: the
@@ -81,11 +91,14 @@ export class PlaygroundPage {
         shape.append('capsule', 'Capsule', null);
         shape.append('rounded', 'Rounded', null);
         shape.append('mixed', 'Mixed', null);
+        shape.append('circle', 'Circle', null);
         shape.connect('notify::active-name', () => {
             // Mixed: a radius per corner, large on one diagonal, small on
-            // the other.
+            // the other. Circle: a capsule as tall as it is wide.
             const name = shape.get_active_name();
-            this.panel.set_corner_radius(name === 'capsule' ? -1 : 18);
+            const circle = name === 'circle';
+            this.panel.set_size_request(circle ? CIRCLE : PANEL_WIDTH, circle ? CIRCLE : -1);
+            this.panel.set_corner_radius(name === 'capsule' || circle ? -1 : 18);
             if (name === 'mixed')
                 this.panel.set_corner_radii(30, 6, 30, 6);
             else
