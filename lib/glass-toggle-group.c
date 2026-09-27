@@ -58,6 +58,7 @@ struct _GlassToggleGroup {
 
   /* Dragging the plate */
   GtkGesture     *drag;
+  gboolean        held;            /* the pointer is down on the group */
   gboolean        drag_armed;      /* pressed on the active toggle */
   gboolean        dragging;        /* moved past the threshold: the plate follows */
   graphene_rect_t drag_origin;     /* the active toggle when the drag began */
@@ -240,10 +241,12 @@ set_active_internal (GlassToggleGroup *self, guint active, gboolean animate)
  * go of it and follows the pointer; the toggle nearest the pointer is marked
  * as active meanwhile (its colour only: nothing is notified). On release that
  * toggle becomes active and the plate settles on it. A tap still activates
- * a toggle at once: the drag only claims the press once it moves. */
+ * a toggle at once: the drag only claims the press once it moves. While it
+ * follows the pointer the plate swells more than a press makes it. */
 
 #define DRAG_THRESHOLD 6.0     /* px */
-#define JELLY_OMEGA    36.0    /* rad/s: an edge's spring, with no heading */
+#define DRAG_SWELL     2.5     /* the press's swell, times this while dragged */
+#define JELLY_OMEGA    48.0    /* rad/s: an edge's spring, with no heading */
 #define JELLY_LEAD     0.35    /* the front edge this much stiffer, the back this much softer */
 #define JELLY_ZETA     0.45    /* of critical damping: an edge runs on a little past its mark */
 #define JELLY_STEP     0.002   /* s: physics substep */
@@ -506,6 +509,8 @@ drag_update (GtkGestureDrag   *gesture,
         return;
       self->dragging = TRUE;
       jelly_start (self);
+      if (self->held)
+        glass_panel_set_press_level (GLASS_PANEL (self->plate), DRAG_SWELL);
     }
   self->pointer_dx = dx;
   jelly_follow_pointer (self);
@@ -526,6 +531,9 @@ drag_finish (GlassToggleGroup *self,
   to = commit ? nearest_toggle (self, (self->target_edge[0] + self->target_edge[1]) / 2.0) : self->active;
   self->dragging = FALSE;
   self->drag_armed = FALSE;
+  /* Back to a press while the pointer is still down (a cancelled drag). */
+  if (self->held)
+    glass_panel_set_press_level (GLASS_PANEL (self->plate), 1.0);
   jelly_settle_on (self, to);
   show_as_active (self, to);
 
@@ -578,12 +586,14 @@ press_event (GtkEventControllerLegacy *controller,
     {
     case GDK_BUTTON_PRESS:
     case GDK_TOUCH_BEGIN:
+      self->held = TRUE;
       glass_panel_set_pressed (GLASS_PANEL (self->plate), TRUE);
       break;
     case GDK_BUTTON_RELEASE:
     case GDK_TOUCH_END:
     case GDK_TOUCH_CANCEL:
     case GDK_GRAB_BROKEN:
+      self->held = FALSE;
       glass_panel_set_pressed (GLASS_PANEL (self->plate), FALSE);
       break;
     default:

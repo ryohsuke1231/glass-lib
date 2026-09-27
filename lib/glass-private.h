@@ -205,6 +205,9 @@ double   glass_panel_effective_radius (GlassPanel            *self,
                                        const graphene_rect_t *bounds);
 void     glass_panel_set_pressed     (GlassPanel *self,
                                       gboolean    pressed);
+/* Like set_pressed, to @level (1: pressed): a dragged plate swells more. */
+void     glass_panel_set_press_level (GlassPanel *self,
+                                      double      level);
 void     glass_panel_set_press_grow  (GlassPanel *self,
                                       double      grow_px,
                                       double      max_extra);

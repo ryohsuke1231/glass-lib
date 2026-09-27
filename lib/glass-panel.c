@@ -67,7 +67,7 @@ typedef struct {
   double              highlight;
 
   gboolean            interactive;
-  double              press;            /* 0..1, sprung */
+  double              press;            /* 0..1 (more while a plate is dragged), sprung */
   double              press_grow_px;    /* how much wider the glass gets, pressed */
   double              press_max_extra;  /* ... at most this fraction */
   AdwAnimation       *press_anim;
@@ -648,6 +648,13 @@ void
 glass_panel_set_pressed (GlassPanel *self,
                          gboolean    pressed)
 {
+  glass_panel_set_press_level (self, pressed ? 1.0 : 0.0);
+}
+
+void
+glass_panel_set_press_level (GlassPanel *self,
+                             double      level)
+{
   GlassPanelPrivate *priv = PRIV (self);
   AdwSpringParams *spring;
 
@@ -660,11 +667,11 @@ glass_panel_set_pressed (GlassPanel *self,
     }
 
   /* In fast and firm; out with a small overshoot. */
-  spring = pressed ? adw_spring_params_new (0.9, 1.0, 900.0) : adw_spring_params_new (0.45, 1.0, 420.0);
+  spring = level > 0.0 ? adw_spring_params_new (0.9, 1.0, 900.0) : adw_spring_params_new (0.45, 1.0, 420.0);
   adw_spring_animation_set_spring_params (ADW_SPRING_ANIMATION (priv->press_anim), spring);
   adw_spring_params_unref (spring);
   adw_spring_animation_set_value_from (ADW_SPRING_ANIMATION (priv->press_anim), priv->press);
-  adw_spring_animation_set_value_to (ADW_SPRING_ANIMATION (priv->press_anim), pressed ? 1.0 : 0.0);
+  adw_spring_animation_set_value_to (ADW_SPRING_ANIMATION (priv->press_anim), level);
   adw_spring_animation_set_initial_velocity (ADW_SPRING_ANIMATION (priv->press_anim), 0.0);
   adw_animation_play (priv->press_anim);
 }
