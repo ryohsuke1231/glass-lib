@@ -90,6 +90,35 @@ test_fallback_setting (void)
   spin (50);
 }
 
+/* A view realized under the CSS fallback gets its renderer when the setting
+ * comes back (a page first shown while the fallback was chosen). */
+static void
+test_fallback_realized (void)
+{
+  GlassContext *ctx = glass_context_get_default ();
+  GtkWidget *view = glass_view_new ();
+  GtkWidget *panel = glass_panel_new ();
+  GtkWidget *window;
+
+  glass_view_add_overlay (GLASS_VIEW (view), panel);
+  window = window_with (view);
+  glass_context_set_renderer (ctx, GLASS_RENDERER_MODE_FALLBACK);
+  gtk_window_present (GTK_WINDOW (window));
+  spin (100);
+  g_assert_true (gtk_widget_get_realized (view));
+  g_assert_cmpint (glass_view_get_active_renderer (GLASS_VIEW (view)), ==, GLASS_RENDERER_MODE_FALLBACK);
+
+  glass_context_set_renderer (ctx, GLASS_RENDERER_MODE_AUTO);
+  if (!glass_renderer_failed (gtk_widget_get_native (view)))
+    g_assert_false (gtk_widget_has_css_class (panel, "glass-fallback"));
+  g_assert_cmpint (glass_view_get_active_renderer (GLASS_VIEW (view)), ==,
+                   glass_renderer_failed (gtk_widget_get_native (view)) ? GLASS_RENDERER_MODE_FALLBACK
+                                                                        : GLASS_RENDERER_MODE_FULL);
+
+  gtk_window_destroy (GTK_WINDOW (window));
+  spin (50);
+}
+
 /* With the CSS fallback the view samples the backdrop itself: the colours
  * still follow what is under the panel (design.md §12.1). */
 static void
@@ -841,6 +870,7 @@ main (int argc, char **argv)
 
   g_test_add_func ("/widgets/registration", test_registration);
   g_test_add_func ("/widgets/fallback-setting", test_fallback_setting);
+  g_test_add_func ("/widgets/fallback-realized", test_fallback_realized);
   g_test_add_func ("/widgets/fallback-adaptive", test_fallback_adaptive);
   g_test_add_func ("/widgets/panel-params", test_panel_params);
   g_test_add_func ("/widgets/css-classes", test_css_classes);

@@ -83,6 +83,10 @@ void     glass_context_resolve_tint  (GlassContext  *self,
                                       double         strength,
                                       const GdkRGBA *theme_bg,
                                       float          out[4]);
+/* GlassContext:reduce-transparency, applied to resolved @params and @tint:
+ * no refraction, more blur, more tint. The same for every kind of glass. */
+void     glass_reduce_transparency   (double        params[GLASS_N_PARAMS],
+                                      float         tint[4]);
 /* Bumped by every change that affects drawing. */
 guint    glass_context_get_generation (GlassContext *self);
 gboolean glass_context_get_high_contrast (GlassContext *self);

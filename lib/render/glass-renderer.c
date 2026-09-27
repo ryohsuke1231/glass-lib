@@ -74,8 +74,14 @@ typedef struct {
   GLsync      sync;
 } ReleaseData;
 
+/* A blur program and its uniforms' locations. */
 typedef struct {
-  GLuint h, v;
+  GLuint program;
+  GLint  src, inv_size, kernel_scale, uv_rect;
+} BlurPass;
+
+typedef struct {
+  BlurPass h, v;
 } BlurPrograms;
 
 struct _GlassRenderer {
@@ -88,6 +94,9 @@ struct _GlassRenderer {
   GLuint            vao;
   GLuint            prog_glass;
   GLuint            prog_copy;       /* one texture, as is (compositing layers) */
+  GLint             copy_src, copy_uv_rect;
+  /* The glass program's uniforms, by the address of their (static) names:
+   * a pass sets some 70, and hashing each string every time added up. */
   GHashTable       *uniforms;        /* static name -> location + 1 */
   GHashTable       *blur_programs;   /* sigma * 1000 -> BlurPrograms* */
   GskRenderer      *capture_renderer; /* a private GL renderer, or NULL: the window's */
@@ -496,10 +505,10 @@ blur_programs_free (gpointer data)
   BlurPrograms *bp = data;
 
   /* The context is current when the table is destroyed. */
-  if (bp->h)
-    glDeleteProgram (bp->h);
-  if (bp->v)
-    glDeleteProgram (bp->v);
+  if (bp->h.program)
+    glDeleteProgram (bp->h.program);
+  if (bp->v.program)
+    glDeleteProgram (bp->v.program);
   g_free (bp);
 }
 
@@ -571,10 +580,15 @@ renderer_new (GtkNative *native)
     const char *copy_parts[] = { copy_src, NULL };
 
     self->prog_copy = glass_gl_program_new (es, self->vertex_source, copy_parts, NULL);
+    if (self->prog_copy)
+      {
+        self->copy_src = glGetUniformLocation (self->prog_copy, "u_src");
+        self->copy_uv_rect = glGetUniformLocation (self->prog_copy, "u_uv_rect");
+      }
   }
 
   glGenVertexArrays (1, &self->vao);
-  self->uniforms = g_hash_table_new (g_str_hash, g_str_equal);
+  self->uniforms = g_hash_table_new (g_direct_hash, g_direct_equal);
   self->blur_programs = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, blur_programs_free);
   self->native = native;
   self->info = g_strdup_printf ("%s %d.%d, %s", es ? "OpenGL ES" : "OpenGL", major, minor,
@@ -694,6 +708,15 @@ u1f (GlassRenderer *self, const char *name, double value)
     glUniform1f (location, (float) value);
 }
 
+static void
+blur_pass_locate (BlurPass *pass)
+{
+  pass->src = glGetUniformLocation (pass->program, "u_src");
+  pass->inv_size = glGetUniformLocation (pass->program, "inv_size");
+  pass->kernel_scale = glGetUniformLocation (pass->program, "kernel_scale");
+  pass->uv_rect = glGetUniformLocation (pass->program, "u_uv_rect");
+}
+
 /* Our context must be current. The weights are baked into the program, so
  * one program pair per sigma (materials differ). */
 static BlurPrograms *
@@ -706,7 +729,7 @@ blur_programs (GlassRenderer *self, const GlassGaussKernel *kernel)
   g_autofree char *v_src = NULL;
 
   if (bp)
-    return bp->v ? bp : NULL;
+    return bp->v.program ? bp : NULL;
 
   bp = g_new0 (BlurPrograms, 1);
   g_hash_table_insert (self->blur_programs, key, bp);
@@ -717,15 +740,17 @@ blur_programs (GlassRenderer *self, const GlassGaussKernel *kernel)
     const char *h_parts[] = { h_src, NULL };
     const char *v_parts[] = { v_src, NULL };
 
-    bp->h = glass_gl_program_new (self->use_es, self->vertex_source, h_parts, &error);
-    if (bp->h)
-      bp->v = glass_gl_program_new (self->use_es, self->vertex_source, v_parts, &error);
+    bp->h.program = glass_gl_program_new (self->use_es, self->vertex_source, h_parts, &error);
+    if (bp->h.program)
+      bp->v.program = glass_gl_program_new (self->use_es, self->vertex_source, v_parts, &error);
   }
-  if (bp->v == 0)
+  if (bp->v.program == 0)
     {
       g_warning ("the blur shader did not build, glass is drawn unblurred: %s", error->message);
       return NULL;
     }
+  blur_pass_locate (&bp->h);
+  blur_pass_locate (&bp->v);
 
   return bp;
 }
@@ -776,18 +801,18 @@ glass_unwrap_node (GskRenderNode *node, float *dx, float *dy)
 }
 
 static void
-run_blur_pass (GlassRenderer *self, GLuint program, double kernel_scale,
+run_blur_pass (GlassRenderer *self, const BlurPass *pass, double kernel_scale,
                GLuint src, GLuint dst_fbo, int w, int h)
 {
   glBindFramebuffer (GL_FRAMEBUFFER, dst_fbo);
   glViewport (0, 0, w, h);
-  glUseProgram (program);
+  glUseProgram (pass->program);
   glActiveTexture (GL_TEXTURE0);
   glBindTexture (GL_TEXTURE_2D, src);
-  glUniform1i (glGetUniformLocation (program, "u_src"), 0);
-  glUniform2f (glGetUniformLocation (program, "inv_size"), 1.0f / w, 1.0f / h);
-  glUniform1f (glGetUniformLocation (program, "kernel_scale"), (float) kernel_scale);
-  glUniform4f (glGetUniformLocation (program, "u_uv_rect"), 0.0f, 0.0f, 1.0f, 1.0f);
+  glUniform1i (pass->src, 0);
+  glUniform2f (pass->inv_size, 1.0f / w, 1.0f / h);
+  glUniform1f (pass->kernel_scale, (float) kernel_scale);
+  glUniform4f (pass->uv_rect, 0.0f, 0.0f, 1.0f, 1.0f);
   glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
 }
 
@@ -873,8 +898,8 @@ blur (GlassRenderer *self,
         {
           glBindVertexArray (self->vao);
           glDisable (GL_BLEND);
-          run_blur_pass (self, bp->h, kernel.scale, cap->capture_tex, cap->blur_h_fbo, w, h);
-          run_blur_pass (self, bp->v, kernel.scale, cap->blur_h_tex, cap->blur_v_fbo, w, h);
+          run_blur_pass (self, &bp->h, kernel.scale, cap->capture_tex, cap->blur_h_fbo, w, h);
+          run_blur_pass (self, &bp->v, kernel.scale, cap->blur_h_tex, cap->blur_v_fbo, w, h);
           glBindFramebuffer (GL_FRAMEBUFFER, 0);
           cap->backdrop_tex = cap->blur_v_tex;
         }
@@ -1147,7 +1172,7 @@ draw_layer (GlassRenderer         *self,
 
   glViewport (x0, y0, x1 - x0, y1 - y0);
   glBindTexture (GL_TEXTURE_2D, src);
-  glUniform4f (glGetUniformLocation (self->prog_copy, "u_uv_rect"),
+  glUniform4f (self->copy_uv_rect,
                (float) ((I.origin.x - src_rect->origin.x) / src_rect->size.width),
                (float) ((I.origin.y - src_rect->origin.y) / src_rect->size.height),
                (float) ((I.origin.x + I.size.width - src_rect->origin.x) / src_rect->size.width),
@@ -1206,7 +1231,7 @@ glass_renderer_compose (GlassRenderer          *self,
   glBindVertexArray (self->vao);
   glUseProgram (self->prog_copy);
   glActiveTexture (GL_TEXTURE0);
-  glUniform1i (glGetUniformLocation (self->prog_copy, "u_src"), 0);
+  glUniform1i (self->copy_src, 0);
   glEnable (GL_BLEND);
   glBlendFunc (GL_ONE, GL_ONE_MINUS_SRC_ALPHA);   /* premultiplied OVER */
   for (guint i = 0; i < n; i++)

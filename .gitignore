@@ -21,3 +21,9 @@ node_modules/
 /build-flatpak/
 /.flatpak-builder/
 /repo/
+
+# development notes and prototypes, kept out of the published repository
+/docs/memo.md
+/docs/archive/
+/docs/research/
+/spikes/

@@ -114,11 +114,7 @@ glass_standalone_draw (GlassStandalone       *self,
   glass_context_resolve (context, material, params);
   glass_context_resolve_tint (context, material, params[GLASS_PARAM_TINT_STRENGTH], theme_bg, req.tint);
   if (glass_context_get_reduce_transparency (context))
-    {
-      params[GLASS_PARAM_DISPLACEMENT_SCALE] = 0.0;
-      params[GLASS_PARAM_BLUR_RADIUS] = MIN (MAX (params[GLASS_PARAM_BLUR_RADIUS] * 3.0, 8.0), 30.0);
-      req.tint[3] = MAX (req.tint[3], 0.6f);
-    }
+    glass_reduce_transparency (params, req.tint);
 
   if (!glass_capture_rect_for_panel (rect, params[GLASS_PARAM_BLUR_RADIUS], &view_rect, &creq.rect))
     return FALSE;

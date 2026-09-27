@@ -1,5 +1,5 @@
 option('spikes', type: 'boolean', value: true,
-  description: 'Build the Phase 0 spike programs (spikes/)')
+  description: 'Build the Phase 0 spike programs (spikes/, when present: not in the published repository)')
 option('introspection', type: 'boolean', value: true, description: 'Generate the GObject Introspection data (Glass-1.gir / .typelib)')
 option('tests', type: 'boolean', value: true,
   description: 'Build the tests (tests/)')

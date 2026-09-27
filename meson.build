@@ -40,6 +40,7 @@ if get_option('demos').length() > 0
   subdir('demo')
 endif
 
-if get_option('spikes')
+# The spikes are not in the published repository: build them where they are.
+if get_option('spikes') and import('fs').exists('spikes/s1-full-renderer/meson.build')
   subdir('spikes/s1-full-renderer')
 endif

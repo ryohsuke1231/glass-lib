@@ -195,6 +195,8 @@ glass_popover_snapshot (GtkWidget   *widget,
   graphene_point_t offset, origin;
   graphene_rect_t box;
   GskRenderNode *backdrop = NULL;
+  GtkSnapshot *glass;
+  GskRenderNode *glass_node;
   GdkRGBA bg;
   GskRoundedRect shape;
 
@@ -207,14 +209,26 @@ glass_popover_snapshot (GtkWidget   *widget,
                                  &bg)) == NULL)
     goto plain;
 
-  /* A soft shadow within the popover's own margins. */
+  /* The glass first, aside: the plain look has a shadow of its own, so the
+   * glass's is only added once there is glass. */
+  glass = gtk_snapshot_new ();
+  if (!glass_standalone_draw (self->glass, widget, glass, backdrop, &box, (double[4]) { RADIUS, RADIUS, RADIUS, RADIUS },
+                              GLASS_MATERIAL_MENU, &bg, FALSE))
+    {
+      g_object_unref (glass);
+      goto plain;
+    }
+  gsk_render_node_unref (backdrop);
+
+  /* A soft shadow within the popover's own margins, under the glass. */
   gsk_rounded_rect_init_from_rect (&shape, &box, RADIUS);
   gtk_snapshot_append_outset_shadow (snapshot, &shape, &(GdkRGBA) { 0, 0, 0.02f, 0.22f }, 0, 2, 0, 8);
-
-  if (!glass_standalone_draw (self->glass, widget, snapshot, backdrop, &box, (double[4]) { RADIUS, RADIUS, RADIUS, RADIUS },
-                              GLASS_MATERIAL_MENU, &bg, FALSE))
-    goto plain;
-  gsk_render_node_unref (backdrop);
+  glass_node = gtk_snapshot_free_to_node (glass);
+  if (glass_node)
+    {
+      gtk_snapshot_append_node (snapshot, glass_node);
+      gsk_render_node_unref (glass_node);
+    }
 
   /* The contents' children, without the contents' own background. They
    * are placed from the contents' content box, which is its origin: the

@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<gresources>
-  <gresource prefix="/io/github/ryohsuke1231/GlassLib/s1">
-    <!-- Generated in the build directory by shaders/meson.build. -->
-    <file>glass-core.frag</file>
-    <file>glass-reference.frag</file>
-    <file>quad.vert</file>
-  </gresource>
-</gresources>

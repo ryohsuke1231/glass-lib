@@ -609,6 +609,16 @@ glass_context_resolve (GlassContext *self,
              : glass_param_specs[i].default_value;
 }
 
+void
+glass_reduce_transparency (double params[GLASS_N_PARAMS],
+                           float  tint[4])
+{
+  params[GLASS_PARAM_DISPLACEMENT_SCALE] = 0.0;
+  params[GLASS_PARAM_CHROMA_STRENGTH] = 0.0;
+  params[GLASS_PARAM_BLUR_RADIUS] = MIN (MAX (params[GLASS_PARAM_BLUR_RADIUS] * 3.0, 8.0), 30.0);
+  tint[3] = MAX (tint[3], 0.6f);
+}
+
 guint
 glass_context_get_generation (GlassContext *self)
 {

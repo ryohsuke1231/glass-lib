@@ -15,6 +15,13 @@ scrolls under them — in the same frame, on any compositor.
 > This is an unofficial, community-driven project and is not affiliated with,
 > endorsed by, or connected to Apple Inc. in any way.
 
+> [!NOTE]
+> **AI usage:** A significant part of this codebase was written with the help
+> of AI coding assistants, primarily **Claude (Anthropic)**, used for
+> implementation, shader and rendering debugging, and refactoring. The design,
+> the architecture decisions and all of the testing on real hardware are mine,
+> and every change is reviewed before it lands.
+
 ## What it provides
 
 - **`GlassView`** and **`GlassPanel`**: glass over any content — the view draws
@@ -45,7 +52,7 @@ the compositor: it works on any Wayland compositor and on X11.
 
 | | |
 |---|---|
-| ![Glass Gallery: switches, sliders, buttons and a toggle group of glass over a gradient](docs/screenshots/gallery-controls.png) | ![Glass Gallery's Lab: every parameter and the tint, live](docs/screenshots/gallery-lab.png) |
+| ![Glass Gallery's Controls: switches, sliders, buttons and a toggle group of glass over animated shapes](docs/screenshots/gallery-controls.png) | ![Glass Gallery's Lab: the optical parameters and the tint as live sliders, over animated shapes](docs/screenshots/gallery-lab.png) |
 
 ## Requirements
 
@@ -166,7 +173,7 @@ API reference lists the rest.
 | `tests/` | Unit, widget, Python and golden-image tests |
 | `demo/` | Glass Gallery and Glass Weather (TypeScript) |
 | `examples/` | The smallest complete apps, in C, Python and GJS |
-| `docs/` | The design (`design.md`), pitfalls met (`memo.md`), the API reference's pages (`reference/`) |
+| `docs/` | The design (`design.md`, in Japanese), the API reference's pages (`reference/`) |
 | `build-aux/flatpak/` | The demos' Flatpak manifests |
 
 ## License

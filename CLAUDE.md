@@ -31,6 +31,14 @@
 - Flatpak と API ドキュメントの作り方は設計書 §15.3・§15.4（gi-docgen はこのマシンに無い）。
 - **見た目の確認のためにアプリを開いたり、スクリーンショットを撮ったりしなくてよい。** 見た目はユーザーが確かめる。Claude はビルド・`meson test`・デモの型検査までを行い、何を見てほしいかを報告する（ユーザーの環境は sway で、確認用の窓が作業中のワークスペースを乱すため）。
 - デモの `npm run build` は、先にビルドしたライブラリの `build/lib/Glass-1.gir` から型（`demo/types/`）を生成する。ライブラリの公開 API を変えたら `meson compile -C build` の後に `npm run build`。
+- ソースコードの方を変更したら、Flatpakの方も必ず合わせる。
+例：
+```bash
+cd ~/Projects/GitHub/glass-lib
+flatpak run --env=FLATPAK_USER_DIR=$HOME/.local/share/flatpak org.flatpak.Builder \
+    --user --install --disable-rofiles-fuse --force-clean build-flatpak \
+    build-aux/flatpak/io.github.ryohsuke1231.GlassWeather.json
+```
 
 ## ファイル読み取りの許可
 - `docs/memo.md`: 踏んだ地雷や罠、教訓の記録。読み取りも書き込みも自由。新しい罠が原因まで確定したら追記する（書き方は既存リポジトリの `memo.md` に倣う）。

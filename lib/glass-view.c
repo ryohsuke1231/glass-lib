@@ -115,11 +115,28 @@ wants_full (GlassView *self)
          !self->renderer_failed;
 }
 
+/* Like GtkGLArea: the context is made once the surface exists, and only
+ * when the full renderer is wanted. A view realized under the CSS fallback
+ * gets it when the setting comes back to full; without that, its panels
+ * were left to the view with nothing to draw them. */
+static void
+ensure_renderer (GlassView *self)
+{
+  GtkWidget *widget = GTK_WIDGET (self);
+
+  if (self->renderer || self->renderer_failed || !gtk_widget_get_realized (widget) ||
+      glass_context_get_wanted_renderer (glass_context_get_default ()) != GLASS_RENDERER_MODE_FULL)
+    return;
+  self->renderer = glass_renderer_acquire (gtk_widget_get_native (widget));
+  self->renderer_failed = self->renderer == NULL;
+}
+
 static void
 update_panel_modes (GlassView *self)
 {
   GlassPanelMode mode;
 
+  ensure_renderer (self);
   self->full = wants_full (self);
   mode = self->full ? GLASS_PANEL_MODE_VIEW : GLASS_PANEL_MODE_FALLBACK;
   for (guint i = 0; i < self->entries->len; i++)
@@ -227,13 +244,6 @@ glass_view_realize (GtkWidget *widget)
   GlassView *self = GLASS_VIEW (widget);
 
   GTK_WIDGET_CLASS (glass_view_parent_class)->realize (widget);
-
-  /* Like GtkGLArea: the context is made when the surface exists. */
-  if (glass_context_get_wanted_renderer (glass_context_get_default ()) == GLASS_RENDERER_MODE_FULL)
-    {
-      self->renderer = glass_renderer_acquire (gtk_widget_get_native (widget));
-      self->renderer_failed = self->renderer == NULL;
-    }
   update_panel_modes (self);
 }
 
@@ -369,15 +379,6 @@ opacity_to (GtkWidget *widget, GtkWidget *ancestor)
   for (; widget && widget != ancestor; widget = gtk_widget_get_parent (widget))
     opacity *= (float) gtk_widget_get_opacity (widget);
   return opacity;
-}
-
-static void
-adjust_for_reduce_transparency (double *params, float tint[4])
-{
-  params[GLASS_PARAM_DISPLACEMENT_SCALE] = 0.0;
-  params[GLASS_PARAM_CHROMA_STRENGTH] = 0.0;
-  params[GLASS_PARAM_BLUR_RADIUS] = MIN (MAX (params[GLASS_PARAM_BLUR_RADIUS] * 3.0, 8.0), 30.0);
-  tint[3] = MAX (tint[3], 0.6f);
 }
 
 typedef struct {
@@ -705,7 +706,7 @@ plan_panels (GlassView             *self,
           glass_panel_resolve_params (entry->panel, context, item.params);
           glass_panel_get_tint_rgba (entry->panel, item.params, theme_bg, item.tint);
           if (reduce)
-            adjust_for_reduce_transparency (item.params, item.tint);
+            glass_reduce_transparency (item.params, item.tint);
           max_layer = MAX (max_layer, item.layer);
           g_array_append_val (items, item);
         }
@@ -1671,5 +1672,7 @@ glass_view_get_active_renderer (GlassView *self)
 {
   g_return_val_if_fail (GLASS_IS_VIEW (self), GLASS_RENDERER_MODE_FALLBACK);
 
-  return self->full ? GLASS_RENDERER_MODE_FULL : GLASS_RENDERER_MODE_FALLBACK;
+  /* Realized, full needs the renderer that draws it. */
+  return self->full && (self->renderer || !gtk_widget_get_realized (GTK_WIDGET (self)))
+         ? GLASS_RENDERER_MODE_FULL : GLASS_RENDERER_MODE_FALLBACK;
 }
