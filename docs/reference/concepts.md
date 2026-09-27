@@ -28,6 +28,11 @@ Consequences for layouts:
   [property@Glass.SplitView:content-inset] say by how much.
 - Where the content is transparent, the glass sees the view's
   [property@Glass.View:backdrop-color] (the window background by default).
+- Content that changes every frame under the glass (an animation, a video)
+  is rendered again for every panel's capture. Draw it with render nodes
+  (`gtk_snapshot_append_linear_gradient()`, `…_color()`, textures): a cairo
+  drawing (`GtkDrawingArea`) is rasterised on the CPU each time it is
+  rendered, which for a window-sized drawing can take longer than a frame.
 
 ## Glass over glass
 

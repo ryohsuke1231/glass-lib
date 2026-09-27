@@ -5,10 +5,11 @@ import GdkPixbuf from 'gi://GdkPixbuf?version=2.0';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
+import Graphene from 'gi://Graphene';
+import Gsk from 'gi://Gsk?version=4.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
-
-import cairo from 'cairo';
+import Pango from 'gi://Pango';
 
 // Photos are not shipped (licences, design.md §14): the system wallpapers,
 // downscaled once and shared by every picture that shows them. In the
@@ -19,7 +20,7 @@ const PHOTO_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
 
 let photoCache: Gdk.Texture[] | null = null;
 
-function loadTexture(path: string, maxSide: number): Gdk.Texture | null {
+export function loadTexture(path: string, maxSide: number): Gdk.Texture | null {
     try {
         const pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, maxSide, maxSide, true);
         const format = pixbuf.get_has_alpha() ? Gdk.MemoryFormat.R8G8B8A8 : Gdk.MemoryFormat.R8G8B8;
@@ -80,12 +81,48 @@ export const PATTERNS: [Pattern, string, string][] = [
 const TEXT = 'Glass refracts what is under it. The quick brown fox jumps over the lazy dog. ' +
     'Liquid glass, in-app, same frame as the content. 0123456789 ';
 
+function rgb(r: number, g: number, b: number, a = 1): Gdk.RGBA {
+    const c = new Gdk.RGBA();
+    c.red = r;
+    c.green = g;
+    c.blue = b;
+    c.alpha = a;
+    return c;
+}
+
+function rect(x: number, y: number, w: number, h: number): Graphene.Rect {
+    return new Graphene.Rect().init(x, y, w, h);
+}
+
+function stop(offset: number, color: Gdk.RGBA): Gsk.ColorStop {
+    const s = new Gsk.ColorStop();
+    s.offset = offset;
+    s.color = color;
+    return s;
+}
+
+// A widget that draws with render nodes (see Canvas).
+export const NodeArea = GObject.registerClass(class NodeArea extends Gtk.Widget {
+    painter: ((snapshot: Gtk.Snapshot, w: number, h: number) => void) | null = null;
+
+    vfunc_snapshot(snapshot: Gtk.Snapshot) {
+        const w = this.get_width(), h = this.get_height();
+        if (w > 0 && h > 0 && this.painter)
+            this.painter(snapshot, w, h);
+    }
+});
+
 // A background that exercises the glass: sharp stripes and checks, smooth
 // gradients, text, a photo, or blobs that move every frame (paused or
 // sped up with an AnimationBar).
+//
+// Drawn with render nodes, which the GPU draws, not with cairo: a cairo
+// node is rasterised on the CPU each time it is rendered - for the window
+// and again for every capture the glass makes of it (docs/memo.md 追記17).
 export class Canvas {
     readonly widget: Gtk.Stack;
-    private area: Gtk.DrawingArea;
+    private area: InstanceType<typeof NodeArea>;
+    private textLayout: Pango.Layout | null = null;
     private picture: Gtk.Picture;
     private pattern: Pattern = 'stripes';
     private tick = 0;
@@ -96,11 +133,8 @@ export class Canvas {
     private listeners: (() => void)[] = [];
 
     constructor() {
-        this.area = new Gtk.DrawingArea({ hexpand: true, vexpand: true });
-        this.area.set_draw_func((_area, cr, width, height) => {
-            this.draw(cr, width, height);
-            cr.$dispose();
-        });
+        this.area = new NodeArea({ hexpand: true, vexpand: true });
+        this.area.painter = (snapshot, width, height) => this.draw(snapshot, width, height);
         this.picture = new Gtk.Picture({ content_fit: Gtk.ContentFit.COVER, hexpand: true, vexpand: true });
         const textures = photos();
         if (textures.length > 0)
@@ -162,64 +196,71 @@ export class Canvas {
         }
     }
 
-    private draw(cr: cairo.Context, width: number, height: number) {
+    private draw(s: Gtk.Snapshot, width: number, height: number) {
+        const light = rgb(0.97, 0.97, 0.96);
         switch (this.pattern) {
         case 'stripes':
-            cr.setSourceRGB(0.97, 0.97, 0.96);
-            cr.paint();
-            cr.setSourceRGB(0.07, 0.07, 0.08);
-            for (let x = 0; x < width; x += 36)
-                cr.rectangle(x, 0, 18, height);
-            cr.fill();
+            // A 36 px tile, repeated.
+            s.push_repeat(rect(0, 0, width, height), rect(0, 0, 36, height));
+            s.append_color(light, rect(0, 0, 36, height));
+            s.append_color(rgb(0.07, 0.07, 0.08), rect(0, 0, 18, height));
+            s.pop();
             break;
         case 'checker': {
-            const s = 24;
-            cr.setSourceRGB(0.97, 0.97, 0.96);
-            cr.paint();
-            cr.setSourceRGB(0.1, 0.1, 0.12);
-            for (let y = 0; y < height; y += s)
-                for (let x = (y / s) % 2 === 0 ? 0 : s; x < width; x += 2 * s)
-                    cr.rectangle(x, y, s, s);
-            cr.fill();
+            const c = 24;
+            const dark = rgb(0.1, 0.1, 0.12);
+            s.push_repeat(rect(0, 0, width, height), rect(0, 0, 2 * c, 2 * c));
+            s.append_color(light, rect(0, 0, 2 * c, 2 * c));
+            s.append_color(dark, rect(0, 0, c, c));
+            s.append_color(dark, rect(c, c, c, c));
+            s.pop();
             break;
         }
-        case 'gradient': {
-            const g = new cairo.LinearGradient(0, 0, width, height);
-            g.addColorStopRGB(0.0, 0.95, 0.35, 0.45);
-            g.addColorStopRGB(0.35, 0.98, 0.78, 0.25);
-            g.addColorStopRGB(0.65, 0.25, 0.75, 0.65);
-            g.addColorStopRGB(1.0, 0.25, 0.35, 0.9);
-            cr.setSource(g);
-            cr.paint();
+        case 'gradient':
+            s.append_linear_gradient(rect(0, 0, width, height),
+                new Graphene.Point().init(0, 0), new Graphene.Point().init(width, height), [
+                    stop(0.0, rgb(0.95, 0.35, 0.45)),
+                    stop(0.35, rgb(0.98, 0.78, 0.25)),
+                    stop(0.65, rgb(0.25, 0.75, 0.65)),
+                    stop(1.0, rgb(0.25, 0.35, 0.9)),
+                ]);
             break;
-        }
         case 'text': {
-            cr.setSourceRGB(0.99, 0.99, 0.98);
-            cr.paint();
-            cr.setSourceRGB(0.1, 0.1, 0.12);
-            cr.selectFontFace('Sans', 0, 0);
-            cr.setFontSize(15);
+            s.append_color(rgb(0.99, 0.99, 0.98), rect(0, 0, width, height));
+            if (!this.textLayout) {
+                this.textLayout = this.area.create_pango_layout(TEXT.repeat(4));
+                const font = Pango.FontDescription.from_string('Sans');
+                font.set_absolute_size(15 * Pango.SCALE);
+                this.textLayout.set_font_description(font);
+            }
+            const baseline = this.textLayout.get_baseline() / Pango.SCALE;
+            const ink = rgb(0.1, 0.1, 0.12);
             let line = 0;
             for (let y = 20; y < height + 20; y += 22, line++) {
-                cr.moveTo(8 - (line * 37) % 120, y);
-                cr.showText(TEXT.repeat(4));
+                s.save();
+                s.translate(new Graphene.Point().init(8 - (line * 37) % 120, y - baseline));
+                s.append_layout(this.textLayout, ink);
+                s.restore();
             }
             break;
         }
         case 'animated': {
             const t = this.phase;
-            cr.setSourceRGB(0.08, 0.09, 0.14);
-            cr.paint();
+            s.append_color(rgb(0.08, 0.09, 0.14), rect(0, 0, width, height));
             const blobs: [number, number, number, number, number][] = [
                 [0.95, 0.4, 0.3, 0.13, 0.0], [0.3, 0.7, 0.95, 0.17, 1.7],
                 [0.98, 0.85, 0.3, 0.11, 3.1], [0.4, 0.9, 0.5, 0.21, 4.4],
             ];
+            const radius = Math.min(width, height) * 0.2;
             for (const [r, g, b, speed, phase] of blobs) {
                 const x = width * (0.5 + 0.38 * Math.sin(t * speed * 6 + phase));
                 const y = height * (0.5 + 0.35 * Math.cos(t * speed * 4.3 + phase * 1.3));
-                cr.setSourceRGB(r, g, b);
-                cr.arc(x, y, Math.min(width, height) * 0.2, 0, 2 * Math.PI);
-                cr.fill();
+                const bounds = rect(x - radius, y - radius, 2 * radius, 2 * radius);
+                const disc = new Gsk.RoundedRect();
+                disc.init_from_rect(bounds, radius);
+                s.push_rounded_clip(disc);
+                s.append_color(rgb(r, g, b), bounds);
+                s.pop();
             }
             break;
         }

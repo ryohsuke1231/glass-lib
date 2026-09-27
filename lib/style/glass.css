@@ -12,6 +12,15 @@ glassview > backdrop {
   color: var(--window-bg-color);
 }
 
+/* In an ordinary dialog or popover, what is behind the content is theirs. */
+dialog:not(.glass) glassview > backdrop {
+  color: var(--dialog-bg-color);
+}
+
+popover:not(.glass) glassview > backdrop {
+  color: var(--popover-bg-color);
+}
+
 /* ── Panels ── */
 
 glasspanel {
@@ -37,6 +46,20 @@ glasspanel.glass-dark {
   --glass-active-color: rgb(255 255 255 / 18%);
 }
 
+/* PROMINENT (the button that confirms): tinted with the accent, so the
+ * accent's foreground. The never-drawn node gives the tint. */
+glasspanel > accent {
+  color: var(--accent-bg-color);
+}
+
+glasspanel.glass-prominent {
+  color: var(--accent-fg-color);
+  --glass-fg-color: var(--accent-fg-color);
+  --glass-dim-fg-color: color-mix(in srgb, var(--accent-fg-color) 70%, transparent);
+  --glass-hover-color: rgb(255 255 255 / 12%);
+  --glass-active-color: rgb(255 255 255 / 20%);
+}
+
 /* Buttons on glass have no filled background of their own: the glass is
  * the background. Suggested / destructive buttons keep theirs. */
 glasspanel button:not(.suggested-action):not(.destructive-action):not(.opaque) {
@@ -50,7 +73,8 @@ glasspanel button:not(.suggested-action):not(.destructive-action):not(.opaque) {
  * but not its content's (docs/memo.md 地雷30, 地雷32); the variable is the
  * nearest panel's, so nested panels keep their own. */
 glasspanel.glass-light button:not(.suggested-action):not(.destructive-action):not(.opaque) > *,
-glasspanel.glass-dark button:not(.suggested-action):not(.destructive-action):not(.opaque) > * {
+glasspanel.glass-dark button:not(.suggested-action):not(.destructive-action):not(.opaque) > *,
+glasspanel.glass-prominent button:not(.suggested-action):not(.destructive-action):not(.opaque) > * {
   color: var(--glass-fg-color);
 }
 
@@ -103,6 +127,10 @@ glasspanel.glass-fallback {
   box-shadow: inset 0 1px alpha(white, 0.45),
               inset 0 -1px alpha(black, 0.08),
               0 6px 18px alpha(black, 0.18);
+}
+
+glasspanel.glass-fallback.glass-prominent {
+  background-color: color-mix(in srgb, var(--accent-bg-color) 92%, transparent);
 }
 
 glasspanel.glass-fallback.glass-sidebar {

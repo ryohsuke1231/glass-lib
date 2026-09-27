@@ -129,6 +129,9 @@ export class LabPage {
         card.append(new Gtk.Label({ label: 'Partly cloudy', xalign: 0 }));
         this.specimens.push(new Glass.Panel({ child: card, corner_radius: 22, width_request: 220,
             halign: Gtk.Align.START, valign: Gtk.Align.START, margin_top: 200 }));
+        // The button that confirms: tinted with the accent (Glass.Material.PROMINENT).
+        this.specimens.push(new Glass.Button({ label: 'Done', material: Glass.Material.PROMINENT,
+            halign: Gtk.Align.START, valign: Gtk.Align.START, margin_top: 330 }));
         this.specimens.forEach(p => stage.add_overlay(p));
 
         // The inspector: thick glass over the same background.
@@ -162,9 +165,27 @@ export class LabPage {
         this.animation.widget.set_halign(Gtk.Align.CENTER);
         list.append(this.animation.widget);
 
+        // The two lenses measured on macOS (Glass.Lens), or each material's own.
+        const lens = new Glass.ToggleGroup({ halign: Gtk.Align.CENTER, margin_top: 4 });
+        lens.append('material', 'Material\'s', null);
+        lens.append('thin', 'Thin', null);
+        lens.append('thick', 'Thick', null);
+        lens.connect('notify::active-name', () => {
+            const name = lens.get_active_name();
+            if (name === 'thin')
+                context.set_lens(Glass.Lens.THIN);
+            else if (name === 'thick')
+                context.set_lens(Glass.Lens.THICK);
+            else
+                for (const key of [Glass.PARAM_MAX_Z, Glass.PARAM_PROFILE_SHAPE_N, Glass.PARAM_DISPLACEMENT_SCALE])
+                    context.reset_param(key);
+        });
+
         const tintColor = new TintColorRow(context);
         for (const [group, keys] of GROUPS) {
             list.append(new Gtk.Label({ label: group, xalign: 0, css_classes: ['heading'], margin_start: 12, margin_top: 8 }));
+            if (group === 'Lens')
+                list.append(lens);
             if (group === 'Tint')
                 list.append(tintColor.widget);
             for (const key of keys) {

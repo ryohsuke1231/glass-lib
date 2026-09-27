@@ -2,10 +2,12 @@
 // glass buttons (design.md §14). Shows refraction in the same frame as the
 // scrolling content, the scroll edge effect and the adaptive colours.
 
+import Gdk from 'gi://Gdk?version=4.0';
+import Gio from 'gi://Gio';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
-import { bindInset, photos } from '../util.js';
+import { bindInset, loadTexture, photos } from '../util.js';
 
 export class PhotosPage {
     readonly toolbar: Glass.ToolbarView;
@@ -39,6 +41,9 @@ export class PhotosPage {
         const open = new Gtk.Button({ icon_name: 'folder-open-symbolic', tooltip_text: 'Open a folder of photos' });
         open.connect('clicked', () => this.openFolder());
         this.header.pack_start(open);
+        const openImages = new Gtk.Button({ icon_name: 'image-x-generic-symbolic', tooltip_text: 'Open photos' });
+        openImages.connect('clicked', () => this.openImages());
+        this.header.pack_start(openImages);
         this.header.pack_start(new Gtk.Button({ icon_name: 'view-refresh-symbolic', tooltip_text: 'Reload' }));
 
         const layout = new Glass.ToggleGroup();
@@ -100,6 +105,32 @@ export class PhotosPage {
             });
             this.flow.append(picture);
         }
+    }
+
+    // Any image files, one or several.
+    private openImages() {
+        const images = new Gtk.FileFilter({ name: 'Images' });
+        images.add_mime_type('image/*');
+        const filters = new Gio.ListStore({ item_type: Gtk.FileFilter.$gtype });
+        filters.append(images);
+        const dialog = new Gtk.FileDialog({ title: 'Open photos', filters, default_filter: images });
+        dialog.open_multiple(this.toolbar.get_root() as Gtk.Window, null, (_d, result) => {
+            let files: Gio.ListModel | null = null;
+            try {
+                files = dialog.open_multiple_finish(result);
+            } catch (e) {
+                return;   // Cancelled.
+            }
+            const textures: Gdk.Texture[] = [];
+            for (let i = 0; files && i < files.get_n_items(); i++) {
+                const path = (files.get_item(i) as Gio.File).get_path();
+                const texture = path ? loadTexture(path, 960) : null;
+                if (texture)
+                    textures.push(texture);
+            }
+            if (textures.length)
+                this.fill(textures);
+        });
     }
 
     private openFolder() {

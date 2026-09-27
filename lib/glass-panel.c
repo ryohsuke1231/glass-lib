@@ -40,6 +40,7 @@
 
 typedef struct {
   GtkWidget          *child;
+  GtkWidget          *accent_node;      /* never drawn: resolves the accent (PROMINENT) */
   GlassMaterial       material;
   double              corner_radius;
   double              corner_radii[4];  /* tl, tr, br, bl; -1 = corner_radius */
@@ -282,6 +283,8 @@ restore_classes (GlassPanel *self)
     wanted[n++] = "glass-light";
   else if (priv->appearance == GLASS_APPEARANCE_DARK)
     wanted[n++] = "glass-dark";
+  if (glass_material_specs[priv->material].tint_from_accent)
+    wanted[n++] = "glass-prominent";
 
   for (guint i = 0; i < n; i++)
     if (!gtk_widget_has_css_class (widget, wanted[i]))
@@ -1200,6 +1203,26 @@ glass_panel_set_highlight (GlassPanel *self,
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
+/* PROMINENT: the theme's accent, which the context's tint colour does not
+ * replace (it marks the button that confirms, not the look of the app). */
+static gboolean
+accent_tint (GlassPanel *self,
+             double      strength,
+             float       out[4])
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  GdkRGBA accent;
+
+  if (!glass_material_specs[priv->material].tint_from_accent || priv->accent_node == NULL)
+    return FALSE;
+  gtk_widget_get_color (priv->accent_node, &accent);
+  out[0] = accent.red;
+  out[1] = accent.green;
+  out[2] = accent.blue;
+  out[3] = (float) strength;
+  return TRUE;
+}
+
 void
 glass_panel_get_tint_rgba (GlassPanel    *self,
                            const double   params[GLASS_N_PARAMS],
@@ -1217,7 +1240,7 @@ glass_panel_get_tint_rgba (GlassPanel    *self,
       out[2] = priv->tint.blue;
       out[3] = priv->tint.alpha;
     }
-  else
+  else if (!accent_tint (self, params[GLASS_PARAM_ID_TINT_STRENGTH], out))
     glass_context_resolve_tint (glass_context_get_default (), priv->material,
                                 params[GLASS_PARAM_ID_TINT_STRENGTH], theme_bg, out);
 
@@ -1262,6 +1285,8 @@ glass_panel_size_allocate (GtkWidget *widget,
 
   if (child && gtk_widget_should_layout (child))
     gtk_widget_allocate (child, width, height, baseline, NULL);
+  if (PRIV (widget)->accent_node)
+    gtk_widget_allocate (PRIV (widget)->accent_node, 0, 0, -1, NULL);
 }
 
 static GtkSizeRequestMode
@@ -1296,6 +1321,7 @@ glass_panel_dispose (GObject *object)
   g_clear_weak_pointer (&priv->morph_source);
   g_clear_weak_pointer (&priv->ghost_into);
   g_clear_pointer (&priv->child, gtk_widget_unparent);
+  g_clear_pointer (&priv->accent_node, gtk_widget_unparent);
   g_clear_pointer (&priv->nested_views, g_ptr_array_unref);
   g_clear_pointer (&priv->own_classes, g_ptr_array_unref);
 
@@ -1517,7 +1543,8 @@ glass_panel_class_init (GlassPanelClass *klass)
    *
    * How the colour of what is on the glass follows what is under it.
    * The %GLASS_MATERIAL_THICK and %GLASS_MATERIAL_MENU materials never
-   * adapt: they keep the theme's colours.
+   * adapt: they keep the theme's colours; %GLASS_MATERIAL_PROMINENT keeps
+   * the accent's foreground colour.
    */
   props[PROP_ADAPTIVE] =
     g_param_spec_enum ("adaptive", NULL, NULL, GLASS_TYPE_ADAPTIVE_MODE, GLASS_ADAPTIVE_MODE_AUTO,
@@ -1702,6 +1729,19 @@ glass_panel_set_material (GlassPanel    *self,
   priv->material = material;
   if (!glass_panel_uses_adaptive (self))
     set_appearance (self, GLASS_APPEARANCE_UNKNOWN);
+
+  /* PROMINENT: the accent (a never-drawn node, glass.css) and the accent's
+   * foreground (.glass-prominent). */
+  if (glass_material_specs[material].tint_from_accent && priv->accent_node == NULL)
+    {
+      priv->accent_node = glass_style_node_new ("accent");
+      gtk_widget_set_parent (priv->accent_node, GTK_WIDGET (self));
+    }
+  priv->changing_classes++;
+  gtk_widget_remove_css_class (GTK_WIDGET (self), "glass-prominent");
+  priv->changing_classes--;
+  restore_classes (self);
+
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_MATERIAL]);
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
@@ -1836,8 +1876,9 @@ glass_panel_get_tint (GlassPanel *self,
   else
     {
       glass_panel_resolve_params (self, glass_context_get_default (), params);
-      glass_context_resolve_tint (glass_context_get_default (), priv->material,
-                                  params[GLASS_PARAM_ID_TINT_STRENGTH], NULL, rgba);
+      if (!accent_tint (self, params[GLASS_PARAM_ID_TINT_STRENGTH], rgba))
+        glass_context_resolve_tint (glass_context_get_default (), priv->material,
+                                    params[GLASS_PARAM_ID_TINT_STRENGTH], NULL, rgba);
       *tint = (GdkRGBA) { rgba[0], rgba[1], rgba[2], rgba[3] };
     }
   return priv->tint_set;
@@ -1909,6 +1950,34 @@ glass_panel_set_param (GlassPanel *self,
   priv->param_value[i] = value;
   gtk_widget_queue_draw (GTK_WIDGET (self));
   return TRUE;
+}
+
+/**
+ * glass_panel_set_lens:
+ * @self: a panel
+ * @lens: the lens
+ *
+ * Gives this panel one of the measured lenses: sets its own values of
+ * `max-z`, `profile-shape-n` and `displacement-scale` together, over the
+ * context's and the material's. [method@Panel.reset_param] on those three
+ * keys goes back to them.
+ *
+ * Since: 0.9
+ */
+void
+glass_panel_set_lens (GlassPanel *self,
+                      GlassLens   lens)
+{
+  GlassPanelPrivate *priv;
+
+  g_return_if_fail (GLASS_IS_PANEL (self));
+  g_return_if_fail ((int) lens >= 0 && (int) lens < GLASS_N_LENSES);
+
+  priv = PRIV (self);
+  priv->param_value[GLASS_PARAM_ID_MAX_Z] = glass_lens_specs[lens].max_z;
+  priv->param_value[GLASS_PARAM_ID_PROFILE_SHAPE_N] = glass_lens_specs[lens].profile_shape_n;
+  priv->param_value[GLASS_PARAM_ID_DISPLACEMENT_SCALE] = glass_lens_specs[lens].displacement_scale;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
 /**

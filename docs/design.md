@@ -9,6 +9,9 @@
   - 既定値（§11.1、拡張の gschema と同じ）と材質の縁の値（§11.2）を実測に合わせた。`crisp-soft` は `apple-s`（CLEAR は `apple-l`）に置き換えた。
     ガラス越しの背景の彩度を 1.5 倍にした（レンダラの定数。§11.2）
   - 参照シェーダは拡張の新しい版に更新し、ゴールデンは 250 件（帯より小さい形を追加）で 0/255（§10.5）
+  - 続けて（ユーザーの指示、同日）: 材質 `PROMINENT`（確定のボタン。§11.2）、`GlassLens` と `set_lens()`（§6.1・§11.2）、`GlassToggleGroup` の板のドラッグ（ばねで吊るす。§6.6）。
+    デモ: 写真を開く（Photos）、ダイアログはふつうの `AdwDialog` にして Close ボタンだけをガラス（`PROMINENT`、鮮やかな青 0.92・ぼかし 10）に、
+    天気の空とギャラリーの背景を cairo から描画ノードに（CPU で毎回ラスタライズしていた。§14.1、memo 追記17）
 - v0.8.1（2026-09-27）までの版: v0.8（v1 の仕上げ: ティント・パネルごとのパラメータ・フォールバックの Adaptive・API ドキュメント・Flatpak・天気アプリ。ロードマップの残りを破棄した版。2026-09-26）
 - v0.8.1 の変更（公開前のレビューでの指摘、2026-09-27）:
   - パラメータのキーの定数 `GLASS_PARAM_BLUR_RADIUS` など（`Glass.PARAM_BLUR_RADIUS`）。`spec/params.json` から公開ヘッダ `glass-params.h` を生成する（§6.1・§11.1）
@@ -244,6 +247,8 @@ double          glass_context_get_param         (GlassContext *self, const char 
 gboolean        glass_context_is_param_set      (GlassContext *self, const char *key);
 double          glass_context_get_effective_param (GlassContext *self, GlassMaterial material, const char *key); /* その材質で実際に使われる値 */
 void            glass_context_reset_param       (GlassContext *self, const char *key);
+/* 測ったレンズ（§11.2）を全体に: max-z・profile-shape-n・displacement-scale の 3 つをまとめて設定（v0.9） */
+void            glass_context_set_lens          (GlassContext *self, GlassLens lens);
 const char * const *glass_context_list_params   (GlassContext *self);
 gboolean        glass_context_get_param_range   (GlassContext *self, const char *key, double *min, double *max, double *def);
 /* ティントの色（全体）。NULL = 材質の色。alpha は使わない（強さはキー tint-strength）。§11.2 */
@@ -274,6 +279,7 @@ double          glass_panel_get_param           (GlassPanel *self, const char *k
 gboolean        glass_panel_is_param_set        (GlassPanel *self, const char *key);
 void            glass_panel_reset_param         (GlassPanel *self, const char *key);
 double          glass_panel_get_effective_param (GlassPanel *self, const char *key);  /* 実際に使われる値 */
+void            glass_panel_set_lens            (GlassPanel *self, GlassLens lens);   /* 3 つのパネルの値をまとめて（v0.9） */
 void            glass_panel_set_has_shadow      (GlassPanel *self, gboolean has_shadow);
 void            glass_panel_set_adaptive        (GlassPanel *self, GlassAdaptiveMode mode);
 GlassAppearance glass_panel_get_appearance      (GlassPanel *self);  /* 読み取り専用（notify あり） */
@@ -284,7 +290,8 @@ GlassAppearance glass_panel_get_appearance      (GlassPanel *self);  /* 読み�
 | 型 | 値 | 意味 |
 |---|---|---|
 | `GlassRendererMode` | `AUTO` / `FULL` / `FALLBACK` | AUTO = GL が使えれば FULL |
-| `GlassMaterial` | `REGULAR` / `CLEAR` / `THICK` / `MENU` | §11.2。`THICK` は大きな板（サイドバー）用、`MENU` はポップオーバー・メニュー用（§6.8） |
+| `GlassMaterial` | `REGULAR` / `CLEAR` / `THICK` / `MENU` / `PROMINENT` | §11.2。`THICK` は大きな板（サイドバー）用、`MENU` はポップオーバー・メニュー用（§6.8）、`PROMINENT` は確定のボタン用（v0.9） |
+| `GlassLens` | `THIN` / `THICK` | 測ったレンズ（§11.2。v0.9）。`THIN` = macOS の Dock（`CLEAR` 以外の材質の既定）、`THICK` = ウィジェット・丸いメディアボタン（`CLEAR` の既定） |
 | `GlassEdgeStyle` | `NONE` / `SOFT` / `HARD` | スクロール端の効果（§6.6） |
 | `GlassAdaptiveMode` | `AUTO` / `PREFER_LIGHT` / `PREFER_DARK` / `OFF` | 判定が曖昧なときにどちらへ寄せるか。OFF = 切り替えない（テーマの色のまま） |
 | `GlassAppearance` | `UNKNOWN` / `LIGHT` / `DARK` | LIGHT = ガラスの下が明るい → 前景は暗い色 |
@@ -390,7 +397,10 @@ libadwaita のアプリはすでに `AdwToolbarView`・`AdwHeaderBar`・`AdwOver
 | `GlassToolbarView` | `AdwToolbarView` | 中身がバーの下まで伸びる（常に）。上下のバーは中身の上に浮く。**スクロール端の効果**（`top-edge-style`・`bottom-edge-style`）: `SOFT` = バーの下の帯で中身をぼかしながら薄めて、背景の色へ溶かす（既定）。`HARD` = 同じ帯を均一にぼかして区切り線を引く。`NONE` = なし。バーの高さは `top-bar-height`・`bottom-bar-height`（読み取り専用）で出すので、アプリはスクロールする中身の先頭にその分の余白を付ける（libadwaita の `extend-content-to-top-edge` と同じ扱い） |
 | `GlassHeaderBar` | `AdwHeaderBar` | `pack_start`・`pack_end` の部品は、それぞれ**1 つのガラスのカプセル**にまとめて浮かせる。それ自体がガラスの部品（`GlassPanel`・`GlassButton`・`GlassGroup`）は、カプセルに入れず（ガラスの上のガラスにしない）カプセルの内側の隣に置く（v0.8。高さはカプセルにそろえる）。タイトルはガラスなし（スクロール端の効果の上に載る）。窓のボタン（閉じる等）も小さなカプセルに入れる（どんな中身の上でも見えるように）。空の所はドラッグで窓を動かせる（`GtkWindowHandle`） |
 | `GlassSplitView` | `AdwOverlaySplitView` | サイドバーは**窓の中に浮く角丸の板**（材質 `THICK`、窓の縁から 8px 内側、半径 14px）。中身はサイドバーの下まで伸び、サイドバーが覆う幅は `content-inset`（読み取り専用）で出す。`show-sidebar` でスライドして出し入れする |
-| `GlassToggleGroup` | `AdwToggleGroup` | カプセルの中に並んだトグル。選ばれたものの下を丸い板がスライドする。**板はガラスの上のガラス**（§6.7 の層。押している間は膨らむ）。トグルは `GtkToggleButton` ではなく `GtkButton`＋`.active` クラス（テーマの `button:checked` の塗りが板を覆うため。memo 地雷12）。項目は添字で扱う: `append`・`remove`（選ばれていた項目なら、その位置に来た項目か、末尾なら 1 つ前が選ばれる）・`remove_all`・`set_tooltip`（v0.8.1） |
+| `GlassToggleGroup` | `AdwToggleGroup` | カプセルの中に並んだトグル。選ばれたものの下を丸い板がスライドする。**板はガラスの上のガラス**（§6.7 の層。押している間は膨らむ）。トグルは `GtkToggleButton` ではなく `GtkButton`＋`.active` クラス（テーマの `button:checked` の塗りが板を覆うため。memo 地雷12）。項目は添字で扱う: `append`・`remove`（選ばれていた項目なら、その位置に来た項目か、末尾なら 1 つ前が選ばれる）・`remove_all`・`set_tooltip`（v0.8.1）。
+🔒 **板はドラッグでも動かせる**（v0.9。ユーザーの指示、2026-09-27）: 選ばれた項目の上で押して 6px 動かすと板が指に付いてくる（それまではふつうのタップ。捕捉フェーズの `GtkGestureDrag` が、動いた時点で押下を取る）。
+ドラッグ中は指に最も近い項目だけを選ばれた色（`.active` のクラスだけ）にし、`notify` は出さない。離すとその項目が選ばれ（`notify::active`）、板はそこに収まる。
+板は指にばねで吊るす: 左右の端がそれぞれのばね（ω 36、減衰比 0.45、進む側を 35% 硬く・後ろを 35% 柔らかく）で追うので、動いている間は伸び（幅 0.6〜1.7 倍、高さは面積を保つように ±8〜16%）、急に止めると前の端が行き過ぎてから収まる。端の先ではゴムのように抵抗する。物理は 2ms の刻み、フレームクロックで駆動 |
 | `GlassButton` | `GtkButton` ＋ `.circular` / `.pill` | それ自体がガラスのボタン（アイコンか文字）。押している間はガラスが少し明るくなる。`GtkActionable` |
 
 - 部品の中のボタンは自動で `flat` の見た目になる（ガラスの上に libadwaita の塗りの背景を重ねない）。前景色は Adaptive に従う。
@@ -517,6 +527,8 @@ GTK は窓の CSS の背景を別の段で描くので、ビューからはノ�
 - 既定（NULL）は窓の背景色。🔒 **CSS の `var(--window-bg-color)` を実行時に解決する**: ビューの内部に描かない子のノード（CSS 名 `backdrop`）を持ち、その `color` を `var(--window-bg-color)` にして `gtk_widget_get_color()` で読む。
   テーマ（ライト/ダーク、アクセント、Ubuntu の Yaru の変種）が変わると `css-changed` で追従する。値を固定で持たない（C1）。
 - `GlassPanel` の中にあるビュー（入れ子）は、既定で背景色を塗らない（§6.6）。
+- ふつうのダイアログ・ポップオーバーの中のビューは、その背景色（`--dialog-bg-color`・`--popover-bg-color`）を既定にする（v0.9。CSS の `dialog:not(.glass) glassview > backdrop` など）。
+  デモのダイアログ（中身はふつう、Close ボタンだけがガラス）で、窓の背景色の四角が出ないように。
 
 ### 7.4 snapshot の手順（擬似コード）
 
@@ -845,7 +857,7 @@ macOS 27 の実機のスクリーンショット（5K、同じ範囲をガラス
   公開ヘッダ `glass-params.h`（`tools/gen-params-header.py`）はキーごとの文字列の定数（`GLASS_PARAM_BLUR_RADIUS`、GI では `Glass.PARAM_BLUR_RADIUS`）で、キーの打ち間違いをコンパイル時（バインディングでは属性のエラー）に見つけるためのもの。
   内部の列挙（配列の添字）は `GLASS_PARAM_ID_BLUR_RADIUS` と名付けて区別する（v0.8.1）。
 
-### 11.2 材質（v1 は 4 種類）
+### 11.2 材質（v1 は 5 種類。`PROMINENT` は v0.9）
 
 | 材質 | 用途 | ぼかし半径 | ティント | 影（半径・強さ） | 取り込みの縮小 | 備考 |
 |---|---|---|---|---|---|---|
@@ -853,6 +865,7 @@ macOS 27 の実機のスクリーンショット（5K、同じ範囲をガラス
 | `CLEAR` | 写真・動画の上 | 1.5px | 白 0.04 | 16px・0.07 | 1（縮小しない） | ぼかしが弱いと縮小が見えるため等倍。~~Adaptive が mixed のときは暗幕（黒 0.25）を足す~~（未実装のまま破棄。§17.1） |
 | `THICK` | サイドバー（大きな板） | 12px | 窓の背景色 0.55（ライト/ダークに追従） | 24px・0.07 | `blur-downscale` | 大きな板は下の中身が場所ごとに違うので、前景色を切り替えず（Adaptive なし、テーマの色のまま）、濃いティントで読めるようにする |
 | `MENU` | ポップオーバー・メニュー（§6.8） | 8px | ポップオーバーの背景色 0.45（テーマに追従） | 24px・0.07 | `blur-downscale` | `THICK` より透ける。前景色はテーマのまま（Adaptive なし）。値は初期案（2026-09-26） |
+| `PROMINENT` | 確定のボタン（Done・Send・Close。SwiftUI の `.glassProminent`） | 10px | テーマのアクセント色（`--accent-bg-color`） 0.92 | 16px・0.07 | `blur-downscale` | v0.9（ユーザーの指示、2026-09-27）。前景はアクセントの前景色（`.glass-prominent`、Adaptive なし）。パネル自身の `tint` で色を変えられる（`Context:tint-color` はアクセントを置き換えない: アプリの見た目ではなく「確定」の印なので）。アクセントはパネルの描かない子ノード `accent` の CSS の色で読む |
 
 ティントの列の数（0.12 など）は `tint-strength` の材質の値、色は材質の色（v0.8。`spec/params.json` では `values` の `tint-strength` と `tint` の rgb に分けた）。
 
@@ -865,6 +878,9 @@ macOS 27 の実機のスクリーンショット（5K、同じ範囲をガラス
   縁の**線**（輪郭のぼかし・リム・内側の影）が細いという方向は同じで、レンズは弱く広くなった。設定の種類は増やしていない（値の選び方だけ）。
   スーパーサンプリング 4x と測ったフットプリントは既定 ON（§8.5）。
   §11.1 の全体の値（拡張と同じ）は、比較と大きなガラス用に残す（v0.9 からは `apple-s` と同じレンズ）。
+- 🔒 **レンズの選択**（v0.9。ユーザーの選択、2026-09-27）: `apple-s`・`apple-l` のレンズの部分（`max-z`・`profile-shape-n`・`displacement-scale`）は `spec/params.json` の `lenses` に `thin`・`thick` として 1 か所で書き、
+  列挙型 `GlassLens`（`THIN`・`THICK`）と `glass_panel_set_lens()`・`glass_context_set_lens()` で開発者が選べる（3 つの値をまとめてパネル／全体の値として設定するだけで、状態は持たない。個々の値は `set_param` で上書き、`reset_param` で戻る）。
+  値だけを大文字の定数で出す案より、1 つ書き忘れて中途半端なレンズになることがない。新しい光学の設定ではない（既存の 3 つのキーの値の組）。
 - 彩度: macOS はガラス越しの背景の彩度を上げている（測った 8 組すべてで 1.5〜1.9 倍）。レンダラは `saturation` を 1.5 で渡す（`GLASS_BACKDROP_SATURATION`。設定ではない。拡張も面ごとの彩度の既定を 1.5 にした）。
 - 見た目（明/暗）でティントを変えるか（Apple は変える）は、**v1 では変えない**（既存拡張と同じ: 白いティント固定、前景色だけ切り替える）。
   v0.7 までの「Lab での A/B（C3）」は破棄した。代わりにティントの色と強さを Lab で調整できるようにした（下）。
@@ -993,6 +1009,9 @@ Glass Gallery は**検証用のハーネス**。開発者を惹きつけるた�
   ビューを 2 段にするのは、1 つのビューではガラスの本体をすべて描いてから前景を描くので、ヘッダーの下を通るカードの文字がヘッダーのガラスの上に出てしまうため（§7.6。外のビューなら、カードとその文字をふつうの画像として屈折する）。
   1/3・2/3 の並びは小さな自前のレイアウト（`ThirdsLayout`）: 最小の幅は縦に積んだときのもの。`GtkGrid` の同じ幅の 3 列だと、窓の最小の幅が約 1060px になり、狭くできなかった。`AdwBreakpointBin` はスクロールする中身を窓の高さで切ってしまうので使わない（memo 追記12）。
 - 空はコードで描く（晴れ・曇り・霧・雨・雪・雷 × 昼・夜。雲が流れ、雨・雪が降る。「動きを減らす」では止まる）。画像のライセンスの問題が無い。
+  🔒 **描画ノード（グラデーション・色）で描く。cairo は使わない**（v0.9。memo 追記17）: cairo のノードは描かれるたびに CPU でラスタライズされ（同じノードでも GSK はキャッシュしない）、
+  窓の描画とガラスの取り込み（`render_texture`）のたびに 1400×900 で 16〜24ms かかっていた（動く空は毎フレーム、しかも 1 フレームに複数回）。描画ノードなら GPU が描く。
+  Glass Gallery の背景（Canvas）も同じ理由で描画ノードにした。**ガラスの下で毎フレーム変わる中身を cairo で描かない**ことは、glass-lib を使うアプリへの助言でもある（取り込みのたびに描き直される）。
 - °C / °F は `GlassToggleGroup`。場所・単位は `~/.config/glass-weather/state.json`（初回は東京・ロンドン・ニューヨーク）。
 - メニューの「Preview Sky」で空を切り替えて、ガラスと文字の色の見え方をどの空でも確かめられる（天気は作り物になり、そう表示する）。
 - データは Open-Meteo（下の表）。予報は 15 分キャッシュ（`~/.cache/glass-weather/`）。通信できないときは古いキャッシュ、無ければサンプルのデータを、そう表示して出す。出典「Weather data by Open-Meteo.com」をデータの横に表示（2026-09-26 に規約を再確認: 非営利なら無料、CC BY 4.0、出典のリンクが要る）。

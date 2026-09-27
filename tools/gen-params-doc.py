@@ -21,8 +21,11 @@ def main():
     materials = spec['materials']
     presets = spec['edge_presets']
     values = []
+    lenses = spec['lenses']
     for m in materials:
         v = dict(presets[m['edge']]) if m.get('edge') else {}
+        if 'lens' in v:
+            v.update(lenses[v.pop('lens')])
         v.update(m['values'])
         values.append(v)
 
@@ -62,6 +65,20 @@ def main():
     w('')
     w('## Tint')
     w('')
+    w('## Lenses')
+    w('')
+    w('The lens is shaped by `max-z`, `profile-shape-n` and `displacement-scale` together. The two measured')
+    w('on macOS can be set in one call, [method@Glass.Panel.set_lens] or [method@Glass.Context.set_lens],')
+    w('as the panel\'s or the context\'s values of those three keys:')
+    w('')
+    w('| Lens | ' + ' | '.join(f'`{k}`' for k in ('max-z', 'profile-shape-n', 'displacement-scale')) + ' | Materials |')
+    w('|---|---|---|---|---|')
+    for name in lenses['order']:
+        l = lenses[name]
+        users = ', '.join(m['name'].upper() for m in materials
+                          if m.get('edge') and presets[m['edge']].get('lens') == name)
+        w(f'| {name.upper()} | ' + ' | '.join(fmt(l[k]) for k in ('max-z', 'profile-shape-n', 'displacement-scale')) + f' | {users} |')
+    w('')
     w('The tint is a colour mixed into the glass: `tint-strength` above says how much, and the')
     w('colour is the first of the panel\'s [property@Glass.Panel:tint] (which sets both), the')
     w('context\'s [property@Glass.Context:tint-color], and the material\'s:')
@@ -70,8 +87,10 @@ def main():
     w('|---|---|---|')
     for m in materials:
         colour = 'the theme\'s background' if m['tint_from_theme'] else \
+            'the theme\'s accent (`--accent-bg-color`)' if m.get('tint_from_accent') else \
             ('white' if m['tint'] == [1.0, 1.0, 1.0] else 'rgb(' + ', '.join(fmt(c) for c in m['tint']) + ')')
-        fg = 'adapt to what is under the glass' if m['adaptive'] else 'the theme\'s'
+        fg = 'adapt to what is under the glass' if m['adaptive'] else \
+            'the theme\'s accent foreground (`--accent-fg-color`)' if m.get('tint_from_accent') else 'the theme\'s'
         w(f'| {m["name"].upper()} | {colour} | {fg} |')
     w('')
 

@@ -35,6 +35,8 @@ void                glass_context_set_tint_color           (GlassContext  *self,
 gboolean            glass_context_set_param                (GlassContext *self,
                                                             const char   *key,
                                                             double        value);
+void                glass_context_set_lens                 (GlassContext *self,
+                                                            GlassLens     lens);
 double              glass_context_get_param                (GlassContext *self,
                                                             const char   *key);
 gboolean            glass_context_is_param_set             (GlassContext *self,

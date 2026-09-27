@@ -240,6 +240,62 @@ test_panel_params (void)
   g_object_unref (panel);
 }
 
+/* A panel's lens: the three values at once, over the context's; reset goes
+ * back to them. */
+static void
+test_panel_lens (void)
+{
+  GlassContext *ctx = glass_context_get_default ();
+  GlassPanel *panel = GLASS_PANEL (g_object_ref_sink (glass_panel_new ()));
+
+  glass_panel_set_lens (panel, GLASS_LENS_THICK);
+  g_assert_cmpfloat (glass_panel_get_param (panel, "max-z"), ==, 100.0);
+  g_assert_cmpfloat (glass_panel_get_param (panel, "profile-shape-n"), ==, 1.35);
+  g_assert_cmpfloat (glass_panel_get_param (panel, "displacement-scale"), ==, 26.0);
+  glass_context_set_lens (ctx, GLASS_LENS_THIN);
+  g_assert_cmpfloat (glass_panel_get_effective_param (panel, "displacement-scale"), ==, 26.0);
+  glass_panel_reset_param (panel, "displacement-scale");
+  g_assert_cmpfloat (glass_panel_get_effective_param (panel, "displacement-scale"), ==, 10.5);
+
+  glass_context_reset_param (ctx, "max-z");
+  glass_context_reset_param (ctx, "profile-shape-n");
+  glass_context_reset_param (ctx, "displacement-scale");
+  g_object_unref (panel);
+}
+
+/* PROMINENT: the accent's foreground class, the theme's accent as the tint
+ * (not the context's colour), and the panel's own tint over it. */
+static void
+test_prominent (void)
+{
+  GlassContext *ctx = glass_context_get_default ();
+  GtkWidget *window = gtk_window_new ();
+  GtkWidget *button = glass_button_new_with_label ("Done");
+  GdkRGBA tint, green = { 0.1f, 0.8f, 0.2f, 1.0f }, blue = { 0.04f, 0.52f, 1.0f, 0.92f };
+
+  gtk_window_set_child (GTK_WINDOW (window), button);
+  g_assert_false (gtk_widget_has_css_class (button, "glass-prominent"));
+  glass_panel_set_material (GLASS_PANEL (button), GLASS_MATERIAL_PROMINENT);
+  g_assert_true (gtk_widget_has_css_class (button, "glass-prominent"));
+  /* It survives an app replacing the classes. */
+  gtk_widget_set_css_classes (button, (const char *[]) { "custom", NULL });
+  g_assert_true (gtk_widget_has_css_class (button, "glass-prominent"));
+
+  glass_context_set_tint_color (ctx, &green);
+  g_assert_false (glass_panel_get_tint (GLASS_PANEL (button), &tint));
+  g_assert_cmpfloat_with_epsilon (tint.alpha, 0.92f, 1e-6);
+  g_assert_false (tint.red == green.red && tint.green == green.green && tint.blue == green.blue);
+  glass_context_set_tint_color (ctx, NULL);
+
+  glass_panel_set_tint (GLASS_PANEL (button), &blue);
+  g_assert_true (glass_panel_get_tint (GLASS_PANEL (button), &tint));
+  g_assert_cmpfloat (tint.blue, ==, 1.0f);
+
+  glass_panel_set_material (GLASS_PANEL (button), GLASS_MATERIAL_REGULAR);
+  g_assert_false (gtk_widget_has_css_class (button, "glass-prominent"));
+  gtk_window_destroy (GTK_WINDOW (window));
+}
+
 /* The buttons under @widget with a frame (or without). */
 static int
 count_buttons (GtkWidget *widget, gboolean framed)
@@ -1021,6 +1077,8 @@ main (int argc, char **argv)
   g_test_add_func ("/widgets/fallback-realized", test_fallback_realized);
   g_test_add_func ("/widgets/fallback-adaptive", test_fallback_adaptive);
   g_test_add_func ("/widgets/panel-params", test_panel_params);
+  g_test_add_func ("/widgets/panel-lens", test_panel_lens);
+  g_test_add_func ("/widgets/prominent", test_prominent);
   g_test_add_func ("/widgets/css-classes", test_css_classes);
   g_test_add_func ("/widgets/toggle-group", test_toggle_group);
   g_test_add_func ("/widgets/toggle-group-remove", test_toggle_group_remove);

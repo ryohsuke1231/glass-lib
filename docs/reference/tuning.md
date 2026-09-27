@@ -14,6 +14,13 @@ Each panel has a [enum@Glass.Material], which sets how it looks:
 - `THICK`: large panes such as sidebars. Strong blur, tinted with the window
   colour, the theme's text colours.
 - `MENU`: popovers and menus. Between `REGULAR` and `THICK`.
+- `PROMINENT`: the button that confirms (Done, Send, Close). Strongly tinted
+  with the theme's accent colour and frosted, with the accent's text colour.
+  Give it a [property@Glass.Panel:tint] for another colour:
+
+```js
+const done = new Glass.Button({ label: 'Done', material: Glass.Material.PROMINENT });
+```
 
 Set a panel's shape with [property@Glass.Panel:corner-radius] (negative, the
 default: a capsule) or per corner with [method@Glass.Panel.set_corner_radii],
@@ -47,7 +54,14 @@ hero.set_param(Glass.PARAM_SHADOW_INTENSITY, 0.15);
 The lens acts in a band about 22 px wide along the edge, whatever the corner
 radius; on glass thinner than twice that, the whole lens is scaled down with
 it. `displacement-scale`, `max-z` and `profile-shape-n` shape the lens inside
-the band.
+the band. The two lenses measured on macOS set all three at once:
+[enum@Glass.Lens] `THIN` (the Dock's, every material's but `CLEAR`) and
+`THICK` (the desktop widgets', `CLEAR`'s):
+
+```js
+hero.set_lens(Glass.Lens.THICK);                          // this panel
+Glass.Context.get_default().set_lens(Glass.Lens.THICK);   // every panel
+```
 
 Each key has a constant, `Glass.PARAM_BLUR_RADIUS` for `'blur-radius'` and so
 on (`GLASS_PARAM_BLUR_RADIUS` in C): a misspelt constant is an error at once,

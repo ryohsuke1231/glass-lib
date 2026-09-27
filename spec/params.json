@@ -34,6 +34,17 @@
     { "key": "tint-strength",             "uniform": null,                        "default": 0.12, "min": 0.0, "max": 1.0,   "px": false, "extension_key": "dock-tint-strength" },
     { "key": "blur-downscale",            "uniform": null,                        "default": 2.0,  "min": 1.0, "max": 4.0,   "px": false, "extension_key": "glass-blur-downscale", "values": [1.0, 2.0, 4.0] }
   ],
+  "lenses": {
+    "_comment": [
+      "The lenses a developer can pick (GlassLens, glass_panel_set_lens() / glass_context_set_lens()), in GlassLens",
+      "order. Each is the three values that shape the lens inside EDGE_LENS_BAND, measured on macOS 27",
+      "(docs/memo.md 追記16): thin = the Dock and the music mini player, thick = the round video button and the",
+      "desktop widgets. The edge presets below take theirs from here."
+    ],
+    "order": ["thin", "thick"],
+    "thin": { "max-z": 88.0, "profile-shape-n": 3.6, "displacement-scale": 10.5 },
+    "thick": { "max-z": 100.0, "profile-shape-n": 1.35, "displacement-scale": 26.0 }
+  },
   "edge_presets": {
     "_comment": [
       "The lens and the edge, measured on macOS 27 (5K screenshots; docs/memo.md 追記16). The lens is fitted",
@@ -47,12 +58,12 @@
     "apple-s": {
       "edge-smoothing": 0.4, "rim-width": 2.3, "rim-power": 3.0, "rim-intensity": 0.5, "rim-directional-power": 1.9,
       "ao-radius": 0.6, "ao-intensity": 0.65, "chroma-strength": 0.0, "sheen-intensity": 0.0,
-      "profile-shape-n": 3.6, "max-z": 88.0, "displacement-scale": 10.5
+      "lens": "thin"
     },
     "apple-l": {
       "edge-smoothing": 0.4, "rim-width": 2.3, "rim-power": 3.0, "rim-intensity": 0.5, "rim-directional-power": 1.9,
       "ao-radius": 0.6, "ao-intensity": 0.65, "chroma-strength": 0.0, "sheen-intensity": 0.0,
-      "profile-shape-n": 1.35, "max-z": 100.0, "displacement-scale": 26.0
+      "lens": "thick"
     }
   },
   "materials": [
@@ -86,6 +97,15 @@
       "values": { "tint-strength": 0.45, "blur-radius": 8.0, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": true,
+      "adaptive": false
+    },
+    {
+      "name": "prominent",
+      "edge": "apple-s",
+      "values": { "tint-strength": 0.92, "blur-radius": 10.0, "shadow-radius": 16.0, "shadow-intensity": 0.07 },
+      "tint": [0.208, 0.518, 0.894],
+      "tint_from_theme": false,
+      "tint_from_accent": true,
       "adaptive": false
     }
   ]

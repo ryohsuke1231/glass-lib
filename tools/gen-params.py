@@ -24,6 +24,8 @@ def main():
     params = spec['params']
     keys = [p['key'] for p in params]
     presets = spec['edge_presets']
+    lenses = spec['lenses']
+    lens_keys = ('max-z', 'profile-shape-n', 'displacement-scale')
     out = []
     w = out.append
 
@@ -74,6 +76,7 @@ def main():
     w('  double      values[GLASS_N_PARAMS];')
     w('  float       tint[3];                 /* rgb; the strength is the tint-strength key */')
     w('  gboolean    tint_from_theme;         /* rgb = the theme colour (window, popover) */')
+    w('  gboolean    tint_from_accent;        /* rgb = the theme\'s accent colour */')
     w('  gboolean    adaptive;                /* FALSE: the foreground follows the theme */')
     w('} GlassMaterialSpec;')
     w('')
@@ -82,6 +85,8 @@ def main():
     w('static const GlassMaterialSpec glass_material_specs[GLASS_N_MATERIALS] = {')
     for m in spec['materials']:
         values = dict(presets[m['edge']]) if m.get('edge') else {}
+        if 'lens' in values:
+            values.update(lenses[values.pop('lens')])
         values.update(m['values'])
         for k in values:
             if k not in keys:
@@ -94,8 +99,25 @@ def main():
         w('    .values = { ' + ', '.join(f'[{c_ident(k)}] = {c_double(v)}' for k, v in values.items()) + ' },')
         w('    .tint = { ' + ', '.join(c_double(v) + 'f' for v in m['tint']) + ' },')
         w(f'    .tint_from_theme = {"TRUE" if m["tint_from_theme"] else "FALSE"},')
+        w(f'    .tint_from_accent = {"TRUE" if m.get("tint_from_accent") else "FALSE"},')
         w(f'    .adaptive = {"TRUE" if m["adaptive"] else "FALSE"},')
         w('  },')
+    w('};')
+    w('')
+
+    w('/* The lenses, in GlassLens order: the values of max-z, profile-shape-n and')
+    w(' * displacement-scale that shape each. */')
+    w(f'#define GLASS_N_LENSES {len(lenses["order"])}')
+    w('static const struct {')
+    w('  const char *name;')
+    w('  double      max_z, profile_shape_n, displacement_scale;')
+    w('} glass_lens_specs[GLASS_N_LENSES] = {')
+    for name in lenses['order']:
+        l = lenses[name]
+        for k in l:
+            if k not in lens_keys:
+                sys.exit(f'lens {name}: {k} is not a lens key')
+        w(f'  {{ "{name}", ' + ', '.join(c_double(l[k]) for k in lens_keys) + ' },')
     w('};')
     w('')
 

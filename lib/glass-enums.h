@@ -29,12 +29,17 @@ typedef enum {
 /**
  * GlassMaterial:
  * @GLASS_MATERIAL_REGULAR: toolbars, titles and button backgrounds
- * @GLASS_MATERIAL_CLEAR: over photos and video: less blur and tint
+ * @GLASS_MATERIAL_CLEAR: over photos and video: less blur and tint, and a
+ *   thicker lens (%GLASS_LENS_THICK)
  * @GLASS_MATERIAL_THICK: large surfaces such as sidebars: heavily frosted,
  *   tinted with the window colour, with the theme's foreground colours
  * @GLASS_MATERIAL_MENU: popovers and menus: frosted and tinted with the
  *   popover colour, lighter than @GLASS_MATERIAL_THICK, with the theme's
  *   foreground colours
+ * @GLASS_MATERIAL_PROMINENT: the button that confirms (Done, Send, Close):
+ *   strongly tinted with the theme's accent colour and frosted, with the
+ *   accent's foreground colour. Give the panel its own
+ *   [property@Panel:tint] for another colour. Since: 0.9
  *
  * The kind of glass a [class@Panel] is made of.
  */
@@ -43,7 +48,28 @@ typedef enum {
   GLASS_MATERIAL_CLEAR,
   GLASS_MATERIAL_THICK,
   GLASS_MATERIAL_MENU,
+  GLASS_MATERIAL_PROMINENT,
 } GlassMaterial;
+
+/**
+ * GlassLens:
+ * @GLASS_LENS_THIN: the lens of the macOS Dock: about 20 px of refraction
+ *   at the rim, gone 12 px in. The default of every material but
+ *   %GLASS_MATERIAL_CLEAR
+ * @GLASS_LENS_THICK: the lens of the macOS desktop widgets and round media
+ *   buttons: about 40 px at the rim, gone 20 px in. The default of
+ *   %GLASS_MATERIAL_CLEAR
+ *
+ * A shape of the lens along the edge of the glass: the values of the
+ * `max-z`, `profile-shape-n` and `displacement-scale` parameters that make
+ * it, set together by [method@Panel.set_lens] and [method@Context.set_lens].
+ *
+ * Since: 0.9
+ */
+typedef enum {
+  GLASS_LENS_THIN,
+  GLASS_LENS_THICK,
+} GlassLens;
 
 /**
  * GlassAdaptiveMode:

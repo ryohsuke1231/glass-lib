@@ -58,6 +58,8 @@ void               glass_panel_set_tint          (GlassPanel    *self,
 gboolean           glass_panel_set_param         (GlassPanel *self,
                                                   const char *key,
                                                   double      value);
+void               glass_panel_set_lens          (GlassPanel *self,
+                                                  GlassLens   lens);
 double             glass_panel_get_param         (GlassPanel *self,
                                                   const char *key);
 gboolean           glass_panel_is_param_set      (GlassPanel *self,

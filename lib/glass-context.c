@@ -452,6 +452,44 @@ glass_context_set_param (GlassContext *self,
 }
 
 /**
+ * glass_context_set_lens:
+ * @self: a context
+ * @lens: the lens
+ *
+ * Gives every panel one of the measured lenses: sets the context's values
+ * of `max-z`, `profile-shape-n` and `displacement-scale` together (a
+ * panel's own values, [method@Panel.set_param] or [method@Panel.set_lens],
+ * still win). [method@Context.reset_param] on those three keys goes back
+ * to each material's lens.
+ *
+ * Since: 0.9
+ */
+void
+glass_context_set_lens (GlassContext *self,
+                        GlassLens     lens)
+{
+  const int keys[3] = { GLASS_PARAM_ID_MAX_Z, GLASS_PARAM_ID_PROFILE_SHAPE_N, GLASS_PARAM_ID_DISPLACEMENT_SCALE };
+  double values[3];
+  gboolean any = FALSE;
+
+  g_return_if_fail (GLASS_IS_CONTEXT (self));
+  g_return_if_fail ((int) lens >= 0 && (int) lens < GLASS_N_LENSES);
+
+  values[0] = glass_lens_specs[lens].max_z;
+  values[1] = glass_lens_specs[lens].profile_shape_n;
+  values[2] = glass_lens_specs[lens].displacement_scale;
+  for (int k = 0; k < 3; k++)
+    if (!self->is_set[keys[k]] || self->values[keys[k]] != values[k])
+      {
+        self->is_set[keys[k]] = TRUE;
+        self->values[keys[k]] = values[k];
+        any = TRUE;
+      }
+  if (any)
+    changed (self);   /* once for the three */
+}
+
+/**
  * glass_context_get_param:
  * @self: a context
  * @key: a parameter

@@ -65,6 +65,10 @@ def context():
     ctx.reset_param('max-z')
     ctx.disconnect(handler)
     expect(not ctx.is_param_set('max-z') and len(changed) == 2, f'reset_param / changed: {changed}')
+    ctx.set_lens(Glass.Lens.THICK)
+    expect(ctx.get_param(Glass.PARAM_DISPLACEMENT_SCALE) == 26.0, 'set_lens')
+    for key in (Glass.PARAM_MAX_Z, Glass.PARAM_PROFILE_SHAPE_N, Glass.PARAM_DISPLACEMENT_SCALE):
+        ctx.reset_param(key)
     ctx.set_renderer(Glass.RendererMode.AUTO)
     expect(ctx.get_renderer() == Glass.RendererMode.AUTO, 'renderer')
     ctx.props.reduce_transparency = False
@@ -72,6 +76,11 @@ def context():
 
 def enums():
     expect(int(Glass.Material.MENU) == 3, 'Material.MENU')
+    expect(int(Glass.Material.PROMINENT) == 4, 'Material.PROMINENT')
+    expect(Glass.Lens.THIN != Glass.Lens.THICK, 'Lens')
+    b = Glass.Button(label='Done', material=Glass.Material.PROMINENT)
+    b.set_lens(Glass.Lens.THICK)
+    expect(b.get_param('max-z') == 100.0, 'panel set_lens')
     expect(Glass.EdgeStyle.SOFT != Glass.EdgeStyle.NONE, 'EdgeStyle')
     expect(int(Glass.Appearance.UNKNOWN) == 0, 'Appearance')
 

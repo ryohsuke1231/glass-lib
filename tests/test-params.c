@@ -77,13 +77,64 @@ test_materials (void)
   g_assert_false (glass_material_specs[GLASS_MATERIAL_THICK].adaptive);
 
   /* Menus: lighter than THICK, the theme's colours. */
-  g_assert_cmpint (GLASS_N_MATERIALS, ==, GLASS_MATERIAL_MENU + 1);
+  g_assert_cmpint (GLASS_N_MATERIALS, ==, GLASS_MATERIAL_PROMINENT + 1);
   glass_context_resolve (ctx, GLASS_MATERIAL_MENU, v);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 8.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 88.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.45);
   g_assert_true (glass_material_specs[GLASS_MATERIAL_MENU].tint_from_theme);
   g_assert_false (glass_material_specs[GLASS_MATERIAL_MENU].adaptive);
+
+  /* The button that confirms: the accent, strong, frosted. */
+  glass_context_resolve (ctx, GLASS_MATERIAL_PROMINENT, v);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.92);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 10.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 88.0);
+  g_assert_true (glass_material_specs[GLASS_MATERIAL_PROMINENT].tint_from_accent);
+  g_assert_false (glass_material_specs[GLASS_MATERIAL_PROMINENT].tint_from_theme);
+  g_assert_false (glass_material_specs[GLASS_MATERIAL_PROMINENT].adaptive);
+  for (int m = 0; m < GLASS_MATERIAL_PROMINENT; m++)
+    g_assert_false (glass_material_specs[m].tint_from_accent);
+}
+
+/* The lenses: the materials' own, and set together on the context. */
+static void
+test_lens (void)
+{
+  GlassContext *ctx = glass_context_get_default ();
+  double v[GLASS_N_PARAMS];
+  guint gen;
+
+  g_assert_cmpint (GLASS_N_LENSES, ==, GLASS_LENS_THICK + 1);
+  /* CLEAR is the thick lens, the others the thin one. */
+  glass_context_resolve (ctx, GLASS_MATERIAL_CLEAR, v);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, glass_lens_specs[GLASS_LENS_THICK].max_z);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_PROFILE_SHAPE_N], ==, glass_lens_specs[GLASS_LENS_THICK].profile_shape_n);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_DISPLACEMENT_SCALE], ==, glass_lens_specs[GLASS_LENS_THICK].displacement_scale);
+  glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_DISPLACEMENT_SCALE], ==, glass_lens_specs[GLASS_LENS_THIN].displacement_scale);
+
+  /* One change for the three keys. */
+  gen = glass_context_get_generation (ctx);
+  glass_context_set_lens (ctx, GLASS_LENS_THICK);
+  g_assert_cmpuint (glass_context_get_generation (ctx), ==, gen + 1);
+  g_assert_true (glass_context_is_param_set (ctx, "max-z"));
+  g_assert_true (glass_context_is_param_set (ctx, "profile-shape-n"));
+  g_assert_true (glass_context_is_param_set (ctx, "displacement-scale"));
+  glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 100.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_PROFILE_SHAPE_N], ==, 1.35);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_DISPLACEMENT_SCALE], ==, 26.0);
+  /* The same again changes nothing. */
+  gen = glass_context_get_generation (ctx);
+  glass_context_set_lens (ctx, GLASS_LENS_THICK);
+  g_assert_cmpuint (glass_context_get_generation (ctx), ==, gen);
+
+  glass_context_reset_param (ctx, "max-z");
+  glass_context_reset_param (ctx, "profile-shape-n");
+  glass_context_reset_param (ctx, "displacement-scale");
+  glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 88.0);
 }
 
 /* An explicit value beats every material; reset returns to them. */
@@ -190,6 +241,7 @@ main (int argc, char **argv)
   g_test_add_func ("/params/list", test_list);
   g_test_add_func ("/params/defaults", test_defaults);
   g_test_add_func ("/params/materials", test_materials);
+  g_test_add_func ("/params/lens", test_lens);
   g_test_add_func ("/params/override", test_override);
   g_test_add_func ("/params/tint", test_tint);
   g_test_add_func ("/params/clamp", test_clamp);

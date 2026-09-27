@@ -1,7 +1,10 @@
 // Controls: the dedicated glass parts (design.md §6.7) over a background of
 // your choice: switches and sliders whose knobs turn to lenses while held,
-// buttons that fuse like drops of water, a glass menu and a glass dialog.
+// buttons that fuse like drops of water, a glass menu, and a dialog whose
+// Close button is the glass that confirms (Glass.Material.PROMINENT).
 
+import Adw from 'gi://Adw?version=1';
+import Gdk from 'gi://Gdk?version=4.0';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
@@ -145,17 +148,29 @@ export class ControlsPage {
         this.background.set_active_name(pattern);
     }
 
+    // An ordinary dialog: the glass is only its Close button, the button that
+    // confirms (Glass.Material.PROMINENT) - here a vivid blue instead of the
+    // theme's accent, strongly frosted.
     showDialog() {
-        const box = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 12,
+        const text = new Gtk.Box({ orientation: Gtk.Orientation.VERTICAL, spacing: 12,
             margin_top: 28, margin_bottom: 24, margin_start: 32, margin_end: 32 });
-        box.append(new Gtk.Label({ label: 'A Sheet of Glass', css_classes: ['title-2'] }));
-        box.append(new Gtk.Label({ label: 'The window shows through the dialog, blurred and refracted.',
+        text.append(new Gtk.Label({ label: 'A Glass Button', css_classes: ['title-2'] }));
+        text.append(new Gtk.Label({ label: 'The dialog is plain; its Close button is glass, tinted and frosted.',
             wrap: true, justify: Gtk.Justification.CENTER }));
-        const done = new Gtk.Button({ label: 'Close', halign: Gtk.Align.CENTER, margin_top: 8,
-            css_classes: ['pill', 'suggested-action'] });
-        box.append(done);
+        // Room for the button, which is on the glass layer of the view.
+        text.append(new Gtk.Box({ height_request: 44, margin_top: 8 }));
 
-        const dialog = new Glass.Dialog({ content: box, content_width: 380 });
+        const blue = new Gdk.RGBA();
+        blue.parse('rgba(10, 132, 255, 0.92)');
+        const done = new Glass.Button({ label: 'Close', material: Glass.Material.PROMINENT,
+            halign: Gtk.Align.CENTER, valign: Gtk.Align.END, margin_bottom: 24, width_request: 120 });
+        done.set_tint(blue);
+        done.set_param(Glass.PARAM_BLUR_RADIUS, 10);
+
+        const view = new Glass.View({ content: text });
+        view.add_overlay(done);
+
+        const dialog = new Adw.Dialog({ child: view, content_width: 380 });
         done.connect('clicked', () => dialog.close());
         dialog.present(this.toolbar);
     }
