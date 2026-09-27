@@ -35,13 +35,16 @@ scrolls under them — in the same frame, on any compositor.
 - **Glass that behaves like liquid**: panels in a `GlassGroup` flow together
   like drops of water, glass morphs from one shape into another
   (`morph-id`), glass over glass refracts in layers, and presses make the
-  glass swell.
+  glass swell. The plate of a toggle group can be dragged from one toggle to
+  another, and it stretches like jelly as it goes.
 - **Readable text**: the text and icons on the glass turn dark or light with
   what is under them.
 - **The optics of the [Liquid Glass GNOME Shell extension](https://github.com/ryohsuke1231/liquid-glass)**
-  (refraction, chromatic aberration, rim light, shadow), tuned for small in-app
-  glass — and tunable: every parameter and the tint for the whole app or for
-  one panel.
+  (refraction, rim light, shadow), matched to measurements of macOS's glass
+  and tuned for small in-app glass — and tunable: materials (regular, thick,
+  clear, menu, and a tinted, frosted *prominent* one for the button that
+  confirms), a thin or thick lens, and every parameter and the tint for the
+  whole app or for one panel.
 - **A CSS fallback** when OpenGL is unavailable, and support for high
   contrast, reduced transparency and reduced motion.
 - **GJS (JavaScript / TypeScript), Python and C**, through GObject
@@ -100,7 +103,10 @@ view.add_overlay(new Glass.Panel({ child: myToolbarBox, halign: Gtk.Align.CENTER
 
 // Tuning: all the glass, or one panel.
 Glass.Context.get_default().set_param(Glass.PARAM_BLUR_RADIUS, 3);
-myPanel.set_param(Glass.PARAM_DISPLACEMENT_SCALE, 70);
+myPanel.set_lens(Glass.Lens.THICK);
+
+// The button that confirms: tinted with the accent colour, strongly frosted.
+const done = new Glass.Button({ label: 'Done', material: Glass.Material.PROMINENT });
 ```
 
 - [`examples/`](examples): the same small app in C, Python and GJS.
@@ -111,7 +117,8 @@ myPanel.set_param(Glass.PARAM_DISPLACEMENT_SCALE, 70);
 
 Two apps written in TypeScript for GJS, in [`demo/`](demo):
 
-- **Glass Gallery**, the test bench: Photos (a grid scrolling under glass),
+- **Glass Gallery**, the test bench: Photos (a grid of your own photos
+  scrolling under glass),
   Playground (panels to drag over test patterns), Controls, Tabs, and the
   **Lab**, with every optical parameter and the tint as live sliders.
 - **Glass Weather**, a showcase laid out like macOS's Weather: your places

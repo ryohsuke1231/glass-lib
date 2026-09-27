@@ -61,14 +61,13 @@ struct _GlassToggleGroup {
   gboolean        drag_armed;      /* pressed on the active toggle */
   gboolean        dragging;        /* moved past the threshold: the plate follows */
   graphene_rect_t drag_origin;     /* the active toggle when the drag began */
-  double          pointer_dx, pointer_dy;
+  double          pointer_dx;
   guint           shown_active;    /* the toggle marked as active (while dragging, the nearest) */
 
-  /* The jelly: each edge of the plate and its vertical offset on a spring */
+  /* The jelly: each edge of the plate on a spring, along the row only */
   gboolean        jelly;
   double          edge[2], edge_v[2];         /* left, right: px and px/s */
-  double          lift, lift_v;               /* vertical offset of the centre */
-  double          target_edge[2], target_lift;
+  double          target_edge[2];
   double          heading;                    /* -1 left .. 1 right, smoothed */
   double          last_target_centre;
   gint64          last_time;
@@ -247,8 +246,6 @@ set_active_internal (GlassToggleGroup *self, guint active, gboolean animate)
 #define JELLY_OMEGA    36.0    /* rad/s: an edge's spring, with no heading */
 #define JELLY_LEAD     0.35    /* the front edge this much stiffer, the back this much softer */
 #define JELLY_ZETA     0.45    /* of critical damping: an edge runs on a little past its mark */
-#define LIFT_OMEGA     40.0
-#define LIFT_ZETA      0.6
 #define JELLY_STEP     0.002   /* s: physics substep */
 
 static void
@@ -329,13 +326,9 @@ jelly_rect (GlassToggleGroup      *self,
             const graphene_rect_t *rest,
             graphene_rect_t       *out)
 {
-  double width = self->edge[1] - self->edge[0];
-  double squash = CLAMP (rest->size.width / MAX (width, 1.0), 0.84, 1.08);
-  double height = rest->size.height * squash;
-
-  *out = GRAPHENE_RECT_INIT ((float) self->edge[0],
-                             (float) (rest->origin.y + rest->size.height / 2.0 + self->lift - height / 2.0),
-                             (float) width, (float) height);
+  /* Only along the row: the plate keeps its height and its place across. */
+  *out = GRAPHENE_RECT_INIT ((float) self->edge[0], rest->origin.y,
+                             (float) (self->edge[1] - self->edge[0]), rest->size.height);
 }
 
 static void
@@ -386,7 +379,6 @@ jelly_tick (GtkWidget     *widget,
               JELLY_OMEGA * (1.0 - JELLY_LEAD * self->heading), JELLY_ZETA, dt);
       spring (&self->edge[1], &self->edge_v[1], self->target_edge[1],
               JELLY_OMEGA * (1.0 + JELLY_LEAD * self->heading), JELLY_ZETA, dt);
-      spring (&self->lift, &self->lift_v, self->target_lift, LIFT_OMEGA, LIFT_ZETA, dt);
 
       /* A plate, not two loose ends: no thinner than 0.6 and no longer than
        * 1.7 of its width at rest. */
@@ -407,7 +399,6 @@ jelly_tick (GtkWidget     *widget,
   settled = !self->dragging;
   for (int e = 0; e < 2 && settled; e++)
     settled = fabs (self->edge[e] - self->target_edge[e]) < 0.05 && fabs (self->edge_v[e]) < 2.0;
-  settled = settled && fabs (self->lift - self->target_lift) < 0.05 && fabs (self->lift_v) < 2.0;
   if (settled)
     {
       self->jelly = FALSE;
@@ -422,15 +413,9 @@ jelly_start (GlassToggleGroup *self)
 {
   if (!self->jelly)
     {
-      graphene_rect_t rest;
-
       self->edge[0] = self->shown.origin.x;
       self->edge[1] = self->shown.origin.x + self->shown.size.width;
       self->edge_v[0] = self->edge_v[1] = 0.0;
-      self->lift = self->lift_v = 0.0;
-      if (active_rect (self, &rest))
-        self->lift = self->shown.origin.y + self->shown.size.height / 2.0 -
-                     (rest.origin.y + rest.size.height / 2.0);
       self->heading = 0.0;
       self->last_target_centre = (self->edge[0] + self->edge[1]) / 2.0;
       self->jelly = TRUE;
@@ -475,7 +460,6 @@ jelly_follow_pointer (GlassToggleGroup *self)
 
   self->target_edge[0] = centre - width / 2.0;
   self->target_edge[1] = centre + width / 2.0;
-  self->target_lift = copysign (MIN (fabs (self->pointer_dy) * 0.12, 3.0), self->pointer_dy);
 }
 
 /* After the drag: the plate settles on a toggle. */
@@ -488,7 +472,6 @@ jelly_settle_on (GlassToggleGroup *self,
   button_bounds (self, index, &b);
   self->target_edge[0] = b.origin.x;
   self->target_edge[1] = b.origin.x + b.size.width;
-  self->target_lift = 0.0;
 }
 
 static void
@@ -525,7 +508,6 @@ drag_update (GtkGestureDrag   *gesture,
       jelly_start (self);
     }
   self->pointer_dx = dx;
-  self->pointer_dy = dy;
   jelly_follow_pointer (self);
   show_as_active (self, nearest_toggle (self, (self->target_edge[0] + self->target_edge[1]) / 2.0));
 }
