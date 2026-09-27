@@ -1,7 +1,15 @@
 # glass-lib 設計書
 
-- 版: **v0.8（v1 の仕上げ: ティント・パネルごとのパラメータ・フォールバックの Adaptive・API ドキュメント・Flatpak・天気アプリ。ロードマップの残りを破棄した版）**
-- 日付: 2026-09-26（v0.8.1: 2026-09-27）
+- 版: **v0.9（macOS 27 の実測に合わせたレンズと縁。既存拡張のシェーダと同時に改訂）**
+- 日付: 2026-09-27
+- v0.9 の変更（ユーザーの指示「実機のスクリーンショットを解析して、屈折と縁を本物に近づける」、2026-09-27。解析の記録は `docs/memo.md` 追記16）:
+  - 🔒 レンズの帯（ドームが立ち上がる幅）を角の半径から切り離し、定数 `EDGE_LENS_BAND`（22 論理 px）にした。帯より小さいガラスはレンズ全体を相似に縮める（§10.1・§10.3）。
+    macOS では、半径 48pt の丸いボタンと角の半径 27pt のウィジェットで、縁からの深さごとの変位が同じだった（大きさにも角の半径にもよらない）
+  - 🔒 内側の影（AO）を、リムの光が当たらない向きにだけ付ける（macOS の縁の 1px は、光の軸を向く所で明るく、沿う所で暗い）（§10.3）
+  - 既定値（§11.1、拡張の gschema と同じ）と材質の縁の値（§11.2）を実測に合わせた。`crisp-soft` は `apple-s`（CLEAR は `apple-l`）に置き換えた。
+    ガラス越しの背景の彩度を 1.5 倍にした（レンダラの定数。§11.2）
+  - 参照シェーダは拡張の新しい版に更新し、ゴールデンは 250 件（帯より小さい形を追加）で 0/255（§10.5）
+- v0.8.1（2026-09-27）までの版: v0.8（v1 の仕上げ: ティント・パネルごとのパラメータ・フォールバックの Adaptive・API ドキュメント・Flatpak・天気アプリ。ロードマップの残りを破棄した版。2026-09-26）
 - v0.8.1 の変更（公開前のレビューでの指摘、2026-09-27）:
   - パラメータのキーの定数 `GLASS_PARAM_BLUR_RADIUS` など（`Glass.PARAM_BLUR_RADIUS`）。`spec/params.json` から公開ヘッダ `glass-params.h` を生成する（§6.1・§11.1）
   - `GlassSwitch`・`GlassMenuButton` を `GtkActionable` に（§6.7）。`GlassToggleGroup` に削除・全消去・項目ごとのツールチップ（§6.6）
@@ -713,7 +721,7 @@ shaders/
 ├── reference/glass.frag          拡張の出荷版の無改変コピー（編集しない。README に出どころとハッシュ）
 ├── core/                         単一ソース
 │   ├── glass_core.glsl           下の 5 つを順に #include する入口
-│   ├── glass_params.glsl         uniform と定数（EDGE_LENS_FALLOFF / EDGE_LENS_REACH、測ったフットプリントのタップ数）
+│   ├── glass_params.glsl         uniform と定数（EDGE_LENS_FALLOFF / EDGE_LENS_REACH / EDGE_LENS_BAND、測ったフットプリントのタップ数）
 │   ├── glass_shape.glsl          角丸矩形の SDF・超楕円の高さ・法線
 │   ├── glass_surface.glsl        SCB・ディザ
 │   ├── glass_optics.glsl         屈折・端の減衰・ぼかし済み背景の読み出し（フットプリントのタップ、測ったフットプリントの折れ線）
@@ -750,7 +758,7 @@ shaders/
 |---|---|---|---|
 | `gradient_step` | 法線の有限差分の幅（px） | `1.2 × S` | 元の式で計算した値 |
 | `max_displacement_px` | 変位の上限（px） | `324 × S` | `0.30 × min(res)` |
-| `lens_px_scale` | `EDGE_LENS_REACH`（96px）とフットプリントの上限（64px）の倍率 | `S`（HiDPI で論理サイズを保つ） | `1` |
+| `lens_px_scale` | `EDGE_LENS_REACH`（96px）・`EDGE_LENS_BAND`（22px）とフットプリントの上限（64px）の倍率 | `S`（HiDPI で論理サイズを保つ） | `1` |
 | `edge_damping` | 面の端の 3% で屈折を弱める（参照の `stabilizedUV`） | `0`（出力はガラス＋余白だけ） | `1` |
 | `lens_footprint_px` | レンズのフットプリントを測る幅（±px）。0 = 参照の解析的な見積もりと 10 タップ | サンプル間隔の半分（§8.5） | `0` |
 
@@ -768,6 +776,17 @@ shaders/
 
 形状を配列で受ける形（v2 の融合用）は、融合を作るときに入れる。v1 は 1 パス 1 形状。
 
+#### 10.3.1 レンズの帯と縁の影（v0.9、2026-09-27。拡張のシェーダと同時に変えた）
+
+macOS 27 の実機のスクリーンショット（5K、同じ範囲をガラスあり／なしで撮った 9 組）から、縁からの深さ `u` ごとの変位 `D(u)` を相互相関で測った（`docs/memo.md` 追記16）。
+
+- 🔒 **レンズの帯は定数 `EDGE_LENS_BAND`（22 論理 px × `lens_px_scale`）。** 以前は角の半径の幅でドームを立ち上げていた（`normalizedDepth()` と `bevelPx` が `corner_radius`）ので、角の半径の設定ごとに別のレンズになっていた。
+  macOS は半径 48pt の丸いボタンと角の半径 27pt のウィジェットで `D(u)` が同じで、帯は大きさにも角の半径にもよらない。
+  形の小さい方の半分（融合では混ぜた半径）が帯より小さいときは、帯・ドームの高さ・変位を同じ比で縮める（`lensBandFor()`・`lensScaleFor()`）。レンズの形は変わらず、小さなピルで反対側まで読みにいかない。
+  帯の中のレンズの形は、これまでどおり `displacement_scale`・`max_z`・`profile_shape_n` が決める（`EDGE_LENS_FALLOFF` 2.4 はそのまま）。設定は増やしていない。
+- 🔒 **内側の影（AO）は、リムの光が当たらない向きにだけ付く**（`ao × (1 − lightMask)`）。macOS の縁の最も外側の 1px は、光の軸（縦）を向く所で明るく、沿う所で背景の約 0.4 倍に暗い。
+  `surface_light_enabled = 0`（拡張のアプリウィンドウ）では光が無いので、これまでどおり一周に付く。
+
 ### 10.4 GLES 3.0 と GL 3.3 の両対応
 
 - Core は GLSL 1.30 以降の書き方（`texture`、`in`/`out`）を使わず、ターゲットに任せる。精度は GLES で `precision highp float;`（ローダが付ける）。
@@ -776,7 +795,8 @@ shaders/
 ### 10.5 ゴールデンテスト（`tests/golden/glass-golden.c`）
 
 - Mesa の surfaceless EGL で窓なしの GLES 3.0 コンテキストを作り、参照（`compat/reference.frag`）と Core（`gl/glass.frag`）を同じ入力で描いて、画素を比べる。使えない環境では skip（77）。
-- 場面: 10 通りの設定（拡張の値・アプリ内の値・色収差なし・早期リターンなし・デバッグ 1/2・スーパーサンプリング・2 倍スケール・小さい面・面の端）× 4 形状（カプセル・パネル・大・正方形）× 5 背景（縞・市松・グラデーション・同心円・ノイズ）= 200 ケース。
+- 場面: 10 通りの設定（拡張の値・アプリ内の値・色収差なし・早期リターンなし・デバッグ 1/2・スーパーサンプリング・2 倍スケール・小さい面・面の端）× 5 形状（カプセル・パネル・大・正方形・ピル）× 5 背景（縞・市松・グラデーション・同心円・ノイズ）= 250 ケース。
+  ピル（高さ 24）は `EDGE_LENS_BAND` より薄く、レンズを縮める経路を通る（v0.9 で追加）。光学の値は拡張の既定（v0.9）。シーンだけは式を比べるために 0.08 にしてある。
 - 受け入れ条件: 全画素で差が 1/255 以下。**結果は全ケースで 0/255。**
 - 失敗したケースは `--write DIR` で参照・Core・差（32 倍）の PNG を保存できる。
 - 空振りしていないことも確かめた。`EDGE_LENS_FALLOFF` を 2.4 → 2.5 に変えると 141 ケースが失敗する。
@@ -787,35 +807,37 @@ shaders/
 
 ### 11.1 光学パラメータ（全体の設定）
 
-既定値は**既存拡張の gschema の既定値と同じ**（2026-09-24 時点）。キー名も拡張機能と同じ意味・同じ単位にする。
+既定値は**既存拡張の gschema の既定値と同じ**（2026-09-27、v0.9 で両方を macOS 27 の実測に合わせて改訂。memo 追記16）。キー名も拡張機能と同じ意味・同じ単位にする。
 
 | キー（`glass_context_set_param`） | 既定 | 単位 | 拡張機能のキー |
 |---|---|---|---|
-| `max-z` | 25.0 | px | `glass-max-z` |
-| `displacement-scale` | 78.5 | px | `glass-displacement-scale` |
-| `edge-smoothing` | 2.0 | px | `glass-edge-smoothing` |
-| `profile-shape-n` | 7.0 | – | `glass-profile-shape-n` |
+| `max-z` | 88.0 | px | `glass-max-z` |
+| `displacement-scale` | 10.5 | px | `glass-displacement-scale` |
+| `edge-smoothing` | 0.5 | px | `glass-edge-smoothing` |
+| `profile-shape-n` | 3.6 | – | `glass-profile-shape-n` |
 | `ior` | 2.40 | – | `glass-ior` |
-| `chroma-strength` | 1.5 | px | `glass-chroma-strength` |
+| `chroma-strength` | 0.0 | px | `glass-chroma-strength` |
 | `specular-intensity` | 0.0 | – | `glass-specular-intensity` |
 | `shininess` | 42.0 | – | `glass-shininess` |
-| `rim-width` | 5.0 | px | `glass-rim-width` |
-| `rim-intensity` | 0.6 | – | `glass-rim-intensity` |
-| `rim-directional-power` | 2.7 | – | `glass-rim-directional-power` |
-| `rim-power` | 6.0 | – | `glass-rim-power` |
-| `rim-light-color-intensity` | 1.4 | – | `glass-rim-light-color-intensity` |
-| `sheen-intensity` | 0.32 | – | `glass-sheen-intensity` |
-| `light-angle-deg` | 50.0 | deg | `glass-light-angle-deg` |
-| `shadow-radius` | 30.0 | px | `shadow-radius` |
-| `shadow-intensity` | 0.55 | – | `shadow-intensity` |
-| `ao-intensity` | 0.25 | – | `glass-ao-intensity` |
-| `ao-radius` | 7.5 | px | `glass-ao-radius` |
-| `blur-radius` | 5.0 | px | `dock-blur-radius`（材質ごとの値を使う。§11.2） |
+| `rim-width` | 2.3 | px | `glass-rim-width` |
+| `rim-intensity` | 0.5 | – | `glass-rim-intensity` |
+| `rim-directional-power` | 1.9 | – | `glass-rim-directional-power` |
+| `rim-power` | 3.0 | – | `glass-rim-power` |
+| `rim-light-color-intensity` | 1.0 | – | `glass-rim-light-color-intensity` |
+| `sheen-intensity` | 0.0 | – | `glass-sheen-intensity` |
+| `light-angle-deg` | 90.0 | deg | `glass-light-angle-deg` |
+| `shadow-radius` | 50.0 | px | `shadow-radius` |
+| `shadow-intensity` | 0.22 | – | `shadow-intensity` |
+| `ao-intensity` | 0.65 | – | `glass-ao-intensity` |
+| `ao-radius` | 1.0 | px | `glass-ao-radius` |
+| `blur-radius` | 2.0 | px | `dock-blur-radius`（材質ごとの値を使う。§11.2） |
 | `tint-strength` | 0.12 | – | `dock-tint-strength`（v0.8。材質ごとの値を使う。§11.2） |
 | `blur-downscale` | 2 | 2 / 4 | `glass-blur-downscale` |
 
 - px の値は**論理 px**。描画時に `S`（サーフェスのスケール）倍する。
 - 影（`shadow-radius`・`shadow-intensity`）の表の値は拡張と同じだが、**アプリ内では材質ごとの値を使う**（§11.2）。拡張の値は壁紙の上に浮くドック・メニュー向けで、明るい窓の中の小さな部品には強すぎる（ユーザーの指摘、`docs/memo.md` 地雷5）。
+- v0.9 の値の出どころ（memo 追記16）: レンズ（`max-z`・`displacement-scale`・`profile-shape-n`）は macOS の Dock とミニプレーヤーの `D(u)` に合わせた（rms 0.24pt）。
+  リム・内側の影・輪郭のぼかしは、縁の画素に合わせた（光は縦 = 90°）。色収差 0 と `sheen` 0 は、macOS のガラスに色のにじみも面の光も無いため。影は Spotlight のパネルの横の減衰に合わせた。
 - 範囲（min/max）は拡張機能の設定画面（`prefs.js`）と同じにする（実装時に写す）。範囲外は clamp して `g_warning`。
 - **光学の設定はこれ以上増やさない**（既存拡張の方針 7）。`EDGE_LENS_FALLOFF`・`EDGE_LENS_REACH` は定数のまま。
   `tint-strength`（v0.8）は新しい光学の設定ではなく、材質が持っていたティントの強さを調整できるキーにしたもの（ユーザーの指示、2026-09-26）。
@@ -834,14 +856,16 @@ shaders/
 
 ティントの列の数（0.12 など）は `tint-strength` の材質の値、色は材質の色（v0.8。`spec/params.json` では `values` の `tint-strength` と `tint` の rgb に分けた）。
 
-- 🔒 **縁の値（アプリ内用）**: 拡張の光学の値は大きなガラス向けの絶対 px で、小さなアプリ内のガラスでは縁が太く濁る（ユーザーの指摘、`docs/memo.md` 地雷8・追記4）。
-  アプリ内の材質は、縁に効く値（`edge_smoothing`・`rim_width`・`rim_power`・`ao_radius`・`ao_intensity`・`chroma_strength`・`profile_shape_n`・`displacement_scale`・`max_z`）を**材質自身の値**として持つ。
-  🔒 値は S1 のプリセット **`crisp-soft`**（ユーザーの決定、2026-09-25。値は memo 追記5 の表）を元に、後の変更を入れたもの: `edge_smoothing` 0.75、`rim_width` 2、`rim_power` 9、`ao_radius` 3、`ao_intensity` 0.10、`chroma_strength` 0.8、
-  `profile_shape_n` **2.4**（S1 では 7）、`max_z` **35**（S1 では 14 → 50 → 35）、`displacement_scale` 45、`rim_directional_power` **1.6**（拡張は 2.7）。太字は 2026-09-26 のユーザーの変更（Lab で見て決めた値）。
-  🔒 光の `sheen_intensity` も 3 つの材質で 0.08（拡張は 0.32。ユーザーの決定、2026-09-26）。
-  縁の**線**（輪郭のぼかし・リムの光・内側の影・色のにじみ）は細くし、**レンズ**（縁の近くで背景が曲がる帯＝ガラス感）は拡張のドームの形のまま弱めにした。設定の種類は増やさない（値の選び方だけ）。
+- 🔒 **縁の値（アプリ内用）**（v0.9 で改訂、2026-09-27。memo 追記16）: 材質は縁に効く値（`edge_smoothing`・`rim_width`・`rim_power`・`rim_intensity`・`rim_directional_power`・`ao_radius`・`ao_intensity`・`chroma_strength`・`sheen_intensity`・`profile_shape_n`・`displacement_scale`・`max_z`）を材質自身の値として持つ。
+  値は macOS 27 の実測から作ったプリセット（`spec/params.json` の `edge_presets`）:
+  - `apple-s`（`REGULAR`・`THICK`・`MENU`）: Dock とミニプレーヤーの薄いレンズ。`max_z` 88、`profile_shape_n` 3.6、`displacement_scale` 10.5（縁で約 20pt、12pt の深さでほぼ 0）
+  - `apple-l`（`CLEAR`）: 丸い動画ボタンとデスクトップのウィジェットの厚いレンズ。`max_z` 100、`profile_shape_n` 1.35、`displacement_scale` 26（縁で約 40pt、20pt の深さでほぼ 0）。天気アプリのカードがウィジェットに当たる
+  - 共通: `edge_smoothing` 0.4、`rim_width` 2.3、`rim_power` 3、`rim_intensity` 0.5、`rim_directional_power` 1.9、`ao_radius` 0.6、`ao_intensity` 0.65、`chroma_strength` 0、`sheen_intensity` 0
+  それまでの `crisp-soft`（S1 でユーザーが選んだ値。2026-09-25/26: `edge_smoothing` 0.75、`rim_width` 2、`rim_power` 9、`ao` 3px・0.10、`chroma_strength` 0.8、`profile_shape_n` 2.4、`max_z` 35、`displacement_scale` 45、`rim_directional_power` 1.6、`sheen` 0.08）は、縁で 65pt 動く強いレンズだった（macOS の Dock の約 3 倍）。
+  縁の**線**（輪郭のぼかし・リム・内側の影）が細いという方向は同じで、レンズは弱く広くなった。設定の種類は増やしていない（値の選び方だけ）。
   スーパーサンプリング 4x と測ったフットプリントは既定 ON（§8.5）。
-  §11.1 の全体の値（拡張と同じ）は、大きなガラス（将来のサイドバーなど）と比較用に残す。
+  §11.1 の全体の値（拡張と同じ）は、比較と大きなガラス用に残す（v0.9 からは `apple-s` と同じレンズ）。
+- 彩度: macOS はガラス越しの背景の彩度を上げている（測った 8 組すべてで 1.5〜1.9 倍）。レンダラは `saturation` を 1.5 で渡す（`GLASS_BACKDROP_SATURATION`。設定ではない。拡張も面ごとの彩度の既定を 1.5 にした）。
 - 見た目（明/暗）でティントを変えるか（Apple は変える）は、**v1 では変えない**（既存拡張と同じ: 白いティント固定、前景色だけ切り替える）。
   v0.7 までの「Lab での A/B（C3）」は破棄した。代わりにティントの色と強さを Lab で調整できるようにした（下）。
 - 🔒 **ティント**（v0.8。ユーザーの指示、2026-09-26）: 強さは光学パラメータのキー `tint-strength`（0〜1。材質の値は上の表）、色は次のうち最初にあるもの。

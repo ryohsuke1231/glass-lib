@@ -52,6 +52,19 @@ float getHeight(vec2 p, vec2 b, float r, float zScale) {
     return getHeight2(p, b, r, r, zScale);
 }
 
+// The bevel's width for a glass whose smaller half-extent is halfMin, px:
+// EDGE_LENS_BAND, or halfMin when the glass is too small to hold it.
+float lensBandFor(float halfMin) {
+    return max(min(EDGE_LENS_BAND * lens_px_scale, halfMin), 1.0);
+}
+
+// How much the lens is scaled down to fit that band (1 = full size). The
+// dome height and the displacement are scaled by the same factor as the
+// band, so the surface keeps its slopes and the lens its shape.
+float lensScaleFor(float band) {
+    return band / max(EDGE_LENS_BAND * lens_px_scale, 1.0);
+}
+
 // Unit gradient of sdRoundRect() at p ("straight out of the shape"), in
 // closed form: along the nearest side inside the cross, radially from the
 // corner circle's centre in the corner quadrant.
@@ -89,10 +102,10 @@ vec2 heightGradient(vec2 p, vec2 b, float r, float zScale) {
 //
 // The outline's corner radius in the quadrant p lies in (iq's sdRoundBox):
 // top-left, top-right, bottom-right, bottom-left, px of the surface. The
-// lens band keeps one width all round (corner_radius, which is then the
-// largest of the four): a band that changed with the quadrant would not
-// meet itself in the middle of a side. With mode 0 (the reference) the
-// outline radius is corner_radius everywhere, the same arithmetic as before.
+// lens band keeps one width all round (lensBandFor(), which does not depend
+// on the corners): a band that changed with the quadrant would not meet
+// itself in the middle of a side. With mode 0 (the reference) the outline
+// radius is corner_radius everywhere, the same arithmetic as before.
 
 uniform float glass_corner_mode;
 uniform vec4  glass_corner_radii;
@@ -204,8 +217,11 @@ float getHeightFused(vec2 p, float zScale) {
     if (d > smoothZone)
         return 0.0;
 
-    float t = clamp(max(-d, 0.0) / max(r, 1.0), 0.0, 1.0);
-    float h = profileHeight(t, zScale);
+    // The blended radius stands in for the half-extent: the members are
+    // pills and rounded buttons, whose radius is about half their height.
+    float band = lensBandFor(r);
+    float t = clamp(max(-d, 0.0) / band, 0.0, 1.0);
+    float h = profileHeight(t, zScale * lensScaleFor(band));
     float fade = 1.0 - smoothstep(-smoothZone, smoothZone, d);
     return h * fade;
 }

@@ -41,6 +41,7 @@ static const Shape shapes[] = {
   { "panel", 420, 120, 24 },
   { "large", 900, 320, 30 },
   { "square", 64, 64, 16 },
+  { "pill", 120, 24, 12 },   /* thinner than EDGE_LENS_BAND: the lens is scaled down */
 };
 
 typedef struct {
@@ -153,23 +154,24 @@ static const Backdrop backdrops[] = {
   { "noise", fill_noise },
 };
 
-/* The extension's defaults (the optics under test). */
+/* The extension's defaults (the optics under test). The sheen is on, although
+ * the defaults have it off, so that its arithmetic is compared too. */
 static const struct { const char *name; double value; gboolean px; } optics[] = {
-  { "max_z", 25.0, TRUE },
-  { "displacement_scale", 78.5, TRUE },
-  { "edge_smoothing", 2.0, TRUE },
-  { "profile_shape_n", 7.0, FALSE },
+  { "max_z", 88.0, TRUE },
+  { "displacement_scale", 10.5, TRUE },
+  { "edge_smoothing", 0.5, TRUE },
+  { "profile_shape_n", 3.6, FALSE },
   { "ior", 2.40, FALSE },
   { "shininess", 42.0, FALSE },
-  { "rim_width", 5.0, TRUE },
-  { "rim_intensity", 0.6, FALSE },
-  { "rim_directional_power", 2.7, FALSE },
-  { "rim_power", 6.0, FALSE },
-  { "rim_light_color_intensity", 1.4, FALSE },
-  { "sheen_intensity", 0.32, FALSE },
-  { "light_angle_deg", 50.0, FALSE },
-  { "ao_intensity", 0.25, FALSE },
-  { "ao_radius", 7.5, TRUE },
+  { "rim_width", 2.3, TRUE },
+  { "rim_intensity", 0.5, FALSE },
+  { "rim_directional_power", 1.9, FALSE },
+  { "rim_power", 3.0, FALSE },
+  { "rim_light_color_intensity", 1.0, FALSE },
+  { "sheen_intensity", 0.08, FALSE },
+  { "light_angle_deg", 90.0, FALSE },
+  { "ao_intensity", 0.65, FALSE },
+  { "ao_radius", 1.0, TRUE },
   { "tint_r", 1.0, FALSE },
   { "tint_g", 1.0, FALSE },
   { "tint_b", 1.0, FALSE },

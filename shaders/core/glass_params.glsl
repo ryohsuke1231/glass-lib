@@ -115,6 +115,20 @@ uniform float lens_footprint_px;
 // would read the clamped border of that region and streak.
 #define EDGE_LENS_REACH 96.0
 
+// Width of the bevel - the band along the edge over which the dome rises and
+// the lens acts - in px (times lens_px_scale). Measured on macOS 27 (5K
+// screenshots, docs/memo.md 追記16): the lens reaches the same depth on a
+// round button of radius 48 pt, on desktop widgets with 27 pt corners, and
+// on the Dock, so it follows neither the size nor the corner radius. Until
+// then the dome rose over corner_radius (here and in the reference), which
+// made every corner radius setting a different lens. Like the two constants
+// above, it is not a setting: displacement_scale / max_z / profile_shape_n
+// shape the lens inside it. A glass too small to hold it (its smaller
+// half-extent is less) gets the same lens scaled down as a whole - band,
+// dome height and displacement together - so it neither changes shape nor
+// reaches past the middle of the glass.
+#define EDGE_LENS_BAND 22.0
+
 // Most taps per segment of a measured-footprint path (lens_footprint_px > 0;
 // four segments, a tap every LENS_PATH_TAP_TEXELS blurred texels). Right past
 // the rim a pixel can sweep ~50 px of source, most of it inside one segment.

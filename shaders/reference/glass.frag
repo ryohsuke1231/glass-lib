@@ -126,6 +126,26 @@ uniform float blur_tex_h;
 // The two must be changed together.
 #define EDGE_LENS_REACH 96.0
 
+// ── The bevel's width: a FIXED constant too, deliberately not a setting ────
+//
+// The band along the edge over which the dome rises and the lens acts, in
+// px. The dome used to rise over `corner_radius` instead, which tied the lens
+// to the corner radius setting: every surface with a different radius (dock
+// 30, menus 60, toggles 18) got a different lens from the same optical
+// values.
+//
+// Measured on macOS 27 (5K screenshots, memo.md 追記32): the lens reaches
+// the same depth on a round button of radius 48 pt, on desktop widgets with
+// 27 pt corners and on the Dock - it follows neither the size nor the corner
+// radius of the glass. displacement_scale / max_z / profile_shape_n shape the
+// lens inside this band exactly as before (see the table above).
+//
+// A glass whose smaller half-extent is less than the band cannot hold it; it
+// gets the same lens scaled down as a whole - band, dome height and
+// displacement together (lensScaleFor()) - so the lens keeps its shape and
+// never reaches past the middle of a small pill.
+#define EDGE_LENS_BAND 22.0
+
 // [DEBUG] The footprint taps in sampleBackdrop(), 1.0 = on (normal).
 // Setting it to 0.0 forces the four-tap RGSS pattern everywhere, which is the
 // direct A/B for "is the edge antialiasing actually doing anything" — turn it
@@ -285,10 +305,11 @@ float findActiveRegion(vec2 pixel_coord, float pad, out vec2 outLocalPos, out ve
     return bestD;
 }
 
-// Normalizes the depth value based on the edge curvature.
+// Normalizes the depth value over the bevel's width.
 float normalizedDepth(float d, vec2 b, float r) {
-    // Limits the height build-up strictly to the pixel width defined by 'corner_radius'.
-    // This prevents the glass from curving endlessly towards the center.
+    // Limits the height build-up strictly to the bevel (`r` = the band from
+    // lensBandFor(), no longer corner_radius). This prevents the glass from
+    // curving endlessly towards the center.
     float maxDepth = max(r, 1.0); 
     
     float interiorDepth = max(-d, 0.0);
@@ -305,8 +326,10 @@ float profileHeight(float t, float zScale) {
     return h * zScale;
 }
 
-// Computes the absolute height at a specific 2D coordinate.
-float getHeight(vec2 p, vec2 b, float r, float zScale) {
+// Computes the absolute height at a specific 2D coordinate. `r` is the
+// outline's corner radius, `band` the width the height builds up over
+// (EDGE_LENS_BAND, see lensBandFor()).
+float getHeight(vec2 p, vec2 b, float r, float band, float zScale) {
     float d = sdRoundRect(p, b, r);
 
     // [FIX 1] Soft boundary fade instead of a hard step at d=0.
@@ -319,7 +342,7 @@ float getHeight(vec2 p, vec2 b, float r, float zScale) {
     if (d > smoothZone)
         return 0.0;
 
-    float t = normalizedDepth(d, b, r);
+    float t = normalizedDepth(d, b, band);
     float h = profileHeight(t, zScale);
 
     // Taper height continuously to zero as d approaches the boundary from inside,
@@ -329,6 +352,19 @@ float getHeight(vec2 p, vec2 b, float r, float zScale) {
     // already bounds this call's domain, but corrected for consistency).
     float fade = 1.0 - smoothstep(-smoothZone, smoothZone, d);
     return h * fade;
+}
+
+// The bevel's width for a glass whose smaller half-extent is halfMin, px:
+// EDGE_LENS_BAND, or halfMin when the glass is too small to hold it.
+float lensBandFor(float halfMin) {
+    return max(min(EDGE_LENS_BAND, halfMin), 1.0);
+}
+
+// How much the lens is scaled down to fit that band (1 = full size). The
+// dome height and the displacement are scaled by the same factor as the
+// band, so the surface keeps its slopes and the lens its shape.
+float lensScaleFor(float band) {
+    return band / max(EDGE_LENS_BAND, 1.0);
 }
 
 // Dynamically adjusts the sampling step size for normal estimation based on resolution.
@@ -387,12 +423,12 @@ vec2 sdRoundRectDir(vec2 p, vec2 b, float r) {
 // unbounded derivative there for n > 1). The finite difference is what keeps
 // that bounded, at a magnitude tied to gradientStep(), which is precisely the
 // smoothing the current look depends on.
-vec2 heightGradient(vec2 p, vec2 b, float r, float zScale, vec2 resolution) {
+vec2 heightGradient(vec2 p, vec2 b, float r, float band, float zScale, vec2 resolution) {
     vec2 dir = sdRoundRectDir(p, b, r);
     float e = gradientStep(resolution);
 
-    float hOut = getHeight(p + dir * e, b, r, zScale);
-    float hIn  = getHeight(p - dir * e, b, r, zScale);
+    float hOut = getHeight(p + dir * e, b, r, band, zScale);
+    float hIn  = getHeight(p - dir * e, b, r, band, zScale);
 
     return dir * ((hOut - hIn) / (2.0 * e));
 }
@@ -666,6 +702,12 @@ void main() {
         d = sdRoundRect(local_pos, box_size, corner_radius);
         activeTint = vec3(tint_r, tint_g, tint_b);
     }
+
+    // [CHANGED] The bevel: a fixed band along the edge (EDGE_LENS_BAND)
+    // instead of corner_radius, and the factor the whole lens is scaled down
+    // by on a glass too small to hold it. See EDGE_LENS_BAND.
+    float lensBand = lensBandFor(min(box_size.x, box_size.y));
+    float lensScale = lensScaleFor(lensBand);
     
     // Geometry Anti-Aliasing: Smoothstep forces a sub-pixel soft transition.
     // Inside = 1.0, Outside = 0.0.
@@ -759,7 +801,7 @@ void main() {
     // 1-Lipschitz, so a step of `e` moves d by at most `e`).
     float smoothZoneEarly = max(edge_smoothing, 1.0);
     float interiorThreshold = max(
-        max(corner_radius + gradientStep(resolution) + smoothZoneEarly,
+        max(lensBand + gradientStep(resolution) + smoothZoneEarly,
             edgeFeather * 4.0),
         max(ao_radius, rim_width));
     if (early_exit_enabled > 0.5 && debug_view < 0.5 && -d >= interiorThreshold) {
@@ -991,7 +1033,7 @@ void main() {
     // reliably for a texture lookup, and there is nothing to gain by leaving
     // it to chance.
 
-    vec2 gradH = heightGradient(local_pos, box_size, corner_radius, max_z, resolution);
+    vec2 gradH = heightGradient(local_pos, box_size, corner_radius, lensBand, max_z * lensScale, resolution);
     vec3 normal = getNormal(gradH);
 
     vec2 disp = getDisplacement(d, normal, resolution);
@@ -1027,13 +1069,13 @@ void main() {
     // this is after. Folding costs sampling density, not correctness — so it
     // is paid for in sampleBackdrop(), which spreads its taps over the
     // footprint computed below.
-    float bevelPx = max(min(corner_radius, min(box_size.x, box_size.y)), 1.0);
+    float bevelPx = lensBand;
     float depthPx = max(-d, 0.0);
     float edgeT = clamp(1.0 - depthPx / bevelPx, 0.0, 1.0);
 
     float lensShape = pow(edgeT, EDGE_LENS_FALLOFF);
 
-    vec2 dispPx = disp * resolution * lensShape;
+    vec2 dispPx = disp * resolution * lensShape * lensScale;
     float dispLenPx = length(dispPx);
     vec2 dispDirPx = dispPx / max(dispLenPx, 1.0e-4);
     // The one hard limit left. It exists because the blurred region is sized
@@ -1221,8 +1263,9 @@ void main() {
     //     couplings are removed here so the inner AO darkening has its own
     //     independent radius/intensity controls, matching the outer drop
     //     shadow's separate radius/intensity pair.
+    //     [CHANGED] Applied further down, once the rim's light mask is
+    //     known: the shadow now falls only where the rim light does not.
     float aoMask = 1.0 - smoothstep(0.0, max(ao_radius, 0.001), -d);
-    baseColor *= (1.0 - aoMask * ao_intensity);
 
     // (b) Center focal highlight: bright spot offset slightly toward
     //     the light source, simulating where the curved glass focuses
@@ -1265,6 +1308,15 @@ void main() {
     float rimDot = 1.0 - max(dot(normal, viewDir), 0.0);
     float rimFresnel = pow(max(rimDot, 0.0), max(rim_power, 0.001));
     float lightMask = pow(abs(dot(normal, lightDir)), max(rim_directional_power, 1.0));
+
+    // [CHANGED] The inner shadow (a) falls where the rim light does not. On
+    // macOS 27 the outermost ring of the glass is bright where the edge faces
+    // the light axis and dark (about 0.4x the backdrop) where it runs along
+    // it, and neither shows where the other does (memo.md 追記32). With the
+    // surface light off (application windows) there is no rim light to make
+    // room for, and the shadow runs all round as before.
+    float aoLight = mix(1.0, 1.0 - lightMask, surface_light_enabled);
+    baseColor *= (1.0 - aoMask * ao_intensity * aoLight);
     
     // Mix the fresnel effect with the edge mask to keep light strictly on the bevels.
     float rimShape = mix(pow(edgeBand, 0.85), rimFresnel, 0.55) * edgeBand;

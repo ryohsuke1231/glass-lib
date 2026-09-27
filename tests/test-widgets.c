@@ -193,7 +193,7 @@ test_panel_params (void)
   GlassPanel *panel = GLASS_PANEL (g_object_ref_sink (glass_panel_new ()));
   GdkRGBA tint, blue = { 0.1f, 0.2f, 0.9f, 1.0f }, red = { 0.9f, 0.1f, 0.1f, 0.5f };
 
-  g_assert_cmpfloat (glass_panel_get_effective_param (panel, "max-z"), ==, 35.0);
+  g_assert_cmpfloat (glass_panel_get_effective_param (panel, "max-z"), ==, 88.0);
   glass_context_set_param (ctx, "max-z", 30.0);
   g_assert_cmpfloat (glass_panel_get_effective_param (panel, "max-z"), ==, 30.0);
   g_assert_true (glass_panel_set_param (panel, "max-z", 60.0));

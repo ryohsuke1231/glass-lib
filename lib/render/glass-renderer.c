@@ -42,6 +42,9 @@
  * past its far side (docs/memo.md 地雷10). */
 #define LENS_REACH 96.0
 
+/* The saturation the backdrop is shown with (the shader's applySCB()). */
+#define GLASS_BACKDROP_SATURATION 1.5
+
 /* ── Output textures ───────────────────────────────────────────────────────
  * GTK holds the texture of the last frame (and possibly the one before)
  * while we draw the next; each panel cycles through a few. A slot comes back
@@ -1448,7 +1451,10 @@ run_glass_pass (GlassRenderer            *self,
   u1f (self, "tint_strength", key->tint[3]);
   u1f (self, "brightness", 1.0);
   u1f (self, "contrast", 1.0);
-  u1f (self, "saturation", 1.0);
+  /* macOS 27 raises the saturation of what shows through its glass by 1.5
+   * to 1.9 on every surface measured (docs/memo.md 追記16); the extension's
+   * per-surface saturation defaults to 1.5 as well. Not a setting. */
+  u1f (self, "saturation", GLASS_BACKDROP_SATURATION);
   u1f (self, "surface_light_enabled", 1.0);
 
   /* An unset uniform reads 0.0, which would switch these off. */

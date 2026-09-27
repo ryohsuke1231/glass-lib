@@ -27,6 +27,12 @@ vec4 glass_shade(vec2 uv) {
         d = fusedSD(pixel_coord, fusedRadius);
     }
 
+    // The bevel: a fixed band along the edge (EDGE_LENS_BAND), and the factor
+    // the whole lens is scaled down by on a glass too small to hold it.
+    float lensBand = fused ? lensBandFor(fusedRadius)
+                           : lensBandFor(min(box_size.x, box_size.y));
+    float lensScale = lensScaleFor(lensBand);
+
     // Inside = 1, outside = 0, over +-edgeFeather. Written as the complement
     // of an increasing smoothstep: smoothstep() with edge0 > edge1 is
     // undefined, and some drivers evaluate it as branches that misclassify
@@ -51,7 +57,7 @@ vec4 glass_shade(vec2 uv) {
     // by at most e).
     float smoothZoneEarly = max(edge_smoothing, 1.0);
     float interiorThreshold = max(
-        max(corner_radius + gradient_step + smoothZoneEarly,
+        max(lensBand + gradient_step + smoothZoneEarly,
             edgeFeather * 4.0),
         max(ao_radius, rim_width));
     if (early_exit_enabled > 0.5 && debug_view < 0.5 && !fused && -d >= interiorThreshold) {
@@ -165,7 +171,7 @@ vec4 glass_shade(vec2 uv) {
     }
 
     vec2 gradH = fused ? heightGradientFused(pixel_coord, max_z)
-                       : heightGradient2(local_pos, box_size, outline_radius, corner_radius, max_z);
+                       : heightGradient2(local_pos, box_size, outline_radius, lensBand, max_z * lensScale);
     vec3 normal = getNormal(gradH);
 
     vec2 disp = getDisplacement(d, normal, resolution);
@@ -177,14 +183,13 @@ vec4 glass_shade(vec2 uv) {
     // (pulling D back to 0 at the edge would make the outermost pixels bend
     // the other way). The mapping may fold - that is what a thick glass edge
     // does - which costs sampling density, paid for by the footprint taps.
-    float bevelPx = fused ? max(fusedRadius, 1.0)
-                          : max(min(corner_radius, min(box_size.x, box_size.y)), 1.0);
+    float bevelPx = lensBand;
     float depthPx = max(-d, 0.0);
     float edgeT = clamp(1.0 - depthPx / bevelPx, 0.0, 1.0);
 
     float lensShape = pow(edgeT, EDGE_LENS_FALLOFF);
 
-    vec2 dispPx = disp * resolution * lensShape;
+    vec2 dispPx = disp * resolution * lensShape * lensScale;
     float dispLenPx = length(dispPx);
     vec2 dispDirPx = dispPx / max(dispLenPx, 1.0e-4);
     float lensReach = EDGE_LENS_REACH * lens_px_scale;
@@ -326,9 +331,8 @@ vec4 glass_shade(vec2 uv) {
     // the antialiased edge band and draws a dark ring at the boundary.
 
     // Inner shadow: dark band just inside the edge, 1 at d = 0 fading to 0 at
-    // ao_radius px inward.
+    // ao_radius px inward. Applied below, where the rim light is known.
     float aoMask = 1.0 - smoothstep(0.0, max(ao_radius, 0.001), -d);
-    baseColor *= (1.0 - aoMask * ao_intensity);
 
     vec3 lightDir = normalize(vec3(cos(lightAngleRad), sin(lightAngleRad), 0.38));
     vec3 viewDir = vec3(0.0, 0.0, 1.0);
@@ -344,6 +348,15 @@ vec4 glass_shade(vec2 uv) {
     float rimDot = 1.0 - max(dot(normal, viewDir), 0.0);
     float rimFresnel = pow(max(rimDot, 0.0), max(rim_power, 0.001));
     float lightMask = pow(abs(dot(normal, lightDir)), max(rim_directional_power, 1.0));
+
+    // The inner shadow falls where the rim light does not. On macOS 27 the
+    // outermost ring of the glass is bright where the edge faces the light
+    // axis and dark (about 0.4x the backdrop) where it runs along it, and
+    // neither shows where the other does (docs/memo.md 追記16). With the
+    // surface light off (application windows) there is no rim light to make
+    // room for, and the shadow runs all round as before.
+    float aoLight = mix(1.0, 1.0 - lightMask, surface_light_enabled);
+    baseColor *= (1.0 - aoMask * ao_intensity * aoLight);
 
     // Fresnel mixed with the band keeps the light strictly on the bevel.
     float rimShape = mix(pow(edgeBand, 0.85), rimFresnel, 0.55) * edgeBand;

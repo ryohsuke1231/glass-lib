@@ -11,66 +11,79 @@
     "value, then the context's, then the material's, then the default); tint = its colour (rgb)."
   ],
   "params": [
-    { "key": "max-z",                     "uniform": "max_z",                     "default": 25.0, "min": 0.0, "max": 100.0, "px": true,  "extension_key": "glass-max-z" },
-    { "key": "displacement-scale",        "uniform": "displacement_scale",        "default": 78.5, "min": 0.0, "max": 200.0, "px": true,  "extension_key": "glass-displacement-scale" },
-    { "key": "edge-smoothing",            "uniform": "edge_smoothing",            "default": 2.0,  "min": 0.0, "max": 10.0,  "px": true,  "extension_key": "glass-edge-smoothing" },
-    { "key": "profile-shape-n",           "uniform": "profile_shape_n",           "default": 7.0,  "min": 1.0, "max": 20.0,  "px": false, "extension_key": "glass-profile-shape-n" },
+    { "key": "max-z",                     "uniform": "max_z",                     "default": 88.0, "min": 0.0, "max": 100.0, "px": true,  "extension_key": "glass-max-z" },
+    { "key": "displacement-scale",        "uniform": "displacement_scale",        "default": 10.5, "min": 0.0, "max": 200.0, "px": true,  "extension_key": "glass-displacement-scale" },
+    { "key": "edge-smoothing",            "uniform": "edge_smoothing",            "default": 0.5,  "min": 0.0, "max": 10.0,  "px": true,  "extension_key": "glass-edge-smoothing" },
+    { "key": "profile-shape-n",           "uniform": "profile_shape_n",           "default": 3.6,  "min": 1.0, "max": 20.0,  "px": false, "extension_key": "glass-profile-shape-n" },
     { "key": "ior",                       "uniform": "ior",                       "default": 2.4,  "min": 1.0, "max": 4.0,   "px": false, "extension_key": "glass-ior" },
-    { "key": "chroma-strength",           "uniform": "chroma_strength",           "default": 1.5,  "min": 0.0, "max": 5.0,   "px": true,  "extension_key": "glass-chroma-strength" },
+    { "key": "chroma-strength",           "uniform": "chroma_strength",           "default": 0.0,  "min": 0.0, "max": 5.0,   "px": true,  "extension_key": "glass-chroma-strength" },
     { "key": "specular-intensity",        "uniform": "specular_intensity",        "default": 0.0,  "min": 0.0, "max": 5.0,   "px": false, "extension_key": "glass-specular-intensity" },
     { "key": "shininess",                 "uniform": "shininess",                 "default": 42.0, "min": 1.0, "max": 200.0, "px": false, "extension_key": "glass-shininess" },
-    { "key": "rim-width",                 "uniform": "rim_width",                 "default": 5.0,  "min": 0.0, "max": 20.0,  "px": true,  "extension_key": "glass-rim-width" },
-    { "key": "rim-intensity",             "uniform": "rim_intensity",             "default": 0.6,  "min": 0.0, "max": 5.0,   "px": false, "extension_key": "glass-rim-intensity" },
-    { "key": "rim-directional-power",     "uniform": "rim_directional_power",     "default": 2.7,  "min": 0.0, "max": 10.0,  "px": false, "extension_key": "glass-rim-directional-power" },
-    { "key": "rim-power",                 "uniform": "rim_power",                 "default": 6.0,  "min": 0.0, "max": 20.0,  "px": false, "extension_key": "glass-rim-power" },
-    { "key": "rim-light-color-intensity", "uniform": "rim_light_color_intensity", "default": 1.4,  "min": 0.0, "max": 5.0,   "px": false, "extension_key": "glass-rim-light-color-intensity" },
-    { "key": "sheen-intensity",           "uniform": "sheen_intensity",           "default": 0.32, "min": 0.0, "max": 2.0,   "px": false, "extension_key": "glass-sheen-intensity" },
-    { "key": "light-angle-deg",           "uniform": "light_angle_deg",           "default": 50.0, "min": 0.0, "max": 360.0, "px": false, "extension_key": "glass-light-angle-deg" },
-    { "key": "shadow-radius",             "uniform": "shadow_radius",             "default": 30.0, "min": 0.0, "max": 100.0, "px": true,  "extension_key": "shadow-radius" },
-    { "key": "shadow-intensity",          "uniform": "shadow_intensity",          "default": 0.55, "min": 0.0, "max": 1.0,   "px": false, "extension_key": "shadow-intensity" },
-    { "key": "ao-intensity",              "uniform": "ao_intensity",              "default": 0.25, "min": 0.0, "max": 1.0,   "px": false, "extension_key": "glass-ao-intensity" },
-    { "key": "ao-radius",                 "uniform": "ao_radius",                 "default": 7.5,  "min": 0.0, "max": 50.0,  "px": true,  "extension_key": "glass-ao-radius" },
-    { "key": "blur-radius",               "uniform": null,                        "default": 5.0,  "min": 0.0, "max": 30.0,  "px": true,  "extension_key": "dock-blur-radius" },
+    { "key": "rim-width",                 "uniform": "rim_width",                 "default": 2.3,  "min": 0.0, "max": 20.0,  "px": true,  "extension_key": "glass-rim-width" },
+    { "key": "rim-intensity",             "uniform": "rim_intensity",             "default": 0.5,  "min": 0.0, "max": 5.0,   "px": false, "extension_key": "glass-rim-intensity" },
+    { "key": "rim-directional-power",     "uniform": "rim_directional_power",     "default": 1.9,  "min": 0.0, "max": 10.0,  "px": false, "extension_key": "glass-rim-directional-power" },
+    { "key": "rim-power",                 "uniform": "rim_power",                 "default": 3.0,  "min": 0.0, "max": 20.0,  "px": false, "extension_key": "glass-rim-power" },
+    { "key": "rim-light-color-intensity", "uniform": "rim_light_color_intensity", "default": 1.0,  "min": 0.0, "max": 5.0,   "px": false, "extension_key": "glass-rim-light-color-intensity" },
+    { "key": "sheen-intensity",           "uniform": "sheen_intensity",           "default": 0.0,  "min": 0.0, "max": 2.0,   "px": false, "extension_key": "glass-sheen-intensity" },
+    { "key": "light-angle-deg",           "uniform": "light_angle_deg",           "default": 90.0, "min": 0.0, "max": 360.0, "px": false, "extension_key": "glass-light-angle-deg" },
+    { "key": "shadow-radius",             "uniform": "shadow_radius",             "default": 50.0, "min": 0.0, "max": 100.0, "px": true,  "extension_key": "shadow-radius" },
+    { "key": "shadow-intensity",          "uniform": "shadow_intensity",          "default": 0.22, "min": 0.0, "max": 1.0,   "px": false, "extension_key": "shadow-intensity" },
+    { "key": "ao-intensity",              "uniform": "ao_intensity",              "default": 0.65, "min": 0.0, "max": 1.0,   "px": false, "extension_key": "glass-ao-intensity" },
+    { "key": "ao-radius",                 "uniform": "ao_radius",                 "default": 1.0,  "min": 0.0, "max": 50.0,  "px": true,  "extension_key": "glass-ao-radius" },
+    { "key": "blur-radius",               "uniform": null,                        "default": 2.0,  "min": 0.0, "max": 30.0,  "px": true,  "extension_key": "dock-blur-radius" },
     { "key": "tint-strength",             "uniform": null,                        "default": 0.12, "min": 0.0, "max": 1.0,   "px": false, "extension_key": "dock-tint-strength" },
     { "key": "blur-downscale",            "uniform": null,                        "default": 2.0,  "min": 1.0, "max": 4.0,   "px": false, "extension_key": "glass-blur-downscale", "values": [1.0, 2.0, 4.0] }
   ],
   "edge_presets": {
-    "_comment": "The in-app edge values the user chose in S1 (crisp-soft, 2026-09-25; docs/memo.md 追記5); later changed by the user: max-z 14 -> 50 (2026-09-26) -> 35, profile-shape-n 7 -> 2.4 and rim-directional-power 1.6 (2026-09-26, tuned in the Lab).",
-    "crisp-soft": {
-      "edge-smoothing": 0.75, "rim-width": 2.0, "rim-power": 9.0, "ao-radius": 3.0, "ao-intensity": 0.10,
-      "chroma-strength": 0.8, "profile-shape-n": 2.4, "max-z": 35.0, "displacement-scale": 45.0,
-      "rim-directional-power": 1.6
+    "_comment": [
+      "The lens and the edge, measured on macOS 27 (5K screenshots; docs/memo.md 追記16). The lens is fitted",
+      "to the displacement Apple's glass shows at each depth under the edge (rms 0.24-0.31 pt), inside the",
+      "bevel of EDGE_LENS_BAND (22 px); the rim, the inner shadow and the outline to the pixels at the edge.",
+      "apple-s: the Dock and the music mini player (a thin lens, 20 pt at the rim, gone by 12 pt);",
+      "apple-l: the round video button and the desktop widgets (a thick one, 40 pt at the rim, gone by 20 pt).",
+      "They replace crisp-soft (the user's S1 choice, 2026-09-25/26: edge-smoothing 0.75, rim-width 2,",
+      "rim-power 9, ao 3 px / 0.10, chroma 0.8, profile 2.4, max-z 35, displacement 45, rim direction 1.6, sheen 0.08)."
+    ],
+    "apple-s": {
+      "edge-smoothing": 0.4, "rim-width": 2.3, "rim-power": 3.0, "rim-intensity": 0.5, "rim-directional-power": 1.9,
+      "ao-radius": 0.6, "ao-intensity": 0.65, "chroma-strength": 0.0, "sheen-intensity": 0.0,
+      "profile-shape-n": 3.6, "max-z": 88.0, "displacement-scale": 10.5
+    },
+    "apple-l": {
+      "edge-smoothing": 0.4, "rim-width": 2.3, "rim-power": 3.0, "rim-intensity": 0.5, "rim-directional-power": 1.9,
+      "ao-radius": 0.6, "ao-intensity": 0.65, "chroma-strength": 0.0, "sheen-intensity": 0.0,
+      "profile-shape-n": 1.35, "max-z": 100.0, "displacement-scale": 26.0
     }
   },
   "materials": [
     {
       "name": "regular",
-      "edge": "crisp-soft",
-      "values": { "tint-strength": 0.12, "blur-radius": 2.0, "shadow-radius": 16.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
+      "edge": "apple-s",
+      "values": { "tint-strength": 0.12, "blur-radius": 2.0, "shadow-radius": 16.0, "shadow-intensity": 0.07 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": false,
       "adaptive": true
     },
     {
       "name": "clear",
-      "edge": "crisp-soft",
-      "values": { "tint-strength": 0.04, "blur-radius": 1.5, "blur-downscale": 1.0, "shadow-radius": 16.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
+      "edge": "apple-l",
+      "values": { "tint-strength": 0.04, "blur-radius": 1.5, "blur-downscale": 1.0, "shadow-radius": 16.0, "shadow-intensity": 0.07 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": false,
       "adaptive": true
     },
     {
       "name": "thick",
-      "edge": "crisp-soft",
-      "values": { "tint-strength": 0.55, "blur-radius": 12.0, "shadow-radius": 24.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
+      "edge": "apple-s",
+      "values": { "tint-strength": 0.55, "blur-radius": 12.0, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": true,
       "adaptive": false
     },
     {
       "name": "menu",
-      "edge": "crisp-soft",
-      "values": { "tint-strength": 0.45, "blur-radius": 8.0, "shadow-radius": 24.0, "shadow-intensity": 0.07, "sheen-intensity": 0.08 },
+      "edge": "apple-s",
+      "values": { "tint-strength": 0.45, "blur-radius": 8.0, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": true,
       "adaptive": false

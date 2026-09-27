@@ -33,15 +33,16 @@ test_defaults (void)
 {
   GlassContext *ctx = glass_context_get_default ();
 
-  g_assert_cmpfloat (glass_context_get_param (ctx, "max-z"), ==, 25.0);
-  g_assert_cmpfloat (glass_context_get_param (ctx, "displacement-scale"), ==, 78.5);
-  g_assert_cmpfloat (glass_context_get_param (ctx, "rim-width"), ==, 5.0);
-  g_assert_cmpfloat (glass_context_get_param (ctx, "shadow-intensity"), ==, 0.55);
+  g_assert_cmpfloat (glass_context_get_param (ctx, "max-z"), ==, 88.0);
+  g_assert_cmpfloat (glass_context_get_param (ctx, "displacement-scale"), ==, 10.5);
+  g_assert_cmpfloat (glass_context_get_param (ctx, "rim-width"), ==, 2.3);
+  g_assert_cmpfloat (glass_context_get_param (ctx, "shadow-intensity"), ==, 0.22);
+  g_assert_cmpfloat (glass_context_get_param (ctx, "light-angle-deg"), ==, 90.0);
   g_assert_true (isnan (glass_context_get_param (ctx, "no-such-key")));
 }
 
-/* Materials: the in-app values the user chose (crisp-soft, blur 2, and the
- * later max-z, profile, rim direction, sheen and shadow). */
+/* Materials: the edge measured on macOS 27 (apple-s; apple-l for CLEAR),
+ * with the blur, tint and shadow the user chose. */
 static void
 test_materials (void)
 {
@@ -50,14 +51,15 @@ test_materials (void)
 
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 2.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_PROFILE_SHAPE_N], ==, 2.4);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 35.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_RIM_DIRECTIONAL_POWER], ==, 1.6);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_PROFILE_SHAPE_N], ==, 3.6);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 88.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_RIM_DIRECTIONAL_POWER], ==, 1.9);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.12);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_SHEEN_INTENSITY], ==, 0.08);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_SHEEN_INTENSITY], ==, 0.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_SHADOW_INTENSITY], ==, 0.07);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_DISPLACEMENT_SCALE], ==, 45.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_RIM_WIDTH], ==, 2.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_DISPLACEMENT_SCALE], ==, 10.5);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_RIM_WIDTH], ==, 2.3);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_CHROMA_STRENGTH], ==, 0.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_SHADOW_RADIUS], ==, 16.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_IOR], ==, 2.4);               /* not a material key */
   g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_DOWNSCALE], ==, 2.0);
@@ -65,6 +67,8 @@ test_materials (void)
   glass_context_resolve (ctx, GLASS_MATERIAL_CLEAR, v);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_DOWNSCALE], ==, 1.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.04);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 100.0);           /* the thick lens */
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_DISPLACEMENT_SCALE], ==, 26.0);
 
   glass_context_resolve (ctx, GLASS_MATERIAL_THICK, v);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 12.0);
@@ -76,7 +80,7 @@ test_materials (void)
   g_assert_cmpint (GLASS_N_MATERIALS, ==, GLASS_MATERIAL_MENU + 1);
   glass_context_resolve (ctx, GLASS_MATERIAL_MENU, v);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 8.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 35.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 88.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.45);
   g_assert_true (glass_material_specs[GLASS_MATERIAL_MENU].tint_from_theme);
   g_assert_false (glass_material_specs[GLASS_MATERIAL_MENU].adaptive);
@@ -104,7 +108,7 @@ test_override (void)
   glass_context_reset_param (ctx, "max-z");
   g_assert_false (glass_context_is_param_set (ctx, "max-z"));
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 35.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 88.0);
 }
 
 /* The tint: the context's colour (else the material's, or the theme's for
