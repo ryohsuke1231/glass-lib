@@ -8,7 +8,7 @@ import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
-import { AnimationBar, bindInset, Canvas, PATTERNS, Pattern } from '../util.js';
+import { AnimationBar, bindInset, Canvas, openImage, PATTERNS, Pattern } from '../util.js';
 
 // Group headings for the parameter list, in spec/params.json order.
 const GROUPS: [string, string[]][] = [
@@ -224,6 +224,13 @@ export class LabPage {
         const hud = new Gtk.Label({ label: GLib.getenv('GLASS_DEBUG')?.includes('hud') ? 'HUD on' : 'GLASS_DEBUG=hud for timings',
             css_classes: ['dim-label', 'caption'] });
         this.header.set_title_widget(hud);
+        // Any image as the background: shown by the Photo pattern.
+        const openPhoto = new Gtk.Button({ icon_name: 'document-open-symbolic', tooltip_text: 'Open a photo' });
+        openPhoto.connect('clicked', () => openImage(this.toolbar, 2560, texture => {
+            this.canvas.setPhoto(texture);
+            background.set_active_name('photo');
+        }));
+        this.header.pack_start(openPhoto);
         this.toolbar.add_top_bar(this.header);
         bindInset(this.toolbar, 'top-bar-height', inspector, 'margin-top', 0);
 

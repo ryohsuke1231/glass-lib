@@ -6,7 +6,7 @@ import Adw from 'gi://Adw?version=1';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
-import { bindInset, Canvas, photos } from '../util.js';
+import { bindInset, Canvas, openImage, PhotoView, photos } from '../util.js';
 
 const PARAGRAPHS = [
     'Glass refracts what is under it: the edge of every pane bends the content as it scrolls past.',
@@ -27,6 +27,10 @@ export class TabsPage {
     private searchButton: Glass.Button;
     private search: Glass.SearchEntry;
     private reading: Gtk.ListBox;
+    private photosStack: Gtk.Stack;
+    private photo: InstanceType<typeof PhotoView>;
+    private photoScrolled: Gtk.ScrolledWindow;
+    private backToGrid: Gtk.Button;
     private query = '';
     private insets: Gtk.Widget[] = [];
 
@@ -43,8 +47,14 @@ export class TabsPage {
                 content_fit: Gtk.ContentFit.COVER, height_request: 170, width_request: 170,
                 css_classes: ['card'], overflow: Gtk.Overflow.HIDDEN }));
         this.insets.push(flow);
-        this.stack.add_titled_with_icon(new Gtk.ScrolledWindow({ child: flow, hscrollbar_policy: Gtk.PolicyType.NEVER }),
-            'photos', 'Photos', 'image-x-generic-symbolic');
+        // ... or one opened photo at the page's height, under the bars (as in Photos).
+        this.photo = new PhotoView();
+        this.photoScrolled = new Gtk.ScrolledWindow({ child: this.photo, hscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            vscrollbar_policy: Gtk.PolicyType.NEVER });
+        this.photosStack = new Gtk.Stack({ transition_type: Gtk.StackTransitionType.CROSSFADE });
+        this.photosStack.add_named(new Gtk.ScrolledWindow({ child: flow, hscrollbar_policy: Gtk.PolicyType.NEVER }), 'grid');
+        this.photosStack.add_named(this.photoScrolled, 'photo');
+        this.stack.add_titled_with_icon(this.photosStack, 'photos', 'Photos', 'image-x-generic-symbolic');
 
         // Reading: paragraphs the search filters.
         this.reading = new Gtk.ListBox({ selection_mode: Gtk.SelectionMode.NONE, css_classes: ['boxed-list'],
@@ -101,10 +111,32 @@ export class TabsPage {
         this.toolbar = new Glass.ToolbarView({ content: view });
         this.header = new Glass.HeaderBar();
         this.header.set_title_widget(new Gtk.Label({ label: 'Tabs', css_classes: ['heading'] }));
+        const openPhoto = new Gtk.Button({ icon_name: 'document-open-symbolic', tooltip_text: 'Open a photo' });
+        openPhoto.connect('clicked', () => this.openPhoto());
+        this.header.pack_start(openPhoto);
+        this.backToGrid = new Gtk.Button({ icon_name: 'view-grid-symbolic', tooltip_text: 'Back to the photos',
+            visible: false });
+        this.backToGrid.connect('clicked', () => {
+            this.photosStack.set_visible_child_name('grid');
+            this.backToGrid.set_visible(false);
+        });
+        this.header.pack_start(this.backToGrid);
         this.toolbar.add_top_bar(this.header);
         for (const widget of this.insets)
             bindInset(this.toolbar, 'top-bar-height', widget, 'margin-top', 8);
         this.search.set_key_capture_widget(this.toolbar);
+    }
+
+    // Any image file, alone in the Photos tab; the grid comes back with the
+    // button next to the open one.
+    private openPhoto() {
+        openImage(this.toolbar, 2560, texture => {
+            this.photo.setTexture(texture);
+            this.photoScrolled.get_hadjustment().set_value(0);
+            this.photosStack.set_visible_child_name('photo');
+            this.stack.set_visible_child_name('photos');
+            this.backToGrid.set_visible(true);
+        });
     }
 
     // The button's glass becomes the field's, and back.

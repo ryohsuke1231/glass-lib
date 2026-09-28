@@ -2,49 +2,10 @@
 // glass buttons (design.md §14). Shows refraction in the same frame as the
 // scrolling content, the scroll edge effect and the adaptive colours.
 
-import Gdk from 'gi://Gdk?version=4.0';
-import GObject from 'gi://GObject';
-import Graphene from 'gi://Graphene';
-import Gsk from 'gi://Gsk?version=4.0';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
-import { bindInset, openImage, photos } from '../util.js';
-
-// One photo at the full height it is given, as wide as that makes it (a
-// GtkPicture fits both ways). Width-for-height, so a horizontal scrolled
-// window measures it at the viewport's height and scrolls what is wider;
-// narrower photos are centred.
-const PhotoView = GObject.registerClass(class PhotoView extends Gtk.Widget {
-    private texture: Gdk.Texture | null = null;
-
-    setTexture(texture: Gdk.Texture) {
-        this.texture = texture;
-        this.queue_resize();
-    }
-
-    vfunc_get_request_mode(): Gtk.SizeRequestMode {
-        return Gtk.SizeRequestMode.WIDTH_FOR_HEIGHT;
-    }
-
-    vfunc_measure(orientation: Gtk.Orientation, forSize: number): [number, number, number, number] {
-        if (orientation === Gtk.Orientation.HORIZONTAL && this.texture && forSize > 0) {
-            const width = Math.ceil(forSize * this.texture.get_width() / this.texture.get_height());
-            return [width, width, -1, -1];
-        }
-        return [0, 0, -1, -1];
-    }
-
-    vfunc_snapshot(snapshot: Gtk.Snapshot) {
-        const h = this.get_height();
-        if (!this.texture || h <= 0)
-            return;
-        const w = h * this.texture.get_width() / this.texture.get_height();
-        const x = Math.max(0, (this.get_width() - w) / 2);
-        snapshot.append_scaled_texture(this.texture, Gsk.ScalingFilter.TRILINEAR,
-            new Graphene.Rect().init(x, 0, w, h));
-    }
-});
+import { bindInset, openImage, PhotoView, photos } from '../util.js';
 
 export class PhotosPage {
     readonly toolbar: Glass.ToolbarView;

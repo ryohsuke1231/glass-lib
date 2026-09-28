@@ -10,7 +10,7 @@ import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk?version=4.0';
 import Glass from 'gi://Glass?version=1';
 
-import { AnimationBar, bindInset, Canvas, PATTERNS, Pattern } from '../util.js';
+import { AnimationBar, bindInset, Canvas, openImage, PATTERNS, Pattern } from '../util.js';
 
 function row(title: string, control: Gtk.Widget): Gtk.Box {
     const box = new Gtk.Box({ spacing: 12 });
@@ -103,6 +103,13 @@ export class ControlsPage {
             this.canvas.setPattern(background.get_active_name() as Pattern));
         this.header.set_title_widget(background);
         this.background = background;
+        // Any image as the background: shown by the Photo pattern.
+        const openPhoto = new Gtk.Button({ icon_name: 'document-open-symbolic', tooltip_text: 'Open a photo' });
+        openPhoto.connect('clicked', () => openImage(this.toolbar, 2560, texture => {
+            this.canvas.setPhoto(texture);
+            background.set_active_name('photo');
+        }));
+        this.header.pack_start(openPhoto);
 
         // A glass menu: its actions pick the background too.
         const actions = new Gio.SimpleActionGroup();
