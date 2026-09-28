@@ -34,14 +34,19 @@ scrolls under them — in the same frame, on any compositor.
   `GlassMenuButton` / `GlassPopover` and `GlassDialog`.
 - **Glass that behaves like liquid**: panels in a `GlassGroup` flow together
   like drops of water, glass morphs from one shape into another
-  (`morph-id`), glass over glass refracts in layers, and presses make the
-  glass swell. The plate of a toggle group can be dragged from one toggle to
-  another, and it stretches like jelly as it goes.
+  (`morph-id`), leaving a drop behind as it goes, glass appears and
+  dissolves like SwiftUI's *materialize*, glass over glass refracts in
+  layers, and presses make the glass swell. Moving glass hangs on springs
+  and stretches like jelly: the plate of a toggle group (which can be
+  dragged, and magnifies what is under it), the knobs of switches and
+  sliders, and menus, which grow out of their button.
 - **Readable text**: the text and icons on the glass turn dark or light with
   what is under them.
 - **The optics of the [Liquid Glass GNOME Shell extension](https://github.com/ryohsuke1231/liquid-glass)**
-  (refraction, rim light, shadow), matched to measurements of macOS's glass
-  and tuned for small in-app glass — and tunable: materials (regular, thick,
+  (refraction, shadow), with the lens matched to measurements of macOS's
+  glass, and the frosted body and hairline edge of iOS 27's glass as
+  [liquid_glass_widgets](https://github.com/sdegenaar/liquid_glass_widgets)
+  measured them, for the light and the dark appearance — and tunable: materials (regular, thick,
   clear, menu, and a tinted, frosted *prominent* one for the button that
   confirms), a thin or thick lens, and every parameter and the tint for the
   whole app or for one panel.

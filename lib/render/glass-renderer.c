@@ -8,7 +8,9 @@
  *     download  GdkTextureDownloader            (no public zero-copy path);
  *               the adaptive statistics are taken from these pixels
  *     upload    glTexSubImage2D into our own GL context
- *     blur      the extension's Gaussian, H then V (separate targets: a DAG)
+ *     blur      the extension's Gaussian, H then V (separate targets: a DAG);
+ *               iOS 27's body also blurs a frost's cloud from the same
+ *               capture, and either may weigh the texels by their luma first
  *   per panel:
  *     glass     the shader core (shaders/core) with 4x supersampling
  *     hand-off  GdkGLTextureBuilder -> the view appends the texture
@@ -41,9 +43,6 @@
  * this far inwards from the rim, which on a panel thinner than that lands
  * past its far side (docs/memo.md 地雷10). */
 #define LENS_REACH 96.0
-
-/* The saturation the backdrop is shown with (the shader's applySCB()). */
-#define GLASS_BACKDROP_SATURATION 1.5
 
 /* ── Output textures ───────────────────────────────────────────────────────
  * GTK holds the texture of the last frame (and possibly the one before)
@@ -80,7 +79,7 @@ typedef struct {
 /* A blur program and its uniforms' locations. */
 typedef struct {
   GLuint program;
-  GLint  src, inv_size, kernel_scale, uv_rect;
+  GLint  src, inv_size, kernel_scale, uv_rect, unweight;
 } BlurPass;
 
 typedef struct {
@@ -98,6 +97,8 @@ struct _GlassRenderer {
   GLuint            prog_glass;
   GLuint            prog_copy;       /* one texture, as is (compositing layers) */
   GLint             copy_src, copy_uv_rect;
+  GLuint            prog_weight;     /* texels weighted by their luma, the weight in alpha */
+  GLint             weight_src, weight_uv_rect, weight_white;
   /* The glass program's uniforms, by the address of their (static) names:
    * a pass sets some 70, and hashing each string every time added up. */
   GHashTable       *uniforms;        /* static name -> location + 1 */
@@ -113,8 +114,12 @@ struct _GlassCapture {
   GLuint          capture_tex, capture_fbo;
   GLuint          blur_h_tex, blur_h_fbo;
   GLuint          blur_v_tex, blur_v_fbo;
+  GLuint          weight_tex, weight_fbo;   /* made when a blur is weighted */
+  GLuint          frost_tex, frost_fbo;     /* made when there is a frost */
   int             tex_w, tex_h;
+  int             weight_w, weight_h, frost_w, frost_h;
   GLuint          backdrop_tex;      /* what the passes sample */
+  GLuint          frost_src;         /* the frost's cloud, or 0 */
   guint8         *pixels;            /* the last download, for the adaptive colours */
   gsize           pixels_size;
   gboolean        fresh;             /* captured anew by the last call */
@@ -126,7 +131,7 @@ struct _GlassCapture {
   guint           key_extra;
   graphene_rect_t rect;              /* C, snapped to the capture's pixels */
   double          capture_scale;
-  double          blur_radius;
+  GlassBlurSpec   blur;
   int             downscale;
   guint           gen;               /* bumped on every new capture */
   guint64         compose_key;       /* glass_renderer_compose(): what it was made of */
@@ -140,6 +145,7 @@ typedef struct {
   double          corner_radii[4];
   double          params[GLASS_N_PARAMS];
   float           tint[4];
+  GlassSurfaceTerms surface;
   gboolean        has_shadow;
   gconstpointer   capture;
   guint           capture_gen;
@@ -463,15 +469,17 @@ glass_capture_new (void)
 void
 glass_capture_release_gl (GlassCapture *cap)
 {
-  GLuint textures[3] = { cap->capture_tex, cap->blur_h_tex, cap->blur_v_tex };
-  GLuint fbos[3] = { cap->capture_fbo, cap->blur_h_fbo, cap->blur_v_fbo };
+  GLuint textures[5] = { cap->capture_tex, cap->blur_h_tex, cap->blur_v_tex, cap->weight_tex, cap->frost_tex };
+  GLuint fbos[5] = { cap->capture_fbo, cap->blur_h_fbo, cap->blur_v_fbo, cap->weight_fbo, cap->frost_fbo };
 
-  glDeleteTextures (3, textures);
-  glDeleteFramebuffers (3, fbos);
-  cap->capture_tex = cap->blur_h_tex = cap->blur_v_tex = 0;
-  cap->capture_fbo = cap->blur_h_fbo = cap->blur_v_fbo = 0;
-  cap->backdrop_tex = 0;
+  /* Deleting 0 is a no-op. */
+  glDeleteTextures (5, textures);
+  glDeleteFramebuffers (5, fbos);
+  cap->capture_tex = cap->blur_h_tex = cap->blur_v_tex = cap->weight_tex = cap->frost_tex = 0;
+  cap->capture_fbo = cap->blur_h_fbo = cap->blur_v_fbo = cap->weight_fbo = cap->frost_fbo = 0;
+  cap->backdrop_tex = cap->frost_src = 0;
   cap->tex_w = cap->tex_h = 0;
+  cap->weight_w = cap->weight_h = cap->frost_w = cap->frost_h = 0;
   cap->valid = FALSE;
   g_clear_pointer (&cap->key_leaf, gsk_render_node_unref);
 }
@@ -590,6 +598,34 @@ renderer_new (GtkNative *native)
       }
   }
 
+  {
+    /* The luma weights of a weighted blur (iOS 27's frost and the copy under
+     * it): white counts `white` times as much as black. RGBA8 cannot hold a
+     * weight above 1, so they are scaled to at most 1; only their ratios
+     * matter, the blur's last pass divides them out again. The captures are
+     * opaque (the view paints its backdrop colour under the content). */
+    static const char weight_src[] =
+      "uniform sampler2D u_src;\n"
+      "uniform float white;\n"
+      "in vec4 v_tex_coord;\n"
+      "out vec4 frag_color;\n"
+      "void main() {\n"
+      "  vec4 c = texture(u_src, v_tex_coord.st);\n"
+      "  vec3 rgb = c.a > 0.001 ? c.rgb / c.a : c.rgb;\n"
+      "  float w = (1.0 + (white - 1.0) * dot(rgb, vec3(0.2126, 0.7152, 0.0722))) / max(white, 1.0);\n"
+      "  frag_color = vec4(c.rgb * w, w);\n"
+      "}\n";
+    const char *weight_parts[] = { weight_src, NULL };
+
+    self->prog_weight = glass_gl_program_new (es, self->vertex_source, weight_parts, NULL);
+    if (self->prog_weight)
+      {
+        self->weight_src = glGetUniformLocation (self->prog_weight, "u_src");
+        self->weight_uv_rect = glGetUniformLocation (self->prog_weight, "u_uv_rect");
+        self->weight_white = glGetUniformLocation (self->prog_weight, "white");
+      }
+  }
+
   glGenVertexArrays (1, &self->vao);
   self->uniforms = g_hash_table_new (g_direct_hash, g_direct_equal);
   self->blur_programs = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, blur_programs_free);
@@ -616,6 +652,8 @@ renderer_destroy (GlassRenderer *self)
     glDeleteProgram (self->prog_glass);
   if (self->prog_copy)
     glDeleteProgram (self->prog_copy);
+  if (self->prog_weight)
+    glDeleteProgram (self->prog_weight);
   if (self->vao)
     glDeleteVertexArrays (1, &self->vao);
   g_hash_table_destroy (self->uniforms);
@@ -718,6 +756,7 @@ blur_pass_locate (BlurPass *pass)
   pass->inv_size = glGetUniformLocation (pass->program, "inv_size");
   pass->kernel_scale = glGetUniformLocation (pass->program, "kernel_scale");
   pass->uv_rect = glGetUniformLocation (pass->program, "u_uv_rect");
+  pass->unweight = glGetUniformLocation (pass->program, "unweight");
 }
 
 /* Our context must be current. The weights are baked into the program, so
@@ -805,7 +844,7 @@ glass_unwrap_node (GskRenderNode *node, float *dx, float *dy)
 
 static void
 run_blur_pass (GlassRenderer *self, const BlurPass *pass, double kernel_scale,
-               GLuint src, GLuint dst_fbo, int w, int h)
+               GLuint src, GLuint dst_fbo, int w, int h, gboolean unweight)
 {
   glBindFramebuffer (GL_FRAMEBUFFER, dst_fbo);
   glViewport (0, 0, w, h);
@@ -816,16 +855,17 @@ run_blur_pass (GlassRenderer *self, const BlurPass *pass, double kernel_scale,
   glUniform2f (pass->inv_size, 1.0f / w, 1.0f / h);
   glUniform1f (pass->kernel_scale, (float) kernel_scale);
   glUniform4f (pass->uv_rect, 0.0f, 0.0f, 1.0f, 1.0f);
+  glUniform1f (pass->unweight, unweight ? 1.0f : 0.0f);
   glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
 }
 
 gboolean
 glass_capture_rect_for_panel (const graphene_rect_t *panel,
-                              double                 blur_radius,
+                              double                 blur_reach,
                               const graphene_rect_t *view_rect,
                               graphene_rect_t       *out)
 {
-  double blur_margin = ceil (3.0 * blur_radius) + 2.0;
+  double blur_margin = ceil (3.0 * blur_reach) + 2.0;
   double lens_room = MAX (0.0, LENS_REACH - MIN (panel->size.width, panel->size.height));
 
   *out = *panel;
@@ -880,51 +920,102 @@ ensure_textures (GlassCapture *cap, int w, int h)
   cap->tex_h = h;
 }
 
-/* Blurs capture_tex into backdrop_tex. Our context must be current. */
 static void
-blur (GlassRenderer *self,
-      GlassCapture  *cap,
-      int            w,
-      int            h,
-      double         blur_radius_px,
-      int            downscale)
+ensure_texture (GLuint *tex, GLuint *fbo, int *tw, int *th, int w, int h)
+{
+  if (*tw == w && *th == h)
+    return;
+  alloc_texture (tex, w, h);
+  attach_fbo (fbo, *tex);
+  *tw = w;
+  *th = h;
+}
+
+/* One Gaussian of capture_tex into dst, its texels weighed by their luma
+ * first unless @white is 1 (blur_h_tex in between). Returns what to sample:
+ * dst, or capture_tex itself when there is nothing to blur. */
+static GLuint
+blur_one (GlassRenderer *self,
+          GlassCapture  *cap,
+          int            w,
+          int            h,
+          double         radius_px,
+          double         white,
+          int            downscale,
+          GLuint         dst_tex,
+          GLuint         dst_fbo)
 {
   GlassGaussKernel kernel;
+  BlurPrograms *bp;
+  gboolean weighted = fabs (white - 1.0) > 1.0e-6 && self->prog_weight != 0;
+  GLuint src = cap->capture_tex;
 
-  gpu_begin ("blur", w, h);
-  cap->backdrop_tex = cap->capture_tex;
-  if (glass_gauss_kernel_for_radius (blur_radius_px, downscale, &kernel))
+  if (!glass_gauss_kernel_for_radius (radius_px, downscale, &kernel) ||
+      (bp = blur_programs (self, &kernel)) == NULL)
+    return cap->capture_tex;
+
+  if (weighted)
     {
-      BlurPrograms *bp = blur_programs (self, &kernel);
-
-      if (bp)
-        {
-          glBindVertexArray (self->vao);
-          glDisable (GL_BLEND);
-          run_blur_pass (self, &bp->h, kernel.scale, cap->capture_tex, cap->blur_h_fbo, w, h);
-          run_blur_pass (self, &bp->v, kernel.scale, cap->blur_h_tex, cap->blur_v_fbo, w, h);
-          glBindFramebuffer (GL_FRAMEBUFFER, 0);
-          cap->backdrop_tex = cap->blur_v_tex;
-        }
+      ensure_texture (&cap->weight_tex, &cap->weight_fbo, &cap->weight_w, &cap->weight_h, w, h);
+      glBindFramebuffer (GL_FRAMEBUFFER, cap->weight_fbo);
+      glViewport (0, 0, w, h);
+      glUseProgram (self->prog_weight);
+      glActiveTexture (GL_TEXTURE0);
+      glBindTexture (GL_TEXTURE_2D, cap->capture_tex);
+      glUniform1i (self->weight_src, 0);
+      glUniform4f (self->weight_uv_rect, 0.0f, 0.0f, 1.0f, 1.0f);
+      glUniform1f (self->weight_white, (float) white);
+      glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
+      src = cap->weight_tex;
     }
+  run_blur_pass (self, &bp->h, kernel.scale, src, cap->blur_h_fbo, w, h, FALSE);
+  run_blur_pass (self, &bp->v, kernel.scale, cap->blur_h_tex, dst_fbo, w, h, weighted);
+  return dst_tex;
+}
+
+/* Blurs capture_tex into backdrop_tex, and the frost's cloud into frost_src
+ * (iOS 27's body). Our context must be current. */
+static void
+blur (GlassRenderer       *self,
+      GlassCapture        *cap,
+      int                  w,
+      int                  h,
+      const GlassBlurSpec *spec,
+      double               scale,
+      int                  downscale)
+{
+  gpu_begin ("blur", w, h);
+  glBindVertexArray (self->vao);
+  glDisable (GL_BLEND);
+  cap->backdrop_tex = blur_one (self, cap, w, h, spec->radius * scale, spec->weight, downscale,
+                                cap->blur_v_tex, cap->blur_v_fbo);
+  cap->frost_src = 0;
+  if (spec->frost > 0.0)
+    {
+      ensure_texture (&cap->frost_tex, &cap->frost_fbo, &cap->frost_w, &cap->frost_h, w, h);
+      cap->frost_src = blur_one (self, cap, w, h, spec->frost * scale, spec->frost_weight, downscale,
+                                 cap->frost_tex, cap->frost_fbo);
+    }
+  glBindFramebuffer (GL_FRAMEBUFFER, 0);
   gpu_end ();
 }
 
 /* Uploads cap->pixels and blurs them. Our context must be current. */
 static void
-upload_and_blur (GlassRenderer *self,
-                 GlassCapture  *cap,
-                 int            w,
-                 int            h,
-                 double         blur_radius_px,
-                 int            downscale)
+upload_and_blur (GlassRenderer       *self,
+                 GlassCapture        *cap,
+                 int                  w,
+                 int                  h,
+                 const GlassBlurSpec *spec,
+                 double               scale,
+                 int                  downscale)
 {
   ensure_textures (cap, w, h);
   glPixelStorei (GL_UNPACK_ALIGNMENT, 4);
   glPixelStorei (GL_UNPACK_ROW_LENGTH, 0);
   glBindTexture (GL_TEXTURE_2D, cap->capture_tex);
   glTexSubImage2D (GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, cap->pixels);
-  blur (self, cap, w, h, blur_radius_px, downscale);
+  blur (self, cap, w, h, spec, scale, downscale);
 }
 
 typedef struct {
@@ -979,7 +1070,7 @@ glass_renderer_capture_all (GlassRenderer             *self,
           req->key_extra == cap->key_extra &&
           graphene_rect_equal (&r.C, &cap->rect) &&
           r.capture_scale == cap->capture_scale &&
-          req->blur_radius == cap->blur_radius &&
+          glass_blur_spec_equal (&req->blur, &cap->blur) &&
           r.downscale == cap->downscale)
         {
           self->stats.capture_hits++;
@@ -1063,7 +1154,7 @@ glass_renderer_capture_all (GlassRenderer             *self,
       gboolean same = cap->valid && cap->tex_w == r->w && cap->tex_h == r->h &&
                       graphene_rect_equal (&r->C, &cap->rect) &&
                       r->capture_scale == cap->capture_scale &&
-                      req->blur_radius == cap->blur_radius && r->downscale == cap->downscale;
+                      glass_blur_spec_equal (&req->blur, &cap->blur) && r->downscale == cap->downscale;
 
       if (cap->pixels_size < size)
         {
@@ -1097,10 +1188,10 @@ glass_renderer_capture_all (GlassRenderer             *self,
           continue;
         }
 
-      upload_and_blur (self, cap, r->w, r->h, req->blur_radius * req->scale, r->downscale);
+      upload_and_blur (self, cap, r->w, r->h, &req->blur, req->scale, r->downscale);
       cap->rect = r->C;
       cap->capture_scale = r->capture_scale;
-      cap->blur_radius = req->blur_radius;
+      cap->blur = req->blur;
       cap->downscale = r->downscale;
       cap->valid = TRUE;
       cap->fresh = TRUE;
@@ -1189,7 +1280,7 @@ glass_renderer_compose (GlassRenderer          *self,
                         const graphene_rect_t  *rect,
                         double                  scale,
                         int                     downscale,
-                        double                  blur_radius,
+                        const GlassBlurSpec    *blur_spec,
                         const GlassLayerSource *sources,
                         guint                   n)
 {
@@ -1217,7 +1308,7 @@ glass_renderer_compose (GlassRenderer          *self,
 
   if (!(glass_get_debug_flags () & GLASS_DEBUG_NO_CACHE) && cap->valid &&
       cap->compose_key == key && graphene_rect_equal (&C, &cap->rect) &&
-      capture_scale == cap->capture_scale && blur_radius == cap->blur_radius &&
+      capture_scale == cap->capture_scale && glass_blur_spec_equal (blur_spec, &cap->blur) &&
       downscale == cap->downscale)
     {
       self->stats.compose_hits++;
@@ -1242,11 +1333,11 @@ glass_renderer_compose (GlassRenderer          *self,
   glDisable (GL_BLEND);
   glBindFramebuffer (GL_FRAMEBUFFER, 0);
 
-  blur (self, cap, w, h, blur_radius * scale, downscale);
+  blur (self, cap, w, h, blur_spec, scale, downscale);
 
   cap->rect = C;
   cap->capture_scale = capture_scale;
-  cap->blur_radius = blur_radius;
+  cap->blur = *blur_spec;
   cap->downscale = downscale;
   cap->compose_key = key;
   cap->valid = TRUE;
@@ -1273,7 +1364,7 @@ glass_capture_measure (GlassCapture          *cap,
                                  (panel->origin.x - cap->rect.origin.x) * s,
                                  (panel->origin.y - cap->rect.origin.y) * s,
                                  panel->size.width * s, panel->size.height * s,
-                                 MAX (2.0, cap->blur_radius * s), tint, out);
+                                 MAX (2.0, glass_blur_spec_reach (&cap->blur) * s), tint, out);
 }
 
 /* Fused shapes: the gap between two rounded rectangles, their inner boxes'
@@ -1348,6 +1439,9 @@ run_glass_pass (GlassRenderer            *self,
   glUseProgram (self->prog_glass);
   glBindVertexArray (self->vao);
 
+  glActiveTexture (GL_TEXTURE1);
+  glBindTexture (GL_TEXTURE_2D, cap->frost_src ? cap->frost_src : cap->backdrop_tex);
+  glUniform1i (uniform (self, "glass_frost"), 1);
   glActiveTexture (GL_TEXTURE0);
   glBindTexture (GL_TEXTURE_2D, cap->backdrop_tex);
   glUniform1i (uniform (self, "glass_backdrop"), 0);
@@ -1451,11 +1545,20 @@ run_glass_pass (GlassRenderer            *self,
   u1f (self, "tint_strength", key->tint[3]);
   u1f (self, "brightness", 1.0);
   u1f (self, "contrast", 1.0);
-  /* macOS 27 raises the saturation of what shows through its glass by 1.5
-   * to 1.9 on every surface measured (docs/memo.md 追記16); the extension's
-   * per-surface saturation defaults to 1.5 as well. Not a setting. */
-  u1f (self, "saturation", GLASS_BACKDROP_SATURATION);
+  /* The material's (spec/params.json "surfaces"): 1.5 unless iOS 27's body
+   * says otherwise. macOS 27 raises the saturation of what shows through its
+   * glass by 1.5 to 1.9 on every surface measured (docs/memo.md 追記16). */
+  u1f (self, "saturation", key->surface.saturation);
   u1f (self, "surface_light_enabled", 1.0);
+
+  /* iOS 27's body and outline (glass_material.glsl). No cloud, no frost. */
+  u1f (self, "glass_body_mode", key->surface.body);
+  u1f (self, "frost_opacity", cap->frost_src ? key->surface.frost_opacity : 0.0);
+  u1f (self, "frost_clamp", key->surface.frost_clamp);
+  u1f (self, "rim_shade", key->surface.rim_shade);
+  u1f (self, "rim_shade_ends", key->surface.rim_shade_ends);
+  u1f (self, "rim_light", key->surface.rim_light);
+  u1f (self, "edge_absorption", key->surface.edge_absorption);
 
   /* An unset uniform reads 0.0, which would switch these off. */
   u1f (self, "early_exit_enabled", 1.0);
@@ -1530,6 +1633,7 @@ glass_renderer_render_panel (GlassRenderer            *self,
     memcpy (key.corner_radii, req->corner_radii, sizeof key.corner_radii);
   memcpy (key.params, params, sizeof key.params);
   memcpy (key.tint, req->tint, sizeof key.tint);
+  key.surface = req->surface;
   key.has_shadow = req->has_shadow;
   key.capture = cap;
   key.capture_gen = cap->gen;

@@ -40,6 +40,45 @@ typedef struct {
   gint64 us_gl;
 } GlassRenderStats;
 
+/* How a capture is blurred (design.md §8.4, §10.3.2): the copy of the
+ * content the glass shows, and for iOS 27's body the frost's cloud, each a
+ * Gaussian whose texels are weighted by their luma (white counts `weight`
+ * times as much as black; 1 = a plain blur). */
+typedef struct {
+  double radius;                   /* logical px */
+  double weight;
+  double frost;                    /* the cloud's sigma, logical px; 0 = no frost */
+  double frost_weight;
+} GlassBlurSpec;
+
+/* How far a blur reaches, logical px (the capture's margin). */
+static inline double
+glass_blur_spec_reach (const GlassBlurSpec *blur)
+{
+  return blur->frost > blur->radius ? blur->frost : blur->radius;
+}
+
+static inline gboolean
+glass_blur_spec_equal (const GlassBlurSpec *a,
+                       const GlassBlurSpec *b)
+{
+  return a->radius == b->radius && a->weight == b->weight &&
+         a->frost == b->frost && a->frost_weight == b->frost_weight;
+}
+
+/* The iOS 27 terms of a glass pass (shaders/core/glass_material.glsl); all
+ * 0, with the saturation at 1.5, is the reference's look. */
+typedef struct {
+  float body;                      /* 1: iOS 27's body (frost, tint, saturation) */
+  float saturation;                /* of what shows through */
+  float frost_opacity;
+  float frost_clamp;
+  float rim_shade;
+  float rim_shade_ends;
+  float rim_light;
+  float edge_absorption;
+} GlassSurfaceTerms;
+
 typedef struct {
   GskRenderNode  *backdrop;        /* what the glass sees: colour + content + edge effects */
   GskRenderNode  *content_key;     /* unwrapped content node: "did the content change" */
@@ -47,7 +86,7 @@ typedef struct {
   guint           key_extra;       /* anything else backdrop depends on (edge effects, colour) */
   graphene_rect_t rect;            /* C, view coordinates, inside the view */
   double          scale;           /* surface scale */
-  double          blur_radius;     /* logical px */
+  GlassBlurSpec   blur;
   int             downscale;       /* 1, 2 or 4 */
 } GlassCaptureRequest;
 
@@ -65,6 +104,7 @@ typedef struct {
   double          corner_radii[4];
   const double   *params;          /* resolved, [GLASS_N_PARAMS] */
   float           tint[4];         /* rgb, strength */
+  GlassSurfaceTerms surface;
   gboolean        has_shadow;
   /* Fused shapes (GlassGroup): 0 = the one rounded rectangle `panel`. */
   guint           n_shapes;
@@ -89,9 +129,10 @@ const char       *glass_renderer_get_info      (GlassRenderer *self);
 GlassRenderStats *glass_renderer_get_stats     (GlassRenderer *self);
 
 /* The part of the backdrop a panel needs: P plus the blur's and the lens's
- * reach, inside the view. FALSE if none of it is. */
+ * reach (@blur_reach: glass_blur_spec_reach()), inside the view. FALSE if
+ * none of it is. */
 gboolean          glass_capture_rect_for_panel (const graphene_rect_t *panel,
-                                                double                 blur_radius,
+                                                double                 blur_reach,
                                                 const graphene_rect_t *view_rect,
                                                 graphene_rect_t       *out);
 
@@ -126,7 +167,7 @@ gboolean          glass_renderer_compose       (GlassRenderer          *self,
                                                 const graphene_rect_t  *rect,
                                                 double                  scale,
                                                 int                     downscale,
-                                                double                  blur_radius,
+                                                const GlassBlurSpec    *blur,
                                                 const GlassLayerSource *sources,
                                                 guint                   n);
 

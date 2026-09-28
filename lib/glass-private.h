@@ -5,6 +5,7 @@
 #pragma once
 
 #include "glass.h"
+#include "glass-jelly.h"
 #include "glass-params-table.h"
 #include "adaptive/glass-adaptive.h"
 #include "render/glass-renderer.h"
@@ -92,6 +93,21 @@ void     glass_context_resolve_tint  (GlassContext  *self,
                                       double         strength,
                                       const GdkRGBA *theme_bg,
                                       float          out[4]);
+/* AdwStyleManager:dark: the materials' values for the dark appearance. */
+gboolean glass_context_get_dark      (GlassContext *self);
+/* A material's body and outline in the current appearance (spec/params.json
+ * surfaces, outlines). @plain_body: the reference's body under its outline,
+ * for a part's own glass that is a lens rather than a pane (knobs, plates). */
+void     glass_context_resolve_surface (GlassContext     *self,
+                                        GlassMaterial     material,
+                                        gboolean          plain_body,
+                                        GlassSurfaceSpec *out);
+/* What a surface means for the capture's blur (with @params' blur-radius)
+ * and for the glass pass. Either may be NULL. */
+void     glass_surface_apply         (const GlassSurfaceSpec *surface,
+                                      const double           params[GLASS_N_PARAMS],
+                                      GlassBlurSpec         *blur,
+                                      GlassSurfaceTerms     *terms);
 /* GlassContext:reduce-transparency, applied to resolved @params and @tint:
  * no refraction, more blur, more tint. The same for every kind of glass. */
 void     glass_reduce_transparency   (double        params[GLASS_N_PARAMS],
@@ -167,9 +183,21 @@ void     glass_panel_set_param_default (GlassPanel  *self,
 void     glass_panel_resolve_params  (GlassPanel   *self,
                                       GlassContext *context,
                                       double        out[GLASS_N_PARAMS]);
+/* The material's body and outline for this panel (glass_context_resolve_surface()). */
+void     glass_panel_resolve_surface (GlassPanel       *self,
+                                      GlassContext     *context,
+                                      GlassSurfaceSpec *out);
+/* A part's own glass that is a lens rather than a pane (a switch's knob, a
+ * toggle group's plate): the reference's body, no frost, under the
+ * material's outline. */
+void     glass_panel_set_plain_body  (GlassPanel *self,
+                                      gboolean    plain);
 /* The press "bulge" (GlassPanel:interactive): the glass and the child grow
  * by this factor around the centre. */
 double   glass_panel_get_visual_scale (GlassPanel *self);
+/* How much of the child shows while the glass morphs or materializes
+ * (design.md §6.8), 0..1. */
+float    glass_panel_get_content_opacity (GlassPanel *self);
 /* Drives the press by hand (a toggle group's plate is under its buttons). */
 /* Whether any corner has a radius of its own (GlassPanel:top-left-radius...). */
 gboolean glass_panel_has_corner_radii (GlassPanel *self);
@@ -186,12 +214,37 @@ gboolean glass_panel_get_morph      (GlassPanel            *self,
                                      const graphene_rect_t *target,
                                      graphene_rect_t       *rect,
                                      double                 corners[4]);
-/* A hidden panel that is still drawn, shrinking into its neighbour: TRUE
- * with its glass this frame, in @view's coordinates. */
+/* A morph-id swap: the partner's glass, left behind as a drop that shrinks
+ * away while ours travels (TRUE while there is one), to be fused with ours
+ * over glass_panel_get_anchor_merge() px. */
+gboolean glass_panel_get_morph_anchor (GlassPanel      *self,
+                                       graphene_rect_t *rect,
+                                       double          *radius);
+double   glass_panel_get_anchor_merge (GlassPanel      *self);
+/* A knob's glass hangs from its place on springs (the jelly, design.md
+ * §6.9): it stretches as the knob travels and runs on a little when it
+ * stops. The view passes the panel's place and draws the glass at what
+ * comes back. */
+void     glass_panel_set_follows     (GlassPanel      *self,
+                                      gboolean         follows);
+void     glass_panel_follow          (GlassPanel      *self,
+                                      graphene_rect_t *rect);
+/* Materializing (design.md §6.8): how much of the glass there is (0..1:
+ * the lens, tint, frost, outline and shadow scale with it, and the glass
+ * fades with it), and how much larger than the panel it is drawn. */
+double   glass_panel_get_visibility (GlassPanel            *self,
+                                     double                *grow);
+/* A hidden panel that is still drawn, shrinking into its neighbour or
+ * dissolving where it was: TRUE with its glass this frame, in @view's
+ * coordinates, and glass_panel_get_ghost_visibility() of it. */
 gboolean glass_panel_get_ghost      (GlassPanel            *self,
                                      GlassView             *view,
                                      graphene_rect_t       *rect,
                                      double                 corners[4]);
+double   glass_panel_get_ghost_visibility (GlassPanel       *self);
+/* Whether @self has been drawn since it was last mapped: a panel mapped
+ * before that came on screen with the view, and does not materialize. */
+gboolean glass_view_has_drawn_since_map (GlassView *self);
 /* What the view drew for the panel this frame (morphs start from it). */
 void     glass_panel_set_drawn      (GlassPanel            *self,
                                      const graphene_rect_t *rect,
@@ -243,7 +296,34 @@ gboolean         glass_standalone_draw     (GlassStandalone       *self,
                                             GlassMaterial          material,
                                             const GdkRGBA         *theme_bg,
                                             gboolean               shadow);
+/* The same with a drop fused to it (@drop NULL: none), over @merge px: a
+ * menu coming out of its button (design.md §6.8). */
+gboolean         glass_standalone_draw_drop (GlassStandalone       *self,
+                                             GtkWidget             *widget,
+                                             GtkSnapshot           *snapshot,
+                                             GskRenderNode         *backdrop,
+                                             const graphene_rect_t *rect,
+                                             const double           radii[4],
+                                             const graphene_rect_t *drop,
+                                             double                 drop_radius,
+                                             double                 merge,
+                                             GlassMaterial          material,
+                                             const GdkRGBA         *theme_bg,
+                                             gboolean               shadow);
 GskRenderNode   *glass_standalone_backdrop (GtkWidget              *source,
                                             const graphene_point_t *offset);
+
+/* ── Menus that come out of their button (design.md §6.8) ── */
+/* Where the popover's glass comes out of and goes back into: a rectangle
+ * in the root's coordinates (the button, a pill of @radius), or NULL. The
+ * popover's surface must reach it (glass_popover_set_reach()). */
+void             glass_popover_set_origin  (GlassPopover          *self,
+                                            const graphene_rect_t *rect,
+                                            double                 radius);
+/* Room above the contents, px: the surface reaches back over the button. */
+void             glass_popover_set_reach   (GlassPopover          *self,
+                                            int                    reach);
+/* Closes the popover, pouring its glass back into its origin first. */
+void             glass_popover_dismiss     (GlassPopover          *self);
 
 G_END_DECLS

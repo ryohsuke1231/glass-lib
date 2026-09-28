@@ -87,14 +87,27 @@ typedef struct {
   double              drawn_radius;
   gint64              hidden_at;        /* µs, the last unmap */
   gint64              taken_at;         /* µs, when a partner took our glass */
-  /* Appearing: from morph_from to where the panel is. */
-  AdwAnimation       *morph_anim;
-  double              morph_t;          /* 0..1, with overshoot */
+  /* Appearing: from morph_from to where the panel is, on the jelly's
+   * springs (glass-jelly.c); morph_t is how far it has come. A morph-id
+   * swap leaves the partner's glass behind as a drop that shrinks away
+   * (anchor), joined to ours while they part. */
+  GlassJelly          jelly;
+  double              morph_t;          /* 0..1 */
   gboolean            morphing;
   graphene_rect_t     morph_from;
   double              morph_from_radius;
   GtkWidget          *morph_source;     /* weak: a shown source, read in the first frame */
-  /* Hidden, still drawn: shrinking into ghost_into. */
+  gboolean            has_anchor;
+  guint               motion_tick;      /* redraws the view while the glass moves */
+  /* A knob's glass hangs from its place on the jelly (design.md §6.9). */
+  gboolean            follows;
+  gboolean            follow_moving;
+  /* Appearing without a partner: SwiftUI's .materialize (design.md §6.8). */
+  AdwAnimation       *materialize_anim;
+  double              materialize_t;    /* 0..1 */
+  gboolean            materializing;
+  /* Hidden, still drawn: shrinking into ghost_into on the jelly, or with no
+   * one to go to, dissolving (ghost_into NULL). */
   AdwAnimation       *ghost_anim;
   double              ghost_t;
   gboolean            ghost;
@@ -104,6 +117,7 @@ typedef struct {
 
   double              param_value[GLASS_N_PARAMS];     /* the app's (set_param); NAN: none */
   double              param_default[GLASS_N_PARAMS];   /* the widget's own; NAN: none */
+  gboolean            plain_body;       /* a lens, not a pane: no frost (knobs, plates) */
 } GlassPanelPrivate;
 
 enum {
@@ -196,6 +210,7 @@ glass_panel_has_corner_radii (GlassPanel *self)
 
 static void set_appearance (GlassPanel *self, GlassAppearance appearance);
 static void stop_ghost (GlassPanel *self);
+static void stop_motion (GlassPanel *self);
 
 /* Whether a view measures what is under the panel: its glass, or its CSS
  * fallback (the view samples that itself); not in high contrast (opaque). */
@@ -356,11 +371,16 @@ glass_panel_unroot (GtkWidget *widget)
 
   /* A morph's glass is in the view's coordinates: none of it carries over. */
   stop_ghost (self);
+  stop_motion (self);
   g_clear_weak_pointer (&priv->morph_source);
-  if (priv->morphing)
+  priv->morphing = FALSE;
+  priv->has_anchor = FALSE;
+  priv->follow_moving = FALSE;
+  glass_jelly_stop (&priv->jelly);
+  if (priv->materializing)
     {
-      priv->morphing = FALSE;
-      adw_animation_skip (priv->morph_anim);
+      priv->materializing = FALSE;
+      adw_animation_skip (priv->materialize_anim);
     }
   priv->has_drawn = FALSE;
 
@@ -585,6 +605,24 @@ glass_panel_resolve_params (GlassPanel   *self,
     }
 }
 
+void
+glass_panel_set_plain_body (GlassPanel *self,
+                            gboolean    plain)
+{
+  PRIV (self)->plain_body = plain;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+void
+glass_panel_resolve_surface (GlassPanel       *self,
+                             GlassContext     *context,
+                             GlassSurfaceSpec *out)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  glass_context_resolve_surface (context, priv->material, priv->plain_body, out);
+}
+
 gboolean
 glass_panel_get_output (GlassPanel       *self,
                         GlassView       **view,
@@ -718,16 +756,30 @@ press_event (GtkEventControllerLegacy *controller,
 
 /* ── Morphing (GlassPanel:morph-id, design.md §6.8) ─────────────────────────
  * A panel that appears morphs from a partner's glass: a hidden panel with
- * the same morph-id (its glass becomes ours), or else, in a GlassGroup, the
- * neighbouring panel (a drop splitting off). A panel in a group that hides
- * leaves a ghost: its glass, without the content, shrinking into its
- * neighbour. The view reads both while it draws (glass_panel_get_morph(),
- * glass_panel_get_ghost()); the animations only move a number. */
+ * the same morph-id (its glass becomes ours, and stays behind as a drop that
+ * shrinks away), or else, in a GlassGroup, the neighbouring panel (a drop
+ * splitting off). With neither it materializes. A panel that hides leaves a
+ * ghost: its glass, without the content, shrinking into its neighbour in a
+ * group, or else dissolving where it was. The view reads all of it while it
+ * draws (glass_panel_get_morph(), glass_panel_get_ghost() ...), and that is
+ * where the jelly (glass-jelly.c) is stepped, with the frame's time and the
+ * frame's place for the panel (§5.3-2); the ticks only ask for frames. */
 
 /* Showing and hiding in one go (hide a button, show a field) happens in one
  * main loop iteration; this much later it is no longer a swap. */
 #define MORPH_WINDOW_US (250 * 1000)
-#define GHOST_MS 260
+/* A ghost with no one to go to dissolves over this (SwiftUI's
+ * dematerialize, measured by liquid_glass_widgets at 120 fps: 350 ms, the
+ * glass swelling to 1.15). Appearing without a partner takes 250 ms, from
+ * 1.15 down to its size. */
+#define DISSOLVE_MS 350
+#define MATERIALIZE_MS 250
+#define MATERIALIZE_GROW 0.15
+/* A morph-id swap: the partner's glass stays behind as a drop that is gone
+ * by this much of the way (liquid_glass_widgets' morph engine: 40%), fused
+ * to ours over this width (logical px) while they part. */
+#define ANCHOR_SPAN 0.4
+#define ANCHOR_MERGE 24.0
 
 void
 glass_panel_resolve_corners (GlassPanel            *self,
@@ -828,19 +880,77 @@ morph_partner (GlassPanel *self,
   return shown;
 }
 
-static void
-morph_value (double value, gpointer data)
+/* The jelly is stepped where the view reads it, in its snapshot, with that
+ * frame's time and that frame's place for the panel (§5.3-2); this only
+ * asks the view for the frames, while the glass moves. On the view: a
+ * ghost is not mapped, and libadwaita and GTK skip unmapped widgets. */
+static gboolean
+motion_tick (GtkWidget     *widget,
+             GdkFrameClock *clock,
+             gpointer       data)
 {
   GlassPanel *self = data;
+  GlassPanelPrivate *priv = PRIV (self);
 
-  PRIV (self)->morph_t = value;
-  gtk_widget_queue_draw (GTK_WIDGET (self));
+  if (priv->view == NULL ||
+      (!priv->morphing && !(priv->ghost && priv->ghost_into) && !priv->follow_moving))
+    {
+      /* The content at full strength, now that the glass is in place. */
+      gtk_widget_queue_draw (GTK_WIDGET (self));
+      priv->motion_tick = 0;
+      return G_SOURCE_REMOVE;
+    }
+  gtk_widget_queue_draw (GTK_WIDGET (priv->view));
+  if (priv->morphing)
+    gtk_widget_queue_draw (GTK_WIDGET (self));   /* the content fades in */
+  return G_SOURCE_CONTINUE;
 }
 
 static void
-morph_done (AdwAnimation *animation, GlassPanel *self)
+start_motion (GlassPanel *self)
 {
-  PRIV (self)->morphing = FALSE;
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (priv->motion_tick == 0 && priv->view)
+    priv->motion_tick = gtk_widget_add_tick_callback (GTK_WIDGET (priv->view), motion_tick,
+                                                      g_object_ref (self), g_object_unref);
+}
+
+static void
+stop_motion (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (priv->motion_tick && priv->view)
+    gtk_widget_remove_tick_callback (GTK_WIDGET (priv->view), priv->motion_tick);
+  priv->motion_tick = 0;
+}
+
+static gint64
+frame_time (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  GdkFrameClock *clock = priv->view ? gtk_widget_get_frame_clock (GTK_WIDGET (priv->view)) : NULL;
+
+  return clock ? gdk_frame_clock_get_frame_time (clock) : g_get_monotonic_time ();
+}
+
+static void
+materialize_value (double value, gpointer data)
+{
+  GlassPanel *self = data;
+  GlassPanelPrivate *priv = PRIV (self);
+
+  priv->materialize_t = value;
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+  if (priv->view)
+    gtk_widget_queue_draw (GTK_WIDGET (priv->view));
+}
+
+static void
+materialize_done (AdwAnimation *animation, GlassPanel *self)
+{
+  PRIV (self)->materializing = FALSE;
   gtk_widget_queue_draw (GTK_WIDGET (self));
 }
 
@@ -850,6 +960,8 @@ stop_ghost (GlassPanel *self)
   GlassPanelPrivate *priv = PRIV (self);
 
   priv->ghost = FALSE;
+  if (priv->ghost_into && !priv->morphing)
+    glass_jelly_stop (&priv->jelly);
   g_clear_weak_pointer (&priv->ghost_into);
   if (priv->ghost_anim)
     {
@@ -888,16 +1000,46 @@ ghost_done (AdwAnimation *animation, GlassPanel *self)
   g_clear_object (&priv->ghost_anim);
 }
 
+/* Appearing with no glass to come from: the glass fades up as it settles
+ * inward from slightly oversized, and the content sharpens last (SwiftUI's
+ * .materialize; design.md §6.8). With less motion, a plain fade. */
+static void
+begin_materialize (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (priv->materialize_anim == NULL)
+    {
+      AdwAnimationTarget *target = adw_callback_animation_target_new (materialize_value, self, NULL);
+
+      priv->materialize_anim = adw_timed_animation_new (GTK_WIDGET (self), 0.0, 1.0, MATERIALIZE_MS, target);
+      adw_timed_animation_set_easing (ADW_TIMED_ANIMATION (priv->materialize_anim), ADW_LINEAR);
+      g_signal_connect (priv->materialize_anim, "done", G_CALLBACK (materialize_done), self);
+    }
+  priv->materializing = TRUE;
+  priv->materialize_t = 0.0;
+  adw_animation_reset (priv->materialize_anim);
+  adw_animation_play (priv->materialize_anim);
+}
+
 static void
 begin_appear (GlassPanel *self)
 {
   GlassPanelPrivate *priv = PRIV (self);
   gint64 now = g_get_monotonic_time ();
   GlassPanel *source = NULL;
-  GtkWidget *group;
+  GtkWidget *group = NULL;
+  gboolean reduced;
 
   if (priv->view == NULL || priv->mode != GLASS_PANEL_MODE_VIEW)
     return;
+  if (!glass_animations_enabled (GTK_WIDGET (self)))
+    {
+      if (priv->ghost)
+        stop_ghost (self);
+      return;
+    }
+  reduced = glass_motion_reduced (GTK_WIDGET (self));
 
   if (priv->ghost)
     {
@@ -905,6 +1047,7 @@ begin_appear (GlassPanel *self)
       priv->morph_from = priv->drawn_rect;
       priv->morph_from_radius = priv->drawn_radius;
       stop_ghost (self);
+      source = self;
     }
   else
     {
@@ -918,7 +1061,19 @@ begin_appear (GlassPanel *self)
       else if ((group = fuse_group (self)))
         source = group_neighbour (self, group);
       if (source == NULL)
-        return;
+        {
+          /* Nothing to come out of. Not when the view itself just came on
+           * screen (a page shown): the panel is part of what appeared. */
+          if (glass_view_has_drawn_since_map (priv->view))
+            begin_materialize (self);
+          return;
+        }
+      /* Less motion: no travel; the partner's glass goes, ours fades in. */
+      if (reduced)
+        {
+          begin_materialize (self);
+          return;
+        }
       priv->morph_from = PRIV (source)->drawn_rect;
       priv->morph_from_radius = PRIV (source)->drawn_radius;
       /* A source still shown may move in this very frame (a centred row
@@ -926,19 +1081,17 @@ begin_appear (GlassPanel *self)
       if (gtk_widget_get_mapped (GTK_WIDGET (source)))
         g_set_weak_pointer (&priv->morph_source, GTK_WIDGET (source));
     }
+  if (reduced)
+    return;
 
-  if (priv->morph_anim == NULL)
-    {
-      AdwAnimationTarget *target = adw_callback_animation_target_new (morph_value, self, NULL);
-
-      priv->morph_anim = adw_spring_animation_new (GTK_WIDGET (self), 0.0, 1.0,
-                                                   adw_spring_params_new (0.8, 1.0, 300.0), target);
-      g_signal_connect (priv->morph_anim, "done", G_CALLBACK (morph_done), self);
-    }
+  /* A morph-id swap outside a group: the partner's glass stays behind as a
+   * drop, joined to ours until it is gone (in a group the neighbour is
+   * there already, joined by the group). */
+  priv->has_anchor = source != self && group == NULL && priv->morph_source == NULL;
+  glass_jelly_start (&priv->jelly, &glass_jelly_travel, &priv->morph_from, TRUE, TRUE);
   priv->morphing = TRUE;
   priv->morph_t = 0.0;
-  adw_animation_reset (priv->morph_anim);
-  adw_animation_play (priv->morph_anim);
+  start_motion (self);
 }
 
 static void
@@ -952,15 +1105,18 @@ begin_vanish (GlassPanel *self)
 
   priv->hidden_at = now;
   g_clear_weak_pointer (&priv->morph_source);
-  if (priv->morphing)
+  priv->morphing = FALSE;
+  priv->has_anchor = FALSE;
+  glass_jelly_stop (&priv->jelly);
+  if (priv->materializing)
     {
-      priv->morphing = FALSE;
-      adw_animation_skip (priv->morph_anim);
+      priv->materializing = FALSE;
+      adw_animation_skip (priv->materialize_anim);
     }
   if (!priv->has_drawn || priv->view == NULL || priv->mode != GLASS_PANEL_MODE_VIEW ||
       now - priv->taken_at < MORPH_WINDOW_US ||
       !gtk_widget_get_mapped (GTK_WIDGET (priv->view)) ||
-      (group = fuse_group (self)) == NULL || (into = group_neighbour (self, group)) == NULL)
+      !glass_animations_enabled (GTK_WIDGET (priv->view)))
     return;
 
   stop_ghost (self);
@@ -968,12 +1124,23 @@ begin_vanish (GlassPanel *self)
   priv->ghost_t = 0.0;
   priv->ghost_from = priv->drawn_rect;
   priv->ghost_from_radius = priv->drawn_radius;
-  g_set_weak_pointer (&priv->ghost_into, GTK_WIDGET (into));
 
-  /* On the view: libadwaita skips the animations of unmapped widgets. */
+  /* In a group, into the neighbour, on the jelly: a drop drawn back into
+   * the glass it came out of. */
+  into = (group = fuse_group (self)) ? group_neighbour (self, group) : NULL;
+  if (into && !glass_motion_reduced (GTK_WIDGET (priv->view)))
+    {
+      g_set_weak_pointer (&priv->ghost_into, GTK_WIDGET (into));
+      glass_jelly_start (&priv->jelly, &glass_jelly_travel, &priv->ghost_from, TRUE, TRUE);
+      start_motion (self);
+      return;
+    }
+
+  /* No one to go to: it dissolves where it is (SwiftUI's dematerialize).
+   * On the view: libadwaita skips the animations of unmapped widgets. */
   target = adw_callback_animation_target_new (ghost_value, g_object_ref (self), g_object_unref);
-  priv->ghost_anim = adw_timed_animation_new (GTK_WIDGET (priv->view), 0.0, 1.0, GHOST_MS, target);
-  adw_timed_animation_set_easing (ADW_TIMED_ANIMATION (priv->ghost_anim), ADW_EASE_IN_OUT_CUBIC);
+  priv->ghost_anim = adw_timed_animation_new (GTK_WIDGET (priv->view), 0.0, 1.0, DISSOLVE_MS, target);
+  adw_timed_animation_set_easing (ADW_TIMED_ANIMATION (priv->ghost_anim), ADW_LINEAR);
   g_signal_connect (priv->ghost_anim, "done", G_CALLBACK (ghost_done), self);
   adw_animation_play (priv->ghost_anim);
 }
@@ -1005,15 +1172,114 @@ glass_panel_get_morph (GlassPanel            *self,
         {
           priv->morph_from = from;
           priv->morph_from_radius = glass_panel_effective_radius (GLASS_PANEL (priv->morph_source), &from);
+          glass_jelly_start (&priv->jelly, &glass_jelly_travel, &from, TRUE, TRUE);
         }
       g_clear_weak_pointer (&priv->morph_source);
     }
-  graphene_rect_interpolate (&priv->morph_from, target, priv->morph_t, rect);
-  rect->size.width = MAX (rect->size.width, 1.0f);
-  rect->size.height = MAX (rect->size.height, 1.0f);
+
+  /* On the springs towards where the panel is this frame. */
+  glass_jelly_set_mark (&priv->jelly, target);
+  if (!glass_jelly_step (&priv->jelly, frame_time (self)))
+    {
+      priv->morphing = FALSE;
+      priv->has_anchor = FALSE;
+      glass_jelly_stop (&priv->jelly);
+      return FALSE;
+    }
+  glass_jelly_get (&priv->jelly, rect);
+  priv->morph_t = MAX (priv->morph_t, glass_jelly_progress (&priv->jelly, &priv->morph_from));
   glass_panel_resolve_corners (self, target, to);
-  lerp_corners (priv->morph_from_radius, to, CLAMP (priv->morph_t, 0.0, 1.0), corners);
+  lerp_corners (priv->morph_from_radius, to, priv->morph_t, corners);
+  /* No corner rounder than the glass is wide while it stretches. */
+  for (int i = 0; i < 4; i++)
+    corners[i] = MIN (corners[i], MIN (rect->size.width, rect->size.height) / 2.0);
   return TRUE;
+}
+
+gboolean
+glass_panel_get_morph_anchor (GlassPanel      *self,
+                              graphene_rect_t *rect,
+                              double          *radius)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  double left;
+  float cx, cy;
+
+  if (!priv->morphing || !priv->has_anchor)
+    return FALSE;
+  /* Gone by ANCHOR_SPAN of the way, shrinking about its centre. */
+  left = 1.0 - priv->morph_t / ANCHOR_SPAN;
+  if (left <= 0.02)
+    {
+      priv->has_anchor = FALSE;
+      return FALSE;
+    }
+  cx = priv->morph_from.origin.x + priv->morph_from.size.width / 2.0f;
+  cy = priv->morph_from.origin.y + priv->morph_from.size.height / 2.0f;
+  *rect = GRAPHENE_RECT_INIT (cx - priv->morph_from.size.width * (float) left / 2.0f,
+                              cy - priv->morph_from.size.height * (float) left / 2.0f,
+                              MAX (priv->morph_from.size.width * (float) left, 1.0f),
+                              MAX (priv->morph_from.size.height * (float) left, 1.0f));
+  *radius = MIN (priv->morph_from_radius * left, MIN (rect->size.width, rect->size.height) / 2.0);
+  return TRUE;
+}
+
+double
+glass_panel_get_anchor_merge (GlassPanel *self)
+{
+  return ANCHOR_MERGE;
+}
+
+void
+glass_panel_set_follows (GlassPanel *self,
+                         gboolean    follows)
+{
+  PRIV (self)->follows = follows;
+}
+
+void
+glass_panel_follow (GlassPanel      *self,
+                    graphene_rect_t *rect)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (!priv->follows || priv->morphing)
+    return;
+  if (glass_motion_reduced (GTK_WIDGET (self)))
+    {
+      glass_jelly_stop (&priv->jelly);
+      priv->follow_moving = FALSE;
+      return;
+    }
+  if (!priv->jelly.active)
+    {
+      /* Along the knob's travel only; its height does not stretch. */
+      glass_jelly_start (&priv->jelly, &glass_jelly_plate, rect, TRUE, FALSE);
+      return;
+    }
+  glass_jelly_set_mark (&priv->jelly, rect);
+  priv->follow_moving = glass_jelly_step (&priv->jelly, frame_time (self));
+  glass_jelly_get (&priv->jelly, rect);
+  if (priv->follow_moving)
+    start_motion (self);
+}
+
+double
+glass_panel_get_visibility (GlassPanel *self,
+                            double     *grow)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+  double t;
+
+  *grow = 1.0;
+  if (!priv->materializing)
+    return 1.0;
+  /* The glass resolves at a steady rate, just short of the end, so it is
+   * there before its content (liquid_glass_widgets' capture: 0 - 0.92). */
+  t = CLAMP (priv->materialize_t / 0.92, 0.0, 1.0);
+  if (!glass_motion_reduced (GTK_WIDGET (self)))
+    *grow = 1.0 + MATERIALIZE_GROW * (1.0 - t);
+  return t;
 }
 
 gboolean
@@ -1028,16 +1294,52 @@ glass_panel_get_ghost (GlassPanel      *self,
 
   if (!priv->ghost)
     return FALSE;
+
+  /* Dissolving where it was, swelling a little as it goes. */
+  if (priv->ghost_anim && priv->ghost_into == NULL)
+    {
+      double grow = glass_motion_reduced (GTK_WIDGET (view)) ? 1.0 : 1.0 + MATERIALIZE_GROW * priv->ghost_t;
+      double r = priv->ghost_from_radius * grow;
+
+      *rect = priv->ghost_from;
+      graphene_rect_inset (rect, -rect->size.width * (float) (grow - 1.0) / 2.0f,
+                           -rect->size.height * (float) (grow - 1.0) / 2.0f);
+      for (int i = 0; i < 4; i++)
+        corners[i] = MIN (r, MIN (rect->size.width, rect->size.height) / 2.0);
+      return TRUE;
+    }
+
   if (priv->ghost_into == NULL || !gtk_widget_get_mapped (priv->ghost_into) ||
       !gtk_widget_compute_bounds (priv->ghost_into, GTK_WIDGET (view), &into))
     {
       stop_ghost (self);
       return FALSE;
     }
-  graphene_rect_interpolate (&priv->ghost_from, &into, priv->ghost_t, rect);
+  /* Into the neighbour on the springs; gone once it has arrived (the two
+   * are one shape then). */
+  glass_jelly_set_mark (&priv->jelly, &into);
+  if (!glass_jelly_step (&priv->jelly, frame_time (self)))
+    {
+      stop_ghost (self);
+      return FALSE;
+    }
+  glass_jelly_get (&priv->jelly, rect);
+  priv->ghost_t = MAX (priv->ghost_t, glass_jelly_progress (&priv->jelly, &priv->ghost_from));
   glass_panel_resolve_corners (GLASS_PANEL (priv->ghost_into), &into, to);
   lerp_corners (priv->ghost_from_radius, to, priv->ghost_t, corners);
+  for (int i = 0; i < 4; i++)
+    corners[i] = MIN (corners[i], MIN (rect->size.width, rect->size.height) / 2.0);
   return TRUE;
+}
+
+double
+glass_panel_get_ghost_visibility (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (priv->ghost && priv->ghost_anim && priv->ghost_into == NULL)
+    return CLAMP (1.0 - priv->ghost_t, 0.0, 1.0);
+  return 1.0;
 }
 
 void
@@ -1052,15 +1354,37 @@ glass_panel_set_drawn (GlassPanel            *self,
   priv->drawn_radius = radius;
 }
 
-/* The content fades in while the glass morphs into place. */
+/* The content fades in while the glass morphs into place; materializing,
+ * it starts once the glass has begun to form and sharpens up to the end
+ * (liquid_glass_widgets' capture: 0.35 - 1). */
 static float
 content_opacity (GlassPanel *self)
 {
   GlassPanelPrivate *priv = PRIV (self);
 
+  if (priv->materializing)
+    return glass_motion_reduced (GTK_WIDGET (self)) ? (float) priv->materialize_t
+                                                     : (float) CLAMP ((priv->materialize_t - 0.35) / 0.65, 0.0, 1.0);
   if (!priv->morphing)
     return 1.0f;
   return (float) CLAMP ((priv->morph_t - 0.25) / 0.55, 0.0, 1.0);
+}
+
+/* ... and out of focus until then (a Gaussian of up to 8 px). */
+static float
+content_blur (GlassPanel *self)
+{
+  GlassPanelPrivate *priv = PRIV (self);
+
+  if (!priv->materializing || glass_motion_reduced (GTK_WIDGET (self)))
+    return 0.0f;
+  return 8.0f * (1.0f - content_opacity (self));
+}
+
+float
+glass_panel_get_content_opacity (GlassPanel *self)
+{
+  return content_opacity (self);
 }
 
 static void
@@ -1083,11 +1407,14 @@ glass_panel_snapshot (GtkWidget   *widget,
 {
   double vs = glass_panel_get_visual_scale (GLASS_PANEL (widget));
   float opacity = content_opacity (GLASS_PANEL (widget));
+  float blur = content_blur (GLASS_PANEL (widget));
   float cx = gtk_widget_get_width (widget) / 2.0f;
   float cy = gtk_widget_get_height (widget) / 2.0f;
 
   if (opacity < 1.0f)
     gtk_snapshot_push_opacity (snapshot, opacity);
+  if (blur > 0.05f)
+    gtk_snapshot_push_blur (snapshot, blur);
   if (vs != 1.0)
     {
       gtk_snapshot_save (snapshot);
@@ -1099,6 +1426,8 @@ glass_panel_snapshot (GtkWidget   *widget,
     gtk_widget_snapshot_child (widget, child, snapshot);
   if (vs != 1.0)
     gtk_snapshot_restore (snapshot);
+  if (blur > 0.05f)
+    gtk_snapshot_pop (snapshot);
   if (opacity < 1.0f)
     gtk_snapshot_pop (snapshot);
 }
@@ -1324,7 +1653,8 @@ glass_panel_dispose (GObject *object)
 
   g_clear_handle_id (&priv->settle_source, g_source_remove);
   g_clear_object (&priv->press_anim);
-  g_clear_object (&priv->morph_anim);
+  g_clear_object (&priv->materialize_anim);
+  stop_motion (GLASS_PANEL (object));
   g_clear_weak_pointer (&priv->morph_source);
   g_clear_weak_pointer (&priv->ghost_into);
   g_clear_pointer (&priv->child, gtk_widget_unparent);

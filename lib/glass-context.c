@@ -32,6 +32,7 @@ struct _GlassContext {
   GlassRendererMode env_renderer;   /* GLASS_RENDERER, AUTO if unset */
   gboolean          reduce_transparency;
   gboolean          high_contrast;
+  gboolean          dark;             /* AdwStyleManager:dark: the materials' dark values */
   gboolean          is_set[GLASS_N_PARAMS];
   double            values[GLASS_N_PARAMS];
   GdkRGBA           tint_color;
@@ -74,6 +75,21 @@ high_contrast_changed (AdwStyleManager *manager,
   if (hc == self->high_contrast)
     return;
   self->high_contrast = hc;
+  changed (self);
+}
+
+/* The materials have values for each appearance (spec/params.json
+ * values_dark, tint_dark, surfaces, outlines). */
+static void
+dark_changed (AdwStyleManager *manager,
+              GParamSpec      *pspec,
+              GlassContext    *self)
+{
+  gboolean dark = adw_style_manager_get_dark (manager);
+
+  if (dark == self->dark)
+    return;
+  self->dark = dark;
   changed (self);
 }
 
@@ -203,6 +219,9 @@ glass_context_init (GlassContext *self)
       self->high_contrast = adw_style_manager_get_high_contrast (manager);
       g_signal_connect_object (manager, "notify::high-contrast",
                                G_CALLBACK (high_contrast_changed), self, 0);
+      self->dark = adw_style_manager_get_dark (manager);
+      g_signal_connect_object (manager, "notify::dark",
+                               G_CALLBACK (dark_changed), self, 0);
     }
 }
 
@@ -641,11 +660,65 @@ glass_context_resolve (GlassContext *self,
                        double        out[GLASS_N_PARAMS])
 {
   const GlassMaterialSpec *m = &glass_material_specs[CLAMP ((int) material, 0, GLASS_N_MATERIALS - 1)];
+  int a = self->dark ? 1 : 0;
 
   for (int i = 0; i < GLASS_N_PARAMS; i++)
     out[i] = self->is_set[i] ? self->values[i]
-             : m->has[i] ? m->values[i]
+             : m->has[a][i] ? m->values[a][i]
              : glass_param_specs[i].default_value;
+}
+
+gboolean
+glass_context_get_dark (GlassContext *self)
+{
+  return self->dark;
+}
+
+void
+glass_context_resolve_surface (GlassContext     *self,
+                               GlassMaterial     material,
+                               gboolean          plain_body,
+                               GlassSurfaceSpec *out)
+{
+  const GlassMaterialSpec *m = &glass_material_specs[CLAMP ((int) material, 0, GLASS_N_MATERIALS - 1)];
+
+  *out = m->surface[self->dark ? 1 : 0];
+  if (plain_body)
+    {
+      /* The reference's body under the material's outline: a part's own
+       * glass that is a lens, not a pane (a knob, a plate). */
+      out->body = FALSE;
+      out->saturation = glass_material_specs[GLASS_MATERIAL_CLEAR].surface[self->dark ? 1 : 0].saturation;
+      out->frost = 0.0;
+      out->frost_opacity = out->frost_clamp = 0.0;
+      out->frost_weight = out->blur_weight = 1.0;
+    }
+}
+
+void
+glass_surface_apply (const GlassSurfaceSpec *surface,
+                     const double           params[GLASS_N_PARAMS],
+                     GlassBlurSpec         *blur,
+                     GlassSurfaceTerms     *terms)
+{
+  if (blur)
+    *blur = (GlassBlurSpec) {
+      .radius = params[GLASS_PARAM_ID_BLUR_RADIUS],
+      .weight = surface->blur_weight,
+      .frost = surface->frost,
+      .frost_weight = surface->frost_weight,
+    };
+  if (terms)
+    *terms = (GlassSurfaceTerms) {
+      .body = surface->body ? 1.0f : 0.0f,
+      .saturation = (float) surface->saturation,
+      .frost_opacity = (float) surface->frost_opacity,
+      .frost_clamp = (float) surface->frost_clamp,
+      .rim_shade = (float) surface->rim_shade,
+      .rim_shade_ends = (float) surface->rim_shade_ends,
+      .rim_light = (float) surface->rim_light,
+      .edge_absorption = (float) surface->edge_absorption,
+    };
 }
 
 void
@@ -692,6 +765,6 @@ glass_context_resolve_tint (GlassContext  *self,
       out[2] = theme_bg->blue;
     }
   else
-    memcpy (out, m->tint, sizeof m->tint);
+    memcpy (out, m->tint[self->dark ? 1 : 0], sizeof m->tint[0]);
   out[3] = (float) strength;
 }

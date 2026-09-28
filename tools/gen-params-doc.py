@@ -21,13 +21,15 @@ def main():
     materials = spec['materials']
     presets = spec['edge_presets']
     values = []
+    darks = []
     lenses = spec['lenses']
     for m in materials:
-        v = dict(presets[m['edge']]) if m.get('edge') else {}
+        v = {k: x for k, x in presets[m['edge']].items() if not k.startswith('_')} if m.get('edge') else {}
         if 'lens' in v:
             v.update(lenses[v.pop('lens')])
         v.update(m['values'])
         values.append(v)
+        darks.append(m.get('values_dark', {}))
 
     out = []
     w = out.append
@@ -57,11 +59,44 @@ def main():
             rng = ', '.join(fmt(v) for v in p['values'])
         unit = ' px' if p['px'] else ''
         cells = [f'`{p["key"]}`', rng + unit, fmt(p['default'])]
-        for v in values:
-            cells.append(fmt(v[p['key']]) if p['key'] in v else '')
+        for v, d in zip(values, darks):
+            cell = fmt(v[p['key']]) if p['key'] in v else ''
+            if p['key'] in d:
+                cell = f'{cell or fmt(p["default"])} / {fmt(d[p["key"]])}'
+            cells.append(cell)
         w('| ' + ' | '.join(cells) + ' |')
     w('')
-    w('An empty cell: the material uses the default.')
+    w('An empty cell: the material uses the default. Two values: the light appearance\'s, then the')
+    w('dark\'s (libadwaita\'s `AdwStyleManager:dark`).')
+    w('')
+    w('## Body and outline')
+    w('')
+    w('Beyond these keys each material has a body and an outline of its own, fixed (they are not')
+    w('settings). REGULAR, THICK and MENU have the body of SwiftUI\'s `glassEffect(.regular)` on iOS 27:')
+    w('a frost (the content blurred by 14 px) laid over a copy of it blurred by `blur-radius`, the tint,')
+    w('then the saturation; CLEAR and PROMINENT the plain one (the content blurred by `blur-radius` at a')
+    w('saturation of 1.5, then the tint). All have iOS 27\'s outline: a half-point line of the content just')
+    w('outside the glass, darkened across the light axis, and two highlights at its ends.')
+    w('')
+    surfaces = spec.get('surfaces', {})
+    outlines = spec.get('outlines', {})
+    terms = ('saturation', 'frost', 'frost-opacity', 'frost-clamp', 'frost-weight', 'blur-weight',
+             'rim-shade', 'rim-shade-ends', 'rim-light', 'edge-absorption')
+    w('| Material | ' + ' | '.join(f'`{t}`' for t in terms) + ' |')
+    w('|---|' + '---|' * len(terms))
+    for m in materials:
+        cells = []
+        for t in terms:
+            vals = []
+            for a in ('light', 'dark'):
+                x = {}
+                if m.get('surface'):
+                    x.update(surfaces[m['surface']][a])
+                if m.get('outline'):
+                    x.update(outlines[m['outline']][a])
+                vals.append(fmt(x[t]) if t in x else '')
+            cells.append(vals[0] if vals[0] == vals[1] else f'{vals[0]} / {vals[1]}')
+        w(f'| {m["name"].upper()} | ' + ' | '.join(cells) + ' |')
     w('')
     w('## Tint')
     w('')

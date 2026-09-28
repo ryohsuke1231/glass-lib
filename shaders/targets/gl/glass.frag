@@ -5,8 +5,10 @@
 // #include below is expanded at build time.
 
 uniform sampler2D glass_backdrop;   // the blurred backdrop (blur_rect_* / blur_tex_* describe it)
+uniform sampler2D glass_frost;      // the frost's cloud, on the same grid (glass_material.glsl)
 
 #define GLASS_SAMPLE(uv) texture(glass_backdrop, (uv))
+#define GLASS_SAMPLE_FROST(uv) texture(glass_frost, (uv))
 
 #include "../../core/glass_core.glsl"
 

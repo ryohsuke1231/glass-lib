@@ -102,6 +102,7 @@ glass_gauss_fragment_source (const GlassGaussKernel *kernel, gboolean horizontal
                    "uniform sampler2D u_src;\n"
                    "uniform vec2 inv_size;      /* 1/width, 1/height of the source */\n"
                    "uniform float kernel_scale; /* wanted sigma / kernel sigma */\n"
+                   "uniform float unweight;     /* 1: alpha holds the texels' weights; divide them out */\n"
                    "in vec4 v_tex_coord;\n"
                    "out vec4 frag_color;\n"
                    "void main() {\n"
@@ -126,7 +127,9 @@ glass_gauss_fragment_source (const GlassGaussKernel *kernel, gboolean horizontal
         }
     }
 
-  g_string_append (s, "  frag_color = col;\n}\n");
+  /* A weighted blur (the renderer's luma weights, in alpha) ends by dividing
+   * by the weights it summed: the weighted mean, opaque. */
+  g_string_append (s, "  frag_color = unweight > 0.5 ? vec4(col.rgb / max(col.a, 1.0e-4), 1.0) : col;\n}\n");
 
   return g_string_free (s, FALSE);
 }

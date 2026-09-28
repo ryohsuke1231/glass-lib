@@ -10,4 +10,5 @@
 #include "glass_shape.glsl"
 #include "glass_surface.glsl"
 #include "glass_optics.glsl"
+#include "glass_material.glsl"
 #include "glass_shade.glsl"

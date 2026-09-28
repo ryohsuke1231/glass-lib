@@ -60,6 +60,8 @@ vec4 glass_shade(vec2 uv) {
         max(lensBand + gradient_step + smoothZoneEarly,
             edgeFeather * 4.0),
         max(ao_radius, rim_width));
+    // glass-lib's iOS 27 outline reaches in from the edge too (0 when off).
+    interiorThreshold = max(interiorThreshold, ios27Reach());
     if (early_exit_enabled > 0.5 && debug_view < 0.5 && !fused && -d >= interiorThreshold) {
         vec2 uvFlat = stabilizedUV(uv, uv);
 
@@ -72,8 +74,12 @@ vec4 glass_shade(vec2 uv) {
             GLASS_SAMPLE(blurUV(uvFlat + vec2(-0.125, -0.375) * texelFlat, resolution)).rgb
         ) * 0.25;
 
-        flatRgb = applySCB(flatRgb, brightness, contrast, saturation);
-        flatRgb = mix(flatRgb, vec3(tint_r, tint_g, tint_b), tint_strength);
+        if (glass_body_mode > 0.5) {
+            flatRgb = ios27Body(flatRgb, uvFlat, resolution, vec3(0.0), 0.0);
+        } else {
+            flatRgb = applySCB(flatRgb, brightness, contrast, saturation);
+            flatRgb = mix(flatRgb, vec3(tint_r, tint_g, tint_b), tint_strength);
+        }
 
         // Specular and sheen at N = (0, 0, 1): dot(reflect(-L, N), V) and the
         // sheen's facing term are both L.z; the specular mask reduces to 0.65.
@@ -322,9 +328,27 @@ vec4 glass_shade(vec2 uv) {
         refractedRgb = sampleBackdrop(uvG, tapExt, texel, resolution);
     }
 
-    vec3 refracted = applySCB(refractedRgb, brightness, contrast, saturation);
+    // glass-lib's iOS 27 outline (glass_material.glsl): the half-point line
+    // shows the content just outside, untinted. All 0 in the reference.
+    bool outline = ios27Outline();
+    vec2 rimDir = outline ? (fused ? fusedDir(pixel_coord) : sdRoundRectDir(local_pos, box_size, outline_radius))
+                          : vec2(0.0);
+    float rimAlong = dot(rimDir, ios27LightTravel());
+    float hairline = ios27Hairline(depthPx);
+    vec3 hairRgb = hairline > 0.0 ? ios27HairlineColor(uv, rimDir, resolution) : vec3(0.0);
 
-    vec3 baseColor = mix(refracted, vec3(tint_r, tint_g, tint_b), tint_strength);
+    vec3 baseColor;
+    if (glass_body_mode > 0.5) {
+        baseColor = ios27Body(refractedRgb, uv, resolution, hairRgb, hairline);
+    } else {
+        vec3 refracted = applySCB(refractedRgb, brightness, contrast, saturation);
+
+        baseColor = mix(refracted, vec3(tint_r, tint_g, tint_b), tint_strength);
+        if (hairline > 0.0)
+            baseColor = mix(baseColor, hairRgb, hairline);
+    }
+    if (outline)
+        baseColor *= ios27Absorption(depthPx, rimAlong);
 
     // NOT multiplied by insideMask here: the final composite multiplies by it
     // exactly once (premultiplied alpha). Doing it twice under-premultiplies
@@ -390,6 +414,13 @@ vec4 glass_shade(vec2 uv) {
         litColor /= maxChannel;
     }
     litColor = max(litColor, 0.0);
+
+    // The iOS 27 lobes and line, last: they are what the eye reads as the
+    // edge, over everything else.
+    if (outline) {
+        litColor = ios27RimLight(litColor, depthPx, rimAlong, hairline);
+        litColor = ios27Shade(litColor, rimAlong, hairline);
+    }
 
     // Glass OVER shadow, premultiplied:
     //   rgb = A.rgb*A.a + B.rgb*B.a*(1 - A.a),  a = A.a + B.a*(1 - A.a)

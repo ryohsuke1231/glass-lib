@@ -50,10 +50,6 @@ struct _GlassToggleGroup {
   GPtrArray      *names;           /* char* */
   guint           active;
 
-  AdwAnimation   *animation;
-  double          progress;
-  graphene_rect_t from;            /* the plate where the animation started */
-  gboolean        have_from;
   graphene_rect_t shown;           /* the plate as last allocated */
 
   /* Dragging the plate */
@@ -65,14 +61,15 @@ struct _GlassToggleGroup {
   double          pointer_dx;
   guint           shown_active;    /* the toggle marked as active (while dragging, the nearest) */
 
-  /* The jelly: each edge of the plate on a spring, along the row only */
-  gboolean        jelly;
-  double          edge[2], edge_v[2];         /* left, right: px and px/s */
-  double          target_edge[2];
-  double          heading;                    /* -1 left .. 1 right, smoothed */
-  double          last_target_centre;
-  gint64          last_time;
+  /* The jelly (glass-jelly.c): each edge of the plate on a spring, along the
+   * row only. It carries every move of the plate, taps too. */
+  GlassJelly      jelly;
+  double          mark_x[2];                  /* where its left and right edges head */
   guint           tick;
+
+  /* The magic lens (design.md §6.6): the toggles under the plate, again,
+   * magnified and in the lens colour (the never-drawn node `lens`). */
+  GtkWidget      *lens_node;
 };
 
 enum {
@@ -88,7 +85,6 @@ static GParamSpec *props[N_PROPS];
 G_DEFINE_FINAL_TYPE (GlassToggleGroup, glass_toggle_group, GLASS_TYPE_PANEL)
 
 static void append_button (GlassToggleGroup *self, const char *name, GtkWidget *button);
-static void jelly_rect (GlassToggleGroup *self, const graphene_rect_t *rest, graphene_rect_t *out);
 static void jelly_stop (GlassToggleGroup *self);
 static void show_as_active (GlassToggleGroup *self, guint index);
 
@@ -123,20 +119,23 @@ glass_toggle_group_size_allocate (GtkWidget *widget,
 
   GTK_WIDGET_CLASS (glass_toggle_group_parent_class)->size_allocate (widget, width, height, baseline);
   gtk_widget_allocate (self->pill_node, 0, 0, -1, NULL);
+  gtk_widget_allocate (self->lens_node, 0, 0, -1, NULL);
 
-  /* The buttons are placed now; the plate follows the active one, from
-   * where it was while it slides. */
+  /* The buttons are placed now; the plate follows the active one, on its
+   * springs while it moves. */
   if (!active_rect (self, &target))
     {
       gtk_widget_set_child_visible (self->plate, FALSE);
       return;
     }
-  if (self->jelly)
-    jelly_rect (self, &target, &plate);
-  else if (self->have_from && self->progress < 1.0)
-    graphene_rect_interpolate (&self->from, &target, self->progress, &plate);
-  else
-    plate = target;
+  plate = target;
+  if (self->jelly.active)
+    {
+      /* Only along the row: the plate keeps its height and its place across. */
+      glass_jelly_get (&self->jelly, &plate);
+      plate.origin.y = target.origin.y;
+      plate.size.height = target.size.height;
+    }
   self->shown = plate;
 
   gtk_widget_set_child_visible (self->plate, TRUE);
@@ -174,7 +173,7 @@ glass_toggle_group_unmap (GtkWidget *widget)
   GlassToggleGroup *self = GLASS_TOGGLE_GROUP (widget);
 
   /* The tick would not run; put the marks back where the state is. */
-  if (self->dragging || self->jelly)
+  if (self->dragging || self->jelly.active)
     {
       jelly_stop (self);
       show_as_active (self, self->active);
@@ -183,14 +182,8 @@ glass_toggle_group_unmap (GtkWidget *widget)
   GTK_WIDGET_CLASS (glass_toggle_group_parent_class)->unmap (widget);
 }
 
-static void
-animation_value (double value, gpointer data)
-{
-  GlassToggleGroup *self = data;
-
-  self->progress = value;
-  gtk_widget_queue_allocate (GTK_WIDGET (self));
-}
+static void jelly_start (GlassToggleGroup *self);
+static void jelly_settle_on (GlassToggleGroup *self, guint index);
 
 static void
 mark (GtkWidget *button, gboolean active)
@@ -211,22 +204,23 @@ set_active_internal (GlassToggleGroup *self, guint active, gboolean animate)
   if (active >= self->buttons->len || active == self->active)
     return;
 
-  /* A tap (or the app) moves the plate the usual way, from wherever the
-   * jelly left it. */
-  jelly_stop (self);
-  self->have_from = animate && gtk_widget_get_mapped (GTK_WIDGET (self));
-  self->from = self->shown;
+  /* A tap (or the app) sends the plate on its springs too, from wherever it
+   * is: it stretches on the way and runs on a little when it arrives. With
+   * animations off it is simply there. */
+  animate = animate && gtk_widget_get_mapped (GTK_WIDGET (self)) &&
+            glass_animations_enabled (GTK_WIDGET (self)) && self->shown.size.width > 0.0f;
+  if (!self->dragging)
+    jelly_stop (self);
   if (self->active < self->buttons->len)
     mark (g_ptr_array_index (self->buttons, self->active), FALSE);
   self->active = active;
   self->shown_active = active;
   mark (g_ptr_array_index (self->buttons, active), TRUE);
 
-  if (self->have_from)
+  if (animate)
     {
-      self->progress = 0.0;
-      adw_animation_reset (self->animation);
-      adw_animation_play (self->animation);
+      jelly_start (self);
+      jelly_settle_on (self, active);
     }
   gtk_widget_queue_allocate (GTK_WIDGET (self));
 
@@ -246,10 +240,6 @@ set_active_internal (GlassToggleGroup *self, guint active, gboolean animate)
 
 #define DRAG_THRESHOLD 6.0     /* px */
 #define DRAG_SWELL     2.5     /* the press's swell, times this while dragged */
-#define JELLY_OMEGA    48.0    /* rad/s: an edge's spring, with no heading */
-#define JELLY_LEAD     0.35    /* the front edge this much stiffer, the back this much softer */
-#define JELLY_ZETA     0.45    /* of critical damping: an edge runs on a little past its mark */
-#define JELLY_STEP     0.002   /* s: physics substep */
 
 static void
 button_bounds (GlassToggleGroup *self,
@@ -324,28 +314,18 @@ rubber_band (double over,
   return limit * (1.0 - 1.0 / (over / limit + 1.0));
 }
 
+/* The jelly's mark: mark_x along the row, the active toggle's height and
+ * place across (the plate never leaves its row). */
 static void
-jelly_rect (GlassToggleGroup      *self,
-            const graphene_rect_t *rest,
-            graphene_rect_t       *out)
+jelly_mark (GlassToggleGroup *self)
 {
-  /* Only along the row: the plate keeps its height and its place across. */
-  *out = GRAPHENE_RECT_INIT ((float) self->edge[0], rest->origin.y,
-                             (float) (self->edge[1] - self->edge[0]), rest->size.height);
-}
+  graphene_rect_t rest;
 
-static void
-spring (double *x,
-        double *v,
-        double  target,
-        double  omega,
-        double  zeta,
-        double  dt)
-{
-  double a = omega * omega * (target - *x) - 2.0 * zeta * omega * *v;
-
-  *v += a * dt;
-  *x += *v * dt;
+  if (!active_rect (self, &rest))
+    rest = self->shown;
+  glass_jelly_set_mark (&self->jelly,
+                        &GRAPHENE_RECT_INIT ((float) self->mark_x[0], rest.origin.y,
+                                             (float) (self->mark_x[1] - self->mark_x[0]), rest.size.height));
 }
 
 static gboolean
@@ -354,57 +334,22 @@ jelly_tick (GtkWidget     *widget,
             gpointer       data)
 {
   GlassToggleGroup *self = GLASS_TOGGLE_GROUP (widget);
-  gint64 now = gdk_frame_clock_get_frame_time (clock);
-  double elapsed, centre, want, rest_width;
-  gboolean settled;
+  gboolean moving;
 
-  if (self->last_time == 0)
-    self->last_time = now - 16667;
-  elapsed = MIN ((now - self->last_time) / 1e6, 0.05);
-  self->last_time = now;
-  if (elapsed <= 0.0)
-    return G_SOURCE_CONTINUE;
-
-  /* Which way the plate is heading: quick to take up, slow to let go, so
-   * the front edge stays the stiff one while the plate stops. */
-  centre = (self->target_edge[0] + self->target_edge[1]) / 2.0;
-  want = tanh ((centre - self->last_target_centre) / elapsed / 700.0);
-  self->last_target_centre = centre;
-  self->heading += (want - self->heading) *
-                   (1.0 - exp (-elapsed / (fabs (want) > fabs (self->heading) ? 0.03 : 0.12)));
-
-  rest_width = self->target_edge[1] - self->target_edge[0];
-  for (double t = 0.0; t < elapsed; t += JELLY_STEP)
+  jelly_mark (self);
+  if (glass_motion_reduced (widget))
     {
-      double dt = MIN (JELLY_STEP, elapsed - t);
-
-      spring (&self->edge[0], &self->edge_v[0], self->target_edge[0],
-              JELLY_OMEGA * (1.0 - JELLY_LEAD * self->heading), JELLY_ZETA, dt);
-      spring (&self->edge[1], &self->edge_v[1], self->target_edge[1],
-              JELLY_OMEGA * (1.0 + JELLY_LEAD * self->heading), JELLY_ZETA, dt);
-
-      /* A plate, not two loose ends: no thinner than 0.6 and no longer than
-       * 1.7 of its width at rest. */
-      {
-        double w = self->edge[1] - self->edge[0];
-        double c = (self->edge[0] + self->edge[1]) / 2.0;
-        double clamped = CLAMP (w, rest_width * 0.6, rest_width * 1.7);
-
-        if (clamped != w)
-          {
-            self->edge[0] = c - clamped / 2.0;
-            self->edge[1] = c + clamped / 2.0;
-          }
-      }
+      /* Less motion: the plate is where it is headed, no springs. */
+      glass_jelly_snap (&self->jelly);
+      moving = FALSE;
     }
+  else
+    moving = glass_jelly_step (&self->jelly, gdk_frame_clock_get_frame_time (clock));
   gtk_widget_queue_allocate (widget);
 
-  settled = !self->dragging;
-  for (int e = 0; e < 2 && settled; e++)
-    settled = fabs (self->edge[e] - self->target_edge[e]) < 0.05 && fabs (self->edge_v[e]) < 2.0;
-  if (settled)
+  if (!self->dragging && !moving)
     {
-      self->jelly = FALSE;
+      glass_jelly_stop (&self->jelly);
       self->tick = 0;
       return G_SOURCE_REMOVE;
     }
@@ -414,20 +359,13 @@ jelly_tick (GtkWidget     *widget,
 static void
 jelly_start (GlassToggleGroup *self)
 {
-  if (!self->jelly)
+  /* From wherever the plate is, a move in progress included. */
+  if (!self->jelly.active)
     {
-      self->edge[0] = self->shown.origin.x;
-      self->edge[1] = self->shown.origin.x + self->shown.size.width;
-      self->edge_v[0] = self->edge_v[1] = 0.0;
-      self->heading = 0.0;
-      self->last_target_centre = (self->edge[0] + self->edge[1]) / 2.0;
-      self->jelly = TRUE;
+      glass_jelly_start (&self->jelly, &glass_jelly_plate, &self->shown, TRUE, FALSE);
+      self->mark_x[0] = self->shown.origin.x;
+      self->mark_x[1] = self->shown.origin.x + self->shown.size.width;
     }
-  /* The springs take over from a slide in progress. */
-  adw_animation_reset (self->animation);
-  self->have_from = FALSE;
-  self->progress = 1.0;
-  self->last_time = 0;
   if (self->tick == 0)
     self->tick = gtk_widget_add_tick_callback (GTK_WIDGET (self), jelly_tick, NULL, NULL);
 }
@@ -438,7 +376,7 @@ jelly_stop (GlassToggleGroup *self)
   if (self->tick)
     gtk_widget_remove_tick_callback (GTK_WIDGET (self), self->tick);
   self->tick = 0;
-  self->jelly = FALSE;
+  glass_jelly_stop (&self->jelly);
   self->dragging = FALSE;
   self->drag_armed = FALSE;
 }
@@ -454,18 +392,19 @@ jelly_follow_pointer (GlassToggleGroup *self)
 
   button_bounds (self, 0, &first);
   button_bounds (self, self->buttons->len - 1, &last);
-  lo = first.origin.x + first.size.width / 2.0;
-  hi = last.origin.x + last.size.width / 2.0;
+  /* Either way round: right to left, the first toggle is on the right. */
+  lo = MIN (first.origin.x + first.size.width / 2.0, last.origin.x + last.size.width / 2.0);
+  hi = MAX (first.origin.x + first.size.width / 2.0, last.origin.x + last.size.width / 2.0);
   if (centre < lo)
     centre = lo - rubber_band (lo - centre, width);
   else if (centre > hi)
     centre = hi + rubber_band (centre - hi, width);
 
-  self->target_edge[0] = centre - width / 2.0;
-  self->target_edge[1] = centre + width / 2.0;
+  self->mark_x[0] = centre - width / 2.0;
+  self->mark_x[1] = centre + width / 2.0;
 }
 
-/* After the drag: the plate settles on a toggle. */
+/* After a drag or a tap: the plate settles on a toggle. */
 static void
 jelly_settle_on (GlassToggleGroup *self,
                  guint             index)
@@ -473,8 +412,8 @@ jelly_settle_on (GlassToggleGroup *self,
   graphene_rect_t b;
 
   button_bounds (self, index, &b);
-  self->target_edge[0] = b.origin.x;
-  self->target_edge[1] = b.origin.x + b.size.width;
+  self->mark_x[0] = b.origin.x;
+  self->mark_x[1] = b.origin.x + b.size.width;
 }
 
 static void
@@ -509,12 +448,13 @@ drag_update (GtkGestureDrag   *gesture,
         return;
       self->dragging = TRUE;
       jelly_start (self);
-      if (self->held)
+      /* Less motion: a press's swell, no more. */
+      if (self->held && !glass_motion_reduced (GTK_WIDGET (self)))
         glass_panel_set_press_level (GLASS_PANEL (self->plate), DRAG_SWELL);
     }
   self->pointer_dx = dx;
   jelly_follow_pointer (self);
-  show_as_active (self, nearest_toggle (self, (self->target_edge[0] + self->target_edge[1]) / 2.0));
+  show_as_active (self, nearest_toggle (self, (self->mark_x[0] + self->mark_x[1]) / 2.0));
 }
 
 static void
@@ -528,7 +468,7 @@ drag_finish (GlassToggleGroup *self,
       self->drag_armed = FALSE;
       return;
     }
-  to = commit ? nearest_toggle (self, (self->target_edge[0] + self->target_edge[1]) / 2.0) : self->active;
+  to = commit ? nearest_toggle (self, (self->mark_x[0] + self->mark_x[1]) / 2.0) : self->active;
   self->dragging = FALSE;
   self->drag_armed = FALSE;
   /* Back to a press while the pointer is still down (a cancelled drag). */
@@ -602,14 +542,136 @@ press_event (GtkEventControllerLegacy *controller,
   return GDK_EVENT_PROPAGATE;
 }
 
+/* ── The magic lens (design.md §6.6) ────────────────────────────────────────
+ * Under the plate the toggles are shown again, clipped to it: magnified
+ * while it is pressed, and in the lens colour (a tab bar's accent). As the
+ * plate slides across a toggle, only the part it covers changes, like a
+ * lens passing over it (liquid_glass_widgets' "magic lens": 1.15x). Drawn
+ * from the toggles' own nodes, in our snapshot: not in what the glass
+ * captures (§5.3-3), and no style changes while drawing (§5.3-5). */
+
+#define LENS_MAGNIFY 0.15
+
+/* The plate as the eye sees it: with its press swell, a capsule. */
+static gboolean
+lens_rect (GlassToggleGroup *self,
+           GskRoundedRect   *out)
+{
+  graphene_rect_t r;
+  double vs;
+
+  if (!gtk_widget_get_child_visible (self->plate) ||
+      !gtk_widget_compute_bounds (self->plate, GTK_WIDGET (self), &r) ||
+      r.size.width < 1.0f || r.size.height < 1.0f)
+    return FALSE;
+  vs = glass_panel_get_visual_scale (GLASS_PANEL (self->plate));
+  graphene_rect_inset (&r, -r.size.width * (float) (vs - 1.0) / 2.0f,
+                       -r.size.height * (float) (vs - 1.0) / 2.0f);
+  gsk_rounded_rect_init_from_rect (out, &r, MIN (r.size.width, r.size.height) / 2.0f);
+  return TRUE;
+}
+
+/* What is on each toggle (its label, its icon, a tab's box), not the
+ * toggles themselves: no hover backgrounds. */
+static void
+snapshot_marks (GlassToggleGroup *self,
+                GtkSnapshot      *snapshot)
+{
+  for (guint i = 0; i < self->buttons->len; i++)
+    {
+      GtkWidget *button = g_ptr_array_index (self->buttons, i);
+      GtkWidget *child = gtk_button_get_child (GTK_BUTTON (button));
+      graphene_point_t at;
+
+      if (child == NULL || !gtk_widget_get_mapped (button) ||
+          !gtk_widget_compute_point (button, GTK_WIDGET (self), &GRAPHENE_POINT_INIT (0, 0), &at))
+        continue;
+      gtk_snapshot_save (snapshot);
+      gtk_snapshot_translate (snapshot, &at);
+      gtk_widget_snapshot_child (button, child, snapshot);
+      gtk_snapshot_restore (snapshot);
+    }
+}
+
+static void
+glass_toggle_group_snapshot (GtkWidget   *widget,
+                             GtkSnapshot *snapshot)
+{
+  GlassToggleGroup *self = GLASS_TOGGLE_GROUP (widget);
+  GdkRGBA black = { 0, 0, 0, 1 }, lens_color, fg;
+  GskRoundedRect lens;
+  graphene_point_t c;
+  float opacity, magnify;
+  double vs;
+  gboolean recolour;
+
+  if (!lens_rect (self, &lens))
+    {
+      GTK_WIDGET_CLASS (glass_toggle_group_parent_class)->snapshot (widget, snapshot);
+      return;
+    }
+
+  /* 1. Everything as usual, except under the plate. */
+  gtk_snapshot_push_mask (snapshot, GSK_MASK_MODE_INVERTED_ALPHA);
+  gtk_snapshot_push_rounded_clip (snapshot, &lens);
+  gtk_snapshot_append_color (snapshot, &black, &lens.bounds);
+  gtk_snapshot_pop (snapshot);
+  gtk_snapshot_pop (snapshot);
+  GTK_WIDGET_CLASS (glass_toggle_group_parent_class)->snapshot (widget, snapshot);
+  gtk_snapshot_pop (snapshot);
+
+  /* 2. Under the plate: the marks again, through the lens. The group's own
+   * fade and swell (a morph, a press) as the parent applies them. */
+  gtk_widget_get_color (self->lens_node, &lens_color);
+  gtk_widget_get_color (widget, &fg);
+  recolour = !gdk_rgba_equal (&lens_color, &fg);
+  magnify = 1.0f + LENS_MAGNIFY * (float) CLAMP (glass_panel_get_press (GLASS_PANEL (self->plate)), 0.0, 1.0);
+  opacity = glass_panel_get_content_opacity (GLASS_PANEL (self));
+  vs = glass_panel_get_visual_scale (GLASS_PANEL (self));
+
+  if (opacity < 1.0f)
+    gtk_snapshot_push_opacity (snapshot, opacity);
+  gtk_snapshot_save (snapshot);
+  if (vs != 1.0)
+    {
+      graphene_point_t mid = GRAPHENE_POINT_INIT (gtk_widget_get_width (widget) / 2.0f,
+                                                  gtk_widget_get_height (widget) / 2.0f);
+
+      gtk_snapshot_translate (snapshot, &mid);
+      gtk_snapshot_scale (snapshot, (float) vs, (float) vs);
+      gtk_snapshot_translate (snapshot, &GRAPHENE_POINT_INIT (-mid.x, -mid.y));
+    }
+  gtk_snapshot_push_rounded_clip (snapshot, &lens);
+  graphene_rect_get_center (&lens.bounds, &c);
+  gtk_snapshot_translate (snapshot, &c);
+  gtk_snapshot_scale (snapshot, magnify, magnify);
+  gtk_snapshot_translate (snapshot, &GRAPHENE_POINT_INIT (-c.x, -c.y));
+  if (recolour)
+    {
+      graphene_rect_t all = GRAPHENE_RECT_INIT (0, 0, gtk_widget_get_width (widget), gtk_widget_get_height (widget));
+
+      gtk_snapshot_push_mask (snapshot, GSK_MASK_MODE_ALPHA);
+      snapshot_marks (self, snapshot);
+      gtk_snapshot_pop (snapshot);
+      gtk_snapshot_append_color (snapshot, &lens_color, &all);
+      gtk_snapshot_pop (snapshot);
+    }
+  else
+    snapshot_marks (self, snapshot);
+  gtk_snapshot_pop (snapshot);   /* the clip */
+  gtk_snapshot_restore (snapshot);
+  if (opacity < 1.0f)
+    gtk_snapshot_pop (snapshot);
+}
+
 static void
 glass_toggle_group_dispose (GObject *object)
 {
   GlassToggleGroup *self = GLASS_TOGGLE_GROUP (object);
 
   jelly_stop (self);
-  g_clear_object (&self->animation);
   g_clear_pointer (&self->pill_node, gtk_widget_unparent);
+  g_clear_pointer (&self->lens_node, gtk_widget_unparent);
   g_clear_pointer (&self->plate, gtk_widget_unparent);
 
   G_OBJECT_CLASS (glass_toggle_group_parent_class)->dispose (object);
@@ -683,6 +745,7 @@ glass_toggle_group_class_init (GlassToggleGroupClass *klass)
   object_class->set_property = glass_toggle_group_set_property;
 
   widget_class->size_allocate = glass_toggle_group_size_allocate;
+  widget_class->snapshot = glass_toggle_group_snapshot;
   widget_class->css_changed = glass_toggle_group_css_changed;
   widget_class->root = glass_toggle_group_root;
   widget_class->unmap = glass_toggle_group_unmap;
@@ -720,12 +783,10 @@ glass_toggle_group_class_init (GlassToggleGroupClass *klass)
 static void
 glass_toggle_group_init (GlassToggleGroup *self)
 {
-  AdwAnimationTarget *target;
   GtkEventController *press;
 
   self->buttons = g_ptr_array_new ();
   self->names = g_ptr_array_new_with_free_func (g_free);
-  self->progress = 1.0;
 
   /* Each toggle is drawn inside a pill, like the plate under it. */
   self->box = glass_pill_box_new ();
@@ -739,13 +800,17 @@ glass_toggle_group_init (GlassToggleGroup *self)
   glass_panel_set_has_shadow (GLASS_PANEL (self->plate), FALSE);
   glass_panel_set_adaptive (GLASS_PANEL (self->plate), GLASS_ADAPTIVE_MODE_OFF);
   glass_panel_set_press_grow (GLASS_PANEL (self->plate), 12.0, 0.2);
+  /* Glass over the capsule's glass, frosted already: the plate is a lens. */
+  glass_panel_set_plain_body (GLASS_PANEL (self->plate), TRUE);
   gtk_widget_set_can_target (self->plate, FALSE);
   gtk_widget_insert_before (self->plate, GTK_WIDGET (self), self->box);
 
   /* Visible (an invisible node's style is not kept up to date) but never
-   * drawn: it resolves the plate's tint from CSS. */
+   * drawn: they resolve the plate's tint and the lens colour from CSS. */
   self->pill_node = glass_style_node_new ("pill");
   gtk_widget_set_parent (self->pill_node, GTK_WIDGET (self));
+  self->lens_node = glass_style_node_new ("lens");
+  gtk_widget_set_parent (self->lens_node, GTK_WIDGET (self));
 
   /* Dragging the plate: in the capture phase, so it sees the press before
    * the toggle under it, and claims it only once the pointer moves. */
@@ -762,10 +827,6 @@ glass_toggle_group_init (GlassToggleGroup *self)
   gtk_event_controller_set_propagation_phase (press, GTK_PHASE_CAPTURE);
   g_signal_connect (press, "event", G_CALLBACK (press_event), self);
   gtk_widget_add_controller (GTK_WIDGET (self), press);
-
-  target = adw_callback_animation_target_new (animation_value, self, NULL);
-  self->animation = adw_timed_animation_new (GTK_WIDGET (self), 0.0, 1.0, 280, target);
-  adw_timed_animation_set_easing (ADW_TIMED_ANIMATION (self->animation), ADW_EASE_OUT_CUBIC);
 }
 
 /**
@@ -853,7 +914,7 @@ glass_toggle_group_remove (GlassToggleGroup *self,
     {
       /* The plate jumps: it has nowhere to slide from. */
       self->active = MIN (index, self->buttons->len > 0 ? self->buttons->len - 1 : 0);
-      self->have_from = FALSE;
+      jelly_stop (self);
       if (self->active < self->buttons->len)
         mark (g_ptr_array_index (self->buttons, self->active), TRUE);
     }
@@ -895,7 +956,7 @@ glass_toggle_group_remove_all (GlassToggleGroup *self)
     }
   self->active = 0;
   self->shown_active = 0;
-  self->have_from = FALSE;
+  jelly_stop (self);
   gtk_widget_queue_allocate (GTK_WIDGET (self));
 
   g_object_notify_by_pspec (G_OBJECT (self), props[PROP_N_TOGGLES]);

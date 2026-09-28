@@ -73,6 +73,7 @@ glass_public_sources = files(
 )
 
 glass_private_sources = files(
+  'glass-jelly.c',
   'glass-style-node.c',
   'glass-pill-box.c',
   'glass-standalone.c',

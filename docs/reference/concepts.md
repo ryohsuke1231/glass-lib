@@ -56,10 +56,22 @@ first panel's material and tint.
 ## Morphing
 
 A panel shown while another with the same [property@Glass.Panel:morph-id]
-hides takes over that panel's glass, which changes shape into its own (a
-search button becoming a search field). In a group, a panel that is shown
-comes out of its neighbour like a drop, and one that is hidden goes back
-into it. Animations follow the "reduce motion" setting.
+hides takes over that panel's glass, which travels into its own shape (a
+search button becoming a search field); the old glass stays behind as a drop
+that shrinks away, joined to the new one until they part. In a group, a panel
+that is shown comes out of its neighbour like a drop, and one that is hidden
+goes back into it. A panel shown with no glass to come from materializes: it
+fades up as it settles in from slightly larger, its content sharpening last;
+hidden, its glass swells a little as it dissolves.
+
+Moving glass hangs on springs, one per edge, the front edge stiffer than the
+back: it stretches as it travels and runs on a little when it stops. The
+plate of a [class@Glass.ToggleGroup] (and of a [class@Glass.TabBar]) moves
+that way, and magnifies what is under it while pressed; in a tab bar the
+page's icon and title take the accent colour where the plate covers them.
+The knobs of [class@Glass.Switch] and [class@Glass.Slider] hang from their
+place the same way. The menu of a [class@Glass.MenuButton] grows out of the
+button; in a capsule the button leaves it while the menu is open.
 
 Morphs follow the layout frame by frame: to animate a change of size, animate
 the allocation (a `GtkRevealer`, `GtkStack:interpolate-size`) and the glass
@@ -88,7 +100,10 @@ use.
 - **High contrast**: the glass becomes opaque with an outline.
 - **Reduced transparency** ([property@Glass.Context:reduce-transparency]):
   no refraction, more blur, a stronger tint.
-- **Reduced motion** (`gtk-enable-animations` off): no morphing or press
-  animations, no colour transitions.
+- **No animations** (`gtk-enable-animations` off): no morphing, springs or
+  press animations, no colour transitions.
+- **Reduced motion** (`gtk-interface-reduced-motion`, GTK 4.22): nothing
+  travels, stretches, overshoots or swells; glass that appears or morphs
+  fades instead, and menus open without growing out of their button.
 - The parts use the accessible roles of their libadwaita counterparts
   (`SWITCH`, `SLIDER`, `SEARCH_BOX`...); a panel is a `GROUP`.

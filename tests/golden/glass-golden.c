@@ -12,6 +12,10 @@
  * its canvas (gradient_step, max_displacement_px) computed the same way, the
  * lens at scale 1 and the edge damping on - i.e. the reference's behaviour.
  *
+ * glass-lib's iOS 27 material (design.md §10.3.2) has no reference: it is
+ * checked against its own arithmetic over flat backdrops instead
+ * (check_ios27()).
+ *
  *   glass-golden [--write DIR] [--verbose]
  *
  * --write saves reference / core / amplified-difference PNGs of every case
@@ -181,6 +185,17 @@ static const struct { const char *name; double value; gboolean px; } optics[] = 
   { "saturation", 1.0, FALSE },
   { "surface_light_enabled", 1.0, FALSE },
 };
+
+/* glass-lib's iOS 27 material, light (spec/params.json: REGULAR, surface and
+ * outline ios27). NULL: the reference's look, as in every compared case. */
+typedef struct {
+  double tint, tint_strength, saturation;
+  double frost_opacity, frost_clamp;
+  double rim_shade, rim_shade_ends, rim_light, edge_absorption;
+} Ios27;
+
+static const Ios27 ios27_light = { 0.973, 0.53, 2.1, 0.73, 0.4, 1.0, 0.2, 1.0, 0.035 };
+static const Ios27 *ios27;
 
 /* ── GL plumbing ─────────────────────────────────────────────────────────── */
 
@@ -365,6 +380,27 @@ set_uniforms (GLuint program, gboolean reference, const Layout *l, const Variant
       double min_res = MAX (MIN (l->canvas_w, l->canvas_h), 1.0);
 
       glUniform1i (glGetUniformLocation (program, "glass_backdrop"), 0);
+      if (ios27)
+        {
+          /* The frost's cloud: the same texture will do over a flat backdrop. */
+          glUniform1i (glGetUniformLocation (program, "glass_frost"), 0);
+          u1f (program, "glass_body_mode", 1.0);
+          u1f (program, "saturation", ios27->saturation);
+          u1f (program, "tint_r", ios27->tint);
+          u1f (program, "tint_g", ios27->tint);
+          u1f (program, "tint_b", ios27->tint);
+          u1f (program, "tint_strength", ios27->tint_strength);
+          u1f (program, "frost_opacity", ios27->frost_opacity);
+          u1f (program, "frost_clamp", ios27->frost_clamp);
+          u1f (program, "rim_shade", ios27->rim_shade);
+          u1f (program, "rim_shade_ends", ios27->rim_shade_ends);
+          u1f (program, "rim_light", ios27->rim_light);
+          u1f (program, "edge_absorption", ios27->edge_absorption);
+          /* The ios27-s edge: no macOS rim, no inner shadow, no sheen. */
+          u1f (program, "rim_intensity", 0.0);
+          u1f (program, "ao_intensity", 0.0);
+          u1f (program, "sheen_intensity", 0.0);
+        }
       glUniform4f (glGetUniformLocation (program, "glass_rect"),
                    (float) l->glass_x, (float) l->glass_y, (float) l->glass_w, (float) l->glass_h);
       /* What the reference derived from its canvas (design.md §10.2). */
@@ -461,6 +497,88 @@ save_png (const char *dir, const char *name, const char *suffix, const guint8 *p
   g_object_unref (pixbuf);
 }
 
+static int
+luma8 (const guint8 *p)
+{
+  return (int) lround (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]);
+}
+
+/* The iOS 27 material against its own arithmetic (glass_material.glsl) over
+ * flat black and white: the body is the tint laid over them, the half-point
+ * line darkens the edge across the light axis, and the lit lobe (the bottom,
+ * light from the top) brightens the rim. Returns the failures. */
+static int
+check_ios27 (GLuint core, GLuint vao)
+{
+  const Variant v = { "ios27", 1, 16, 0.015, 0.0, 0.0, 0, 1, 1, 4, 1920, 1080, FALSE };
+  const double flat[2] = { 0.0, 1.0 };
+  int failures = 0;
+
+  ios27 = &ios27_light;
+  for (int f = 0; f < 2; f++)
+    {
+      Layout l;
+      g_autofree guint8 *texels = NULL, *px = NULL;
+      GLuint backdrop;
+      int gx, gy, gw, gh, cx, cy, centre, expect, edge_min = 255, rim_max = 0;
+      double body, adaptive, c;
+
+      layout_for (&l, &shapes[0], &v);
+      texels = g_malloc ((gsize) l.tex_w * l.tex_h * 4);
+      for (int i = 0; i < l.tex_w * l.tex_h; i++)
+        put (texels + i * 4, flat[f], flat[f], flat[f]);
+      backdrop = texture_new (l.tex_w, l.tex_h, texels);
+      px = render (core, FALSE, vao, backdrop, &l, &v);
+      glDeleteTextures (1, &backdrop);
+
+      /* Rows run top down (quad.vert). */
+      gx = (int) (l.glass_x - l.out_x);
+      gy = (int) (l.glass_y - l.out_y);
+      gw = (int) l.glass_w;
+      gh = (int) l.glass_h;
+      cx = gx + gw / 2;
+      cy = gy + gh / 2;
+
+      /* The body: the tint over the backdrop, then the saturation (grey
+       * stays grey) and the +-20% adaptive nudge towards the tint. */
+      body = flat[f];
+      c = body + (ios27_light.tint - body) * ios27_light.tint_strength;
+      adaptive = 1.2 + (0.8 - 1.2) * body;
+      c += (ios27_light.tint - c) * ios27_light.tint_strength * 0.12 * (adaptive - 1.0);
+      expect = (int) lround (c * 255.0);
+      centre = luma8 (px + ((gsize) cy * l.out_w + cx) * 4);
+
+      /* The line on the left edge (across the light axis): the first
+       * pixels that are mostly glass. */
+      for (int x = gx - 1; x < gx + 3; x++)
+        {
+          const guint8 *p = px + ((gsize) cy * l.out_w + x) * 4;
+
+          if (p[3] >= 200)
+            edge_min = MIN (edge_min, luma8 (p) * 255 / MAX (p[3], 1));
+        }
+      /* The lobe on the bottom edge, a pixel or two in. */
+      for (int y = gy + gh - 4; y < gy + gh; y++)
+        {
+          const guint8 *p = px + ((gsize) y * l.out_w + cx) * 4;
+
+          if (p[3] >= 250)
+            rim_max = MAX (rim_max, luma8 (p));
+        }
+
+      g_print ("glass-golden: ios27 over %s: centre %d (expected %d), left edge %d, bottom rim %d\n",
+               f ? "white" : "black", centre, expect, edge_min, rim_max);
+      if (abs (centre - expect) > 2)
+        failures++;
+      if (f == 1 && edge_min > centre - 25)
+        failures++;               /* the line: 0.314 below white, across the light */
+      if (f == 0 && rim_max < centre + 6)
+        failures++;               /* the lit lobe: about +13/255 over this body */
+    }
+  ios27 = NULL;
+  return failures;
+}
+
 int
 main (int argc, char **argv)
 {
@@ -555,5 +673,12 @@ main (int argc, char **argv)
         }
 
   g_print ("glass-golden: %d cases, %d failed, largest difference %d/255\n", cases, failures, max_overall);
+
+  {
+    int ios_failures = check_ios27 (core, vao);
+
+    g_print ("glass-golden: ios27 material: %s\n", ios_failures ? "FAIL" : "ok");
+    failures += ios_failures;
+  }
   return failures ? 1 : 0;
 }

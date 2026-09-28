@@ -221,6 +221,12 @@ glasspanel.toggle-group > pill {
   color: rgb(255 255 255 / 34%);
 }
 
+/* What shows through the plate (the magic lens, design.md §6.6): the
+ * group's own colour, the toggles as they are (a tab bar: the accent). */
+glasspanel.toggle-group > lens {
+  color: inherit;
+}
+
 glasspanel.toggle-group.glass-dark > pill {
   color: rgb(255 255 255 / 18%);
 }
@@ -337,9 +343,10 @@ glasspanel.toggle-group.tab-bar button.tab label {
   font-weight: 600;
 }
 
-/* On the item's box, not the button: a theme can set the colour of every
- * button from USER priority (docs/memo.md 地雷27). */
-glasspanel.toggle-group.tab-bar button.tab.active > box {
+/* The page shown is in the accent colour where the plate covers it (the
+ * magic lens, design.md §6.6): not the button's colour, which a theme can
+ * set from USER priority (docs/memo.md 地雷27), and not all at once. */
+glasspanel.toggle-group.tab-bar > lens {
   color: var(--accent-color);
 }
 

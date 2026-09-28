@@ -8,6 +8,9 @@
  */
 #include "glass-private.h"
 
+#include <adwaita.h>
+#include <math.h>
+
 /**
  * GlassMenuButton:
  *
@@ -34,6 +37,15 @@ struct _GlassMenuButton {
   GtkWidget  *button;
   GtkPopover *popover;
   GMenuModel *model;
+
+  /* The menu comes out of the button (design.md §6.8). In a capsule the
+   * button leaves it while the menu is open (collapse 0 -> 1: its width,
+   * so the capsule's glass closes up behind it) and comes back after. The
+   * popover stays where the button was meanwhile (pinned). */
+  AdwAnimation   *collapse_anim;
+  double          collapse;
+  gboolean        pinned;
+  graphene_rect_t slot;            /* the button when the menu opened, root coordinates */
 };
 
 enum {
@@ -56,9 +68,75 @@ G_DEFINE_FINAL_TYPE_WITH_CODE (GlassMenuButton, glass_menu_button, GTK_TYPE_WIDG
                                G_IMPLEMENT_INTERFACE (GTK_TYPE_ACTIONABLE, glass_menu_button_actionable_init))
 
 static void
+collapse_value (double value, gpointer data)
+{
+  GlassMenuButton *self = data;
+
+  self->collapse = CLAMP (value, 0.0, 1.0);
+  gtk_widget_set_opacity (self->button, 1.0 - self->collapse);
+  /* Narrowing out of the capsule cuts the button off rather than squeezing
+   * it; at rest nothing is cut (its focus ring reaches outside). */
+  gtk_widget_set_overflow (GTK_WIDGET (self), self->collapse > 0.0 ? GTK_OVERFLOW_HIDDEN : GTK_OVERFLOW_VISIBLE);
+  gtk_widget_queue_resize (GTK_WIDGET (self));
+}
+
+static void
+collapse_to (GlassMenuButton *self,
+             double           to)
+{
+  if (self->collapse_anim == NULL)
+    {
+      AdwAnimationTarget *target = adw_callback_animation_target_new (collapse_value, self, NULL);
+
+      /* Critically damped: the capsule's width must not bounce. */
+      self->collapse_anim = adw_spring_animation_new (GTK_WIDGET (self), 0.0, 1.0,
+                                                      adw_spring_params_new (1.0, 1.0, 260.0), target);
+    }
+  adw_spring_animation_set_value_from (ADW_SPRING_ANIMATION (self->collapse_anim), self->collapse);
+  adw_spring_animation_set_value_to (ADW_SPRING_ANIMATION (self->collapse_anim), to);
+  adw_animation_play (self->collapse_anim);
+}
+
+/* In a capsule (a GlassButtonGroup, the header bar's too): the button's
+ * glass is part of the capsule's, and leaves it with the menu. */
+static gboolean
+in_capsule (GlassMenuButton *self)
+{
+  GtkWidget *panel = gtk_widget_get_ancestor (GTK_WIDGET (self), GLASS_TYPE_PANEL);
+
+  return panel != NULL && GLASS_IS_BUTTON_GROUP (panel);
+}
+
+/* While pinned the popover points at where the button was, whatever the
+ * capsule does to us meanwhile. */
+static void
+pin_popover (GlassMenuButton *self)
+{
+  GtkWidget *root = GTK_WIDGET (gtk_widget_get_root (GTK_WIDGET (self)));
+  graphene_point_t at;
+
+  if (root == NULL ||
+      !gtk_widget_compute_point (GTK_WIDGET (self), root, graphene_point_zero (), &at))
+    return;
+  gtk_popover_set_pointing_to (self->popover,
+                               &(GdkRectangle) { (int) lround (self->slot.origin.x - at.x),
+                                                 (int) lround (self->slot.origin.y - at.y),
+                                                 (int) lround (self->slot.size.width),
+                                                 (int) lround (self->slot.size.height) });
+}
+
+static void
 popover_closed (GtkPopover *popover, GlassMenuButton *self)
 {
   gtk_widget_unset_state_flags (self->button, GTK_STATE_FLAG_CHECKED);
+  if (self->pinned)
+    {
+      self->pinned = FALSE;
+      gtk_popover_set_pointing_to (popover, NULL);
+    }
+  /* Back into the capsule. */
+  if (self->collapse > 0.0)
+    collapse_to (self, 0.0);
 }
 
 static void
@@ -108,18 +186,39 @@ static void
 glass_menu_button_size_allocate (GtkWidget *widget, int width, int height, int baseline)
 {
   GlassMenuButton *self = GLASS_MENU_BUTTON (widget);
+  int natural = width;
 
-  gtk_widget_allocate (self->button, width, height, baseline, NULL);
+  /* Leaving the capsule the button keeps its size, centred and cut off by
+   * our narrowing width (overflow: hidden). */
+  if (self->collapse > 0.0)
+    {
+      gtk_widget_measure (self->button, GTK_ORIENTATION_HORIZONTAL, height, NULL, &natural, NULL, NULL);
+      natural = MAX (natural, width);
+    }
+  gtk_widget_allocate (self->button, natural, height, baseline,
+                       natural > width ? gsk_transform_translate (NULL, &GRAPHENE_POINT_INIT ((width - natural) / 2.0f, 0))
+                                       : NULL);
   if (self->popover)
-    gtk_popover_present (self->popover);
+    {
+      if (self->pinned)
+        pin_popover (self);
+      gtk_popover_present (self->popover);
+    }
 }
 
 static void
 glass_menu_button_measure (GtkWidget *widget, GtkOrientation orientation, int for_size,
                            int *minimum, int *natural, int *minimum_baseline, int *natural_baseline)
 {
-  gtk_widget_measure (GLASS_MENU_BUTTON (widget)->button, orientation, for_size,
+  GlassMenuButton *self = GLASS_MENU_BUTTON (widget);
+
+  gtk_widget_measure (self->button, orientation, for_size,
                       minimum, natural, minimum_baseline, natural_baseline);
+  if (orientation == GTK_ORIENTATION_HORIZONTAL && self->collapse > 0.0)
+    {
+      *minimum = (int) floor (*minimum * (1.0 - self->collapse));
+      *natural = (int) floor (*natural * (1.0 - self->collapse));
+    }
 }
 
 static void
@@ -129,6 +228,7 @@ glass_menu_button_dispose (GObject *object)
 
   glass_menu_button_set_popover (self, NULL);
   g_clear_object (&self->model);
+  g_clear_object (&self->collapse_anim);
   g_clear_pointer (&self->button, gtk_widget_unparent);
 
   G_OBJECT_CLASS (glass_menu_button_parent_class)->dispose (object);
@@ -475,6 +575,36 @@ glass_menu_button_popup (GlassMenuButton *self)
   if (self->popover == NULL)
     return;
   place_popover (self);
+
+  /* Out of the button (design.md §6.8): the popover's surface reaches back
+   * over the button, where its glass starts, and stays there while the
+   * button leaves its capsule. The contents are where they always were,
+   * POPOVER_GAP below. With less motion, just the menu. */
+  if (GLASS_IS_POPOVER (self->popover))
+    {
+      GtkWidget *root = GTK_WIDGET (gtk_widget_get_root (GTK_WIDGET (self)));
+      GlassPopover *glass = GLASS_POPOVER (self->popover);
+
+      if (root && !glass_motion_reduced (GTK_WIDGET (self)) &&
+          gtk_widget_compute_bounds (self->button, root, &self->slot))
+        {
+          int reach = (int) ceil (self->slot.size.height);
+
+          glass_popover_set_origin (glass, &self->slot, MIN (self->slot.size.width, self->slot.size.height) / 2.0);
+          glass_popover_set_reach (glass, reach + POPOVER_GAP);
+          gtk_popover_set_offset (self->popover, 0, -reach);
+          self->pinned = TRUE;
+          pin_popover (self);
+          if (in_capsule (self))
+            collapse_to (self, 1.0);
+        }
+      else
+        {
+          glass_popover_set_origin (glass, NULL, 0.0);
+          glass_popover_set_reach (glass, 0);
+        }
+    }
+
   gtk_widget_set_state_flags (self->button, GTK_STATE_FLAG_CHECKED, FALSE);
   gtk_popover_popup (self->popover);
 }
@@ -490,6 +620,11 @@ glass_menu_button_popdown (GlassMenuButton *self)
 {
   g_return_if_fail (GLASS_IS_MENU_BUTTON (self));
 
-  if (self->popover)
+  if (self->popover == NULL)
+    return;
+  /* Back into the button first. */
+  if (GLASS_IS_POPOVER (self->popover))
+    glass_popover_dismiss (GLASS_POPOVER (self->popover));
+  else
     gtk_popover_popdown (self->popover);
 }

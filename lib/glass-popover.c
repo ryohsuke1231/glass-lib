@@ -54,7 +54,27 @@ struct _GlassPopover {
   graphene_point_t backdrop_offset;
   graphene_rect_t  backdrop_area;
   GdkRGBA          backdrop_fill;
+
+  /* Coming out of its button and going back in (design.md §6.8): the glass
+   * grows out of the button's place on the jelly's springs, the button's
+   * own glass left behind as a drop that shrinks away; closing, the reverse. */
+  gboolean         has_origin;
+  graphene_rect_t  origin;           /* the root's coordinates */
+  double           origin_radius;
+  GlassJelly       jelly;
+  gboolean         morphing;
+  gboolean         closing;
+  gboolean         close_done;       /* back in the button: pop down on the next tick */
+  graphene_rect_t  morph_from;       /* ours */
+  double           morph_t;          /* 0..1, how far it has come */
+  guint            tick;
 };
+
+/* The drop left at the button is gone by this much of the way out, and
+ * joined to the glass over this width, px (liquid_glass_widgets' morph
+ * engine: 40%, and the smooth union's width at its widest). */
+#define DROP_SPAN 0.4
+#define DROP_MERGE 24.0
 
 G_DEFINE_FINAL_TYPE (GlassPopover, glass_popover, GTK_TYPE_POPOVER)
 
@@ -185,6 +205,84 @@ backdrop_node (GlassPopover           *self,
   return gsk_render_node_ref (self->backdrop);
 }
 
+/* Where the glass is this frame, coming out of the button or going back in
+ * (@box: where it rests). FALSE when it is not moving. Read in the
+ * snapshot: the button's place and ours as they are now (§5.3-2). */
+static gboolean
+morph_step (GlassPopover           *self,
+            const graphene_point_t *offset,
+            const graphene_rect_t  *box,
+            graphene_rect_t        *glass,
+            graphene_rect_t        *drop,
+            double                 *drop_radius,
+            gboolean               *has_drop,
+            float                  *content)
+{
+  GtkWidget *widget = GTK_WIDGET (self);
+  GdkFrameClock *clock = gtk_widget_get_frame_clock (widget);
+  graphene_rect_t whole = GRAPHENE_RECT_INIT (0, 0, gtk_widget_get_width (widget), gtk_widget_get_height (widget));
+  graphene_rect_t slot = self->origin;
+  gboolean moving;
+  double left;
+
+  *has_drop = FALSE;
+  if (!self->morphing)
+    return FALSE;
+
+  /* The button, in our coordinates. GTK may have flipped us away from it
+   * (no room below): there is nothing to come out of, just appear. */
+  slot.origin.x += offset->x;
+  slot.origin.y += offset->y;
+  if (!graphene_rect_contains_rect (&whole, &slot))
+    {
+      self->morphing = FALSE;
+      if (self->closing)
+        self->close_done = TRUE;
+      return FALSE;
+    }
+
+  if (!self->jelly.active)
+    {
+      self->morph_from = self->closing ? *box : slot;
+      self->morph_t = 0.0;
+      glass_jelly_start (&self->jelly, &glass_jelly_travel, &self->morph_from, TRUE, TRUE);
+    }
+  glass_jelly_set_mark (&self->jelly, self->closing ? &slot : box);
+  moving = glass_jelly_step (&self->jelly, clock ? gdk_frame_clock_get_frame_time (clock) : g_get_monotonic_time ());
+  glass_jelly_get (&self->jelly, glass);
+  self->morph_t = MAX (self->morph_t, glass_jelly_progress (&self->jelly, &self->morph_from));
+  if (!moving)
+    {
+      glass_jelly_stop (&self->jelly);
+      if (self->closing)
+        self->close_done = TRUE;
+      else
+        self->morphing = FALSE;
+    }
+
+  /* Opening, the button's glass is left behind as a drop that shrinks away;
+   * closing, the glass pours back into one that grows there. */
+  left = self->closing ? CLAMP ((self->morph_t - (1.0 - DROP_SPAN)) / DROP_SPAN, 0.0, 1.0)
+                       : 1.0 - self->morph_t / DROP_SPAN;
+  if (left > 0.02)
+    {
+      float cx = slot.origin.x + slot.size.width / 2.0f;
+      float cy = slot.origin.y + slot.size.height / 2.0f;
+
+      *drop = GRAPHENE_RECT_INIT (cx - slot.size.width * (float) left / 2.0f,
+                                  cy - slot.size.height * (float) left / 2.0f,
+                                  MAX (slot.size.width * (float) left, 1.0f),
+                                  MAX (slot.size.height * (float) left, 1.0f));
+      *drop_radius = MIN (self->origin_radius * left, MIN (drop->size.width, drop->size.height) / 2.0);
+      *has_drop = TRUE;
+    }
+
+  /* The items show once the glass has begun to open, and go first. */
+  *content = self->closing ? (float) CLAMP (1.0 - self->morph_t / 0.5, 0.0, 1.0)
+                           : (float) CLAMP ((self->morph_t - 0.3) / 0.7, 0.0, 1.0);
+  return TRUE;
+}
+
 static void
 glass_popover_snapshot (GtkWidget   *widget,
                         GtkSnapshot *snapshot)
@@ -193,12 +291,15 @@ glass_popover_snapshot (GtkWidget   *widget,
   GtkWidget *contents = find_contents (widget);
   GtkWidget *window;
   graphene_point_t offset, origin;
-  graphene_rect_t box;
+  graphene_rect_t box, rect, drop;
   GskRenderNode *backdrop = NULL;
   GtkSnapshot *glass;
   GskRenderNode *glass_node;
   GdkRGBA bg;
   GskRoundedRect shape;
+  double radius, drop_radius = 0.0;
+  gboolean moving, has_drop = FALSE;
+  float content = 1.0f;
 
   gtk_widget_get_color (self->bg_node, &bg);
   if (contents == NULL || !gtk_widget_compute_bounds (contents, widget, &box) ||
@@ -209,20 +310,27 @@ glass_popover_snapshot (GtkWidget   *widget,
                                  &bg)) == NULL)
     goto plain;
 
+  rect = box;
+  moving = morph_step (self, &offset, &box, &rect, &drop, &drop_radius, &has_drop, &content);
+  radius = MIN (RADIUS, MIN (rect.size.width, rect.size.height) / 2.0);
+
   /* The glass first, aside: the plain look has a shadow of its own, so the
    * glass's is only added once there is glass. */
   glass = gtk_snapshot_new ();
-  if (!glass_standalone_draw (self->glass, widget, glass, backdrop, &box, (double[4]) { RADIUS, RADIUS, RADIUS, RADIUS },
-                              GLASS_MATERIAL_MENU, &bg, FALSE))
+  if (!glass_standalone_draw_drop (self->glass, widget, glass, backdrop, &rect,
+                                   (double[4]) { radius, radius, radius, radius },
+                                   has_drop ? &drop : NULL, drop_radius, DROP_MERGE,
+                                   GLASS_MATERIAL_MENU, &bg, FALSE))
     {
       g_object_unref (glass);
       goto plain;
     }
   gsk_render_node_unref (backdrop);
 
-  /* A soft shadow within the popover's own margins, under the glass. */
-  gsk_rounded_rect_init_from_rect (&shape, &box, RADIUS);
-  gtk_snapshot_append_outset_shadow (snapshot, &shape, &(GdkRGBA) { 0, 0, 0.02f, 0.22f }, 0, 2, 0, 8);
+  /* A soft shadow within the popover's own margins, under the glass; it
+   * comes and goes with the items while the glass moves. */
+  gsk_rounded_rect_init_from_rect (&shape, &rect, (float) radius);
+  gtk_snapshot_append_outset_shadow (snapshot, &shape, &(GdkRGBA) { 0, 0, 0.02f, 0.22f * content }, 0, 2, 0, 8);
   glass_node = gtk_snapshot_free_to_node (glass);
   if (glass_node)
     {
@@ -232,12 +340,23 @@ glass_popover_snapshot (GtkWidget   *widget,
 
   /* The contents' children, without the contents' own background. They
    * are placed from the contents' content box, which is its origin: the
-   * bounds are its border box (padding and border off). */
+   * bounds are its border box (padding and border off). While the glass
+   * moves they fade, inside it. */
+  if (moving)
+    {
+      gtk_snapshot_push_rounded_clip (snapshot, &shape);
+      gtk_snapshot_push_opacity (snapshot, content);
+    }
   gtk_snapshot_save (snapshot);
   gtk_snapshot_translate (snapshot, &origin);
   for (GtkWidget *child = gtk_widget_get_first_child (contents); child; child = gtk_widget_get_next_sibling (child))
     gtk_widget_snapshot_child (contents, child, snapshot);
   gtk_snapshot_restore (snapshot);
+  if (moving)
+    {
+      gtk_snapshot_pop (snapshot);
+      gtk_snapshot_pop (snapshot);
+    }
   return;
 
 plain:
@@ -255,6 +374,93 @@ window_rendered (GdkSurface     *surface,
   return FALSE;
 }
 
+/* Draws every frame while the glass moves (it is stepped in the snapshot);
+ * once it has poured back into the button, pops down. */
+static gboolean
+morph_tick (GtkWidget     *widget,
+            GdkFrameClock *clock,
+            gpointer       data)
+{
+  GlassPopover *self = GLASS_POPOVER (widget);
+
+  if (self->close_done)
+    {
+      self->tick = 0;
+      self->close_done = FALSE;
+      self->closing = FALSE;
+      self->morphing = FALSE;
+      gtk_popover_popdown (GTK_POPOVER (self));
+      return G_SOURCE_REMOVE;
+    }
+  gtk_widget_queue_draw (widget);
+  if (!self->morphing)
+    {
+      self->tick = 0;
+      return G_SOURCE_REMOVE;
+    }
+  return G_SOURCE_CONTINUE;
+}
+
+static void
+start_morph (GlassPopover *self,
+             gboolean      closing)
+{
+  self->morphing = TRUE;
+  self->closing = closing;
+  self->close_done = FALSE;
+  /* From wherever the glass is; a new start reads it in the snapshot. */
+  if (!self->jelly.active)
+    self->morph_t = 0.0;
+  else
+    {
+      glass_jelly_get (&self->jelly, &self->morph_from);
+      self->morph_t = 0.0;
+    }
+  if (self->tick == 0)
+    self->tick = gtk_widget_add_tick_callback (GTK_WIDGET (self), morph_tick, NULL, NULL);
+  gtk_widget_queue_draw (GTK_WIDGET (self));
+}
+
+void
+glass_popover_set_origin (GlassPopover          *self,
+                          const graphene_rect_t *rect,
+                          double                 radius)
+{
+  self->has_origin = rect != NULL;
+  if (rect)
+    {
+      self->origin = *rect;
+      self->origin_radius = radius;
+    }
+}
+
+void
+glass_popover_set_reach (GlassPopover *self,
+                         int           reach)
+{
+  GtkWidget *contents = find_contents (GTK_WIDGET (self));
+
+  /* GtkPopover's own child: its margin makes the surface reach back over
+   * the button, transparent, above the contents. */
+  if (contents)
+    gtk_widget_set_margin_top (contents, MAX (reach, 0));
+}
+
+void
+glass_popover_dismiss (GlassPopover *self)
+{
+  GtkWidget *widget = GTK_WIDGET (self);
+
+  if (!self->has_origin || !gtk_widget_get_mapped (widget) ||
+      glass_motion_reduced (widget) || self->closing)
+    {
+      if (!self->closing)
+        gtk_popover_popdown (GTK_POPOVER (self));
+      return;
+    }
+  start_morph (self, TRUE);
+}
+
 static void
 glass_popover_map (GtkWidget *widget)
 {
@@ -270,12 +476,23 @@ glass_popover_map (GtkWidget *widget)
       self->render_handler = g_signal_connect_after (self->watched, "render",
                                                      G_CALLBACK (window_rendered), self);
     }
+
+  /* Out of the button, unless motion is kept down (then it just appears). */
+  glass_jelly_stop (&self->jelly);
+  if (self->has_origin && !glass_motion_reduced (widget))
+    start_morph (self, FALSE);
 }
 
 static void
 glass_popover_unmap (GtkWidget *widget)
 {
   GlassPopover *self = GLASS_POPOVER (widget);
+
+  if (self->tick)
+    gtk_widget_remove_tick_callback (widget, self->tick);
+  self->tick = 0;
+  self->morphing = self->closing = self->close_done = FALSE;
+  glass_jelly_stop (&self->jelly);
 
   if (self->watched)
     {
@@ -377,7 +594,8 @@ static void
 item_clicked (GtkButton    *button,
               GlassPopover *self)
 {
-  gtk_popover_popdown (GTK_POPOVER (self));
+  /* Back into the button it came out of, then gone. */
+  glass_popover_dismiss (self);
 }
 
 static GtkWidget *

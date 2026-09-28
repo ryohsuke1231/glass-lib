@@ -8,7 +8,10 @@
     "tint-strength is how much of the tint colour the glass mixes in; the colour itself is the material's",
     "(tint, or the theme's with tint_from_theme), the context's tint-color, or the panel's tint.",
     "materials: in GlassMaterial order. Each sets only the keys it overrides (design §11.2: the panel's",
-    "value, then the context's, then the material's, then the default); tint = its colour (rgb)."
+    "value, then the context's, then the material's, then the default); tint = its colour (rgb).",
+    "values_dark / tint_dark: what changes in the dark appearance (AdwStyleManager:dark), over values / tint.",
+    "surface / outline: the body and the edge the material is drawn with (surfaces, outlines below): fixed",
+    "terms of the material, not settings."
   ],
   "params": [
     { "key": "max-z",                     "uniform": "max_z",                     "default": 88.0, "min": 0.0, "max": 100.0, "px": true,  "extension_key": "glass-max-z" },
@@ -64,45 +67,103 @@
       "edge-smoothing": 0.4, "rim-width": 2.3, "rim-power": 3.0, "rim-intensity": 0.5, "rim-directional-power": 1.9,
       "ao-radius": 0.6, "ao-intensity": 0.65, "chroma-strength": 0.0, "sheen-intensity": 0.0,
       "lens": "thick"
+    },
+    "ios27-s": {
+      "_comment": "The lens of apple-s; the rim and the inner shadow give way to iOS 27's outline (outlines).",
+      "edge-smoothing": 0.4, "rim-intensity": 0.0, "ao-intensity": 0.0, "chroma-strength": 0.0, "sheen-intensity": 0.0,
+      "lens": "thin"
+    },
+    "ios27-l": {
+      "_comment": "The lens of apple-l, with iOS 27's outline.",
+      "edge-smoothing": 0.4, "rim-intensity": 0.0, "ao-intensity": 0.0, "chroma-strength": 0.0, "sheen-intensity": 0.0,
+      "lens": "thick"
+    }
+  },
+  "surfaces": {
+    "_comment": [
+      "The body of the glass, per appearance (design.md §10.3.2, shaders/core/glass_material.glsl).",
+      "plain: the reference's (the blurred backdrop at a saturation of 1.5, then the tint mixed in).",
+      "ios27: SwiftUI's glassEffect(.regular) on iOS 27 as liquid_glass_widgets measured it against the native",
+      "control (LiquidGlassSettings.ios27Light / ios27Dark, 2026-09): a frost (a cloud of the content blurred",
+      "by 14 pt) laid at frost-opacity over a copy of it blurred by blur-radius, held within frost-clamp of the",
+      "cloud on one side (> 0: not darker, < 0: not lighter), each blur weighing white frost-weight / blur-weight",
+      "times as much as black; then the tint, then the saturation (which the shader moves by +-20% with the",
+      "luma, as in the measurement)."
+    ],
+    "plain": {
+      "light": { "saturation": 1.5 },
+      "dark": { "saturation": 1.5 }
+    },
+    "ios27": {
+      "light": { "body": true, "saturation": 2.1, "frost": 14.0, "frost-opacity": 0.73, "frost-clamp": 0.4, "frost-weight": 2.0, "blur-weight": 0.8 },
+      "dark": { "body": true, "saturation": 1.4, "frost": 14.0, "frost-opacity": 0.85, "frost-clamp": -0.45, "frost-weight": 0.5, "blur-weight": 2.5 }
+    }
+  },
+  "outlines": {
+    "_comment": [
+      "The edge of iOS 27's glass, per appearance (liquid_glass_widgets' measurement, as above): a half-point",
+      "line of the content just outside, darkened by 0.314 x rim-shade across the light axis and rim-shade-ends",
+      "of that at its ends; two highlight lobes at those ends (rim-light); the bevel darkened by edge-absorption.",
+      "In the dark appearance the light comes from below (the materials' light-angle-deg 270)."
+    ],
+    "ios27": {
+      "light": { "rim-shade": 1.0, "rim-shade-ends": 0.2, "rim-light": 1.0, "edge-absorption": 0.035 },
+      "dark": { "rim-shade": 0.45, "rim-shade-ends": 0.0, "rim-light": 1.15, "edge-absorption": 0.035 }
     }
   },
   "materials": [
     {
       "name": "regular",
-      "edge": "apple-s",
-      "values": { "tint-strength": 0.12, "blur-radius": 2.0, "shadow-radius": 16.0, "shadow-intensity": 0.07 },
-      "tint": [1.0, 1.0, 1.0],
+      "edge": "ios27-s",
+      "surface": "ios27",
+      "outline": "ios27",
+      "values": { "tint-strength": 0.53, "blur-radius": 0.6, "shadow-radius": 16.0, "shadow-intensity": 0.015 },
+      "values_dark": { "tint-strength": 0.12, "shadow-intensity": 0.0, "light-angle-deg": 270.0 },
+      "tint": [0.973, 0.973, 0.973],
+      "tint_dark": [1.0, 1.0, 1.0],
       "tint_from_theme": false,
       "adaptive": true
     },
     {
       "name": "clear",
-      "edge": "apple-l",
+      "edge": "ios27-l",
+      "surface": "plain",
+      "outline": "ios27",
       "values": { "tint-strength": 0.04, "blur-radius": 1.5, "blur-downscale": 1.0, "shadow-radius": 16.0, "shadow-intensity": 0.07 },
+      "values_dark": { "light-angle-deg": 270.0 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": false,
       "adaptive": true
     },
     {
       "name": "thick",
-      "edge": "apple-s",
-      "values": { "tint-strength": 0.55, "blur-radius": 12.0, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
+      "edge": "ios27-s",
+      "surface": "ios27",
+      "outline": "ios27",
+      "values": { "tint-strength": 0.55, "blur-radius": 0.6, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
+      "values_dark": { "light-angle-deg": 270.0 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": true,
       "adaptive": false
     },
     {
       "name": "menu",
-      "edge": "apple-s",
-      "values": { "tint-strength": 0.45, "blur-radius": 8.0, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
+      "edge": "ios27-s",
+      "surface": "ios27",
+      "outline": "ios27",
+      "values": { "tint-strength": 0.45, "blur-radius": 0.6, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
+      "values_dark": { "light-angle-deg": 270.0 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": true,
       "adaptive": false
     },
     {
       "name": "prominent",
-      "edge": "apple-s",
+      "edge": "ios27-s",
+      "surface": "plain",
+      "outline": "ios27",
       "values": { "tint-strength": 0.92, "blur-radius": 10.0, "shadow-radius": 16.0, "shadow-intensity": 0.07 },
+      "values_dark": { "light-angle-deg": 270.0 },
       "tint": [0.208, 0.518, 0.894],
       "tint_from_theme": false,
       "tint_from_accent": true,

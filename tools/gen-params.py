@@ -16,6 +16,24 @@ def c_double(v):
     return text if ('.' in text or 'e' in text) else text + '.0'
 
 
+# The terms of a surface and an outline (spec "surfaces", "outlines"), in
+# GlassSurfaceSpec order, with the value a material without one takes.
+SURFACE_TERMS = [
+    ('body', False), ('saturation', 1.5),
+    ('frost', 0.0), ('frost-opacity', 0.0), ('frost-clamp', 0.0),
+    ('frost-weight', 1.0), ('blur-weight', 1.0),
+]
+OUTLINE_TERMS = [
+    ('rim-shade', 0.0), ('rim-shade-ends', 0.0), ('rim-light', 0.0), ('edge-absorption', 0.0),
+]
+APPEARANCES = ('light', 'dark')
+
+
+def plain(d):
+    """A preset without its _comment."""
+    return {k: v for k, v in d.items() if not k.startswith('_')}
+
+
 def main():
     spec_path, out_path = sys.argv[1], sys.argv[2]
     with open(spec_path, encoding='utf-8') as f:
@@ -70,11 +88,24 @@ def main():
     w('  NULL')
     w('};')
     w('')
+    w('/* The body and the outline of a material in one appearance (shaders/core/')
+    w(' * glass_material.glsl): fixed terms, not settings. */')
+    w('typedef struct {')
+    w('  gboolean    body;                    /* iOS 27\'s body: frost, tint, saturation */')
+    w('  double      saturation;              /* of what shows through */')
+    w('  double      frost;                   /* the cloud\'s sigma, logical px; 0 = none */')
+    w('  double      frost_opacity, frost_clamp;')
+    w('  double      frost_weight, blur_weight; /* white over black in each blur */')
+    w('  double      rim_shade, rim_shade_ends, rim_light, edge_absorption;')
+    w('} GlassSurfaceSpec;')
+    w('')
+    w('/* Appearances: [0] light, [1] dark (AdwStyleManager:dark). */')
     w('typedef struct {')
     w('  const char *name;')
-    w('  gboolean    has[GLASS_N_PARAMS];     /* the keys this material sets */')
-    w('  double      values[GLASS_N_PARAMS];')
-    w('  float       tint[3];                 /* rgb; the strength is the tint-strength key */')
+    w('  gboolean    has[2][GLASS_N_PARAMS];  /* the keys this material sets */')
+    w('  double      values[2][GLASS_N_PARAMS];')
+    w('  float       tint[2][3];              /* rgb; the strength is the tint-strength key */')
+    w('  GlassSurfaceSpec surface[2];')
     w('  gboolean    tint_from_theme;         /* rgb = the theme colour (window, popover) */')
     w('  gboolean    tint_from_accent;        /* rgb = the theme\'s accent colour */')
     w('  gboolean    adaptive;                /* FALSE: the foreground follows the theme */')
@@ -83,21 +114,50 @@ def main():
     w('/* In GlassMaterial order. */')
     w(f'#define GLASS_N_MATERIALS {len(spec["materials"])}')
     w('static const GlassMaterialSpec glass_material_specs[GLASS_N_MATERIALS] = {')
+    surfaces = spec.get('surfaces', {})
+    outlines = spec.get('outlines', {})
     for m in spec['materials']:
-        values = dict(presets[m['edge']]) if m.get('edge') else {}
+        values = plain(presets[m['edge']]) if m.get('edge') else {}
         if 'lens' in values:
             values.update(lenses[values.pop('lens')])
         values.update(m['values'])
-        for k in values:
+        dark = dict(values)
+        dark.update(m.get('values_dark', {}))
+        for k in dark:
             if k not in keys:
                 sys.exit(f'material {m["name"]}: unknown key {k}')
-        if len(m['tint']) != 3:
-            sys.exit(f'material {m["name"]}: tint is rgb (the strength is tint-strength)')
+        tints = [m['tint'], m.get('tint_dark', m['tint'])]
+        for t in tints:
+            if len(t) != 3:
+                sys.exit(f'material {m["name"]}: tint is rgb (the strength is tint-strength)')
         w('  {')
         w(f'    .name = "{m["name"]}",')
-        w('    .has = { ' + ', '.join(f'[{c_ident(k)}] = TRUE' for k in values) + ' },')
-        w('    .values = { ' + ', '.join(f'[{c_ident(k)}] = {c_double(v)}' for k, v in values.items()) + ' },')
-        w('    .tint = { ' + ', '.join(c_double(v) + 'f' for v in m['tint']) + ' },')
+        w('    .has = {')
+        for vals in (values, dark):
+            w('      { ' + ', '.join(f'[{c_ident(k)}] = TRUE' for k in vals) + ' },')
+        w('    },')
+        w('    .values = {')
+        for vals in (values, dark):
+            w('      { ' + ', '.join(f'[{c_ident(k)}] = {c_double(v)}' for k, v in vals.items()) + ' },')
+        w('    },')
+        w('    .tint = { ' + ', '.join('{ ' + ', '.join(c_double(v) + 'f' for v in t) + ' }' for t in tints) + ' },')
+        w('    .surface = {')
+        for a in APPEARANCES:
+            terms = {}
+            if m.get('surface'):
+                terms.update(surfaces[m['surface']][a])
+            if m.get('outline'):
+                terms.update(outlines[m['outline']][a])
+            known = {k for k, _ in SURFACE_TERMS + OUTLINE_TERMS}
+            for k in terms:
+                if k not in known:
+                    sys.exit(f'material {m["name"]}: unknown surface term {k}')
+            cells = []
+            for k, default in SURFACE_TERMS + OUTLINE_TERMS:
+                v = terms.get(k, default)
+                cells.append(('TRUE' if v else 'FALSE') if isinstance(default, bool) else c_double(v))
+            w('      { ' + ', '.join(cells) + ' },')
+        w('    },')
         w(f'    .tint_from_theme = {"TRUE" if m["tint_from_theme"] else "FALSE"},')
         w(f'    .tint_from_accent = {"TRUE" if m.get("tint_from_accent") else "FALSE"},')
         w(f'    .adaptive = {"TRUE" if m["adaptive"] else "FALSE"},')

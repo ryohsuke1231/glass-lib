@@ -1064,6 +1064,78 @@ test_search_entry (void)
   g_object_unref (entry);
 }
 
+/* The jelly (glass-jelly.c, design.md §6.9): sent to a place further
+ * along, it stretches while it travels, its front runs on past the mark,
+ * and it comes to rest there; snapped, it is there at once. */
+static void
+test_jelly (void)
+{
+  const graphene_rect_t from = GRAPHENE_RECT_INIT (0, 10, 80, 30);
+  const graphene_rect_t to = GRAPHENE_RECT_INIT (200, 10, 80, 30);
+  GlassJelly jelly = { 0 };
+  graphene_rect_t r;
+  double widest = 0.0, furthest = 0.0, progress = 0.0;
+  gint64 now = 1000000;
+  gboolean moving = TRUE;
+  int frames = 0;
+
+  glass_jelly_start (&jelly, &glass_jelly_plate, &from, TRUE, FALSE);
+  g_assert_true (jelly.active);
+  glass_jelly_set_mark (&jelly, &to);
+  for (; moving && frames < 600; frames++)
+    {
+      now += 16667;
+      moving = glass_jelly_step (&jelly, now);
+      glass_jelly_get (&jelly, &r);
+      widest = MAX (widest, r.size.width);
+      furthest = MAX (furthest, r.origin.x + r.size.width);
+      /* Along the row only. */
+      g_assert_cmpfloat (r.origin.y, ==, 10.0f);
+      g_assert_cmpfloat (r.size.height, ==, 30.0f);
+      g_assert_cmpfloat (glass_jelly_progress (&jelly, &from), >=, 0.0);
+      progress = glass_jelly_progress (&jelly, &from);
+    }
+  g_assert_false (moving);
+  g_assert_cmpint (frames, <, 120);                    /* at rest within two seconds */
+  g_assert_cmpfloat (widest, >, 80.0 * 1.05);          /* it stretched */
+  g_assert_cmpfloat (widest, <=, 80.0 * glass_jelly_plate.max_stretch + 0.01);
+  g_assert_cmpfloat (furthest, >, 280.0);              /* its front ran on */
+  g_assert_cmpfloat (progress, ==, 1.0);
+  glass_jelly_get (&jelly, &r);
+  g_assert_true (graphene_rect_equal (&r, &to));
+
+  glass_jelly_set_mark (&jelly, &from);
+  glass_jelly_snap (&jelly);
+  glass_jelly_get (&jelly, &r);
+  g_assert_true (graphene_rect_equal (&r, &from));
+}
+
+/* Motion settings (design.md §13): animations off, or less motion asked
+ * for (GTK 4.22's gtk-interface-reduced-motion). */
+static void
+test_reduced_motion (void)
+{
+  GtkSettings *settings = gtk_settings_get_default ();
+  GtkWidget *widget = g_object_ref_sink (gtk_label_new (NULL));
+  gboolean animations;
+  GtkReducedMotion reduced;
+
+  g_object_get (settings, "gtk-enable-animations", &animations, "gtk-interface-reduced-motion", &reduced, NULL);
+  g_object_set (settings, "gtk-enable-animations", TRUE,
+                "gtk-interface-reduced-motion", GTK_REDUCED_MOTION_NO_PREFERENCE, NULL);
+  g_assert_false (glass_motion_reduced (widget));
+  g_object_set (settings, "gtk-interface-reduced-motion", GTK_REDUCED_MOTION_REDUCE, NULL);
+  g_assert_true (glass_motion_reduced (widget));
+  g_assert_true (glass_animations_enabled (widget));
+  g_object_set (settings, "gtk-interface-reduced-motion", GTK_REDUCED_MOTION_NO_PREFERENCE,
+                "gtk-enable-animations", FALSE, NULL);
+  g_assert_true (glass_motion_reduced (widget));
+  g_assert_false (glass_animations_enabled (widget));
+
+  g_object_set (settings, "gtk-enable-animations", animations, "gtk-interface-reduced-motion", reduced, NULL);
+  g_object_unref (widget);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1100,6 +1172,8 @@ main (int argc, char **argv)
   g_test_add_func ("/widgets/morph", test_morph);
   g_test_add_func ("/widgets/tab-bar", test_tab_bar);
   g_test_add_func ("/widgets/search-entry", test_search_entry);
+  g_test_add_func ("/widgets/jelly", test_jelly);
+  g_test_add_func ("/widgets/reduced-motion", test_reduced_motion);
 
   return g_test_run ();
 }

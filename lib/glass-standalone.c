@@ -81,6 +81,24 @@ glass_standalone_draw (GlassStandalone       *self,
                        const GdkRGBA         *theme_bg,
                        gboolean               shadow)
 {
+  return glass_standalone_draw_drop (self, widget, snapshot, backdrop, rect, radii,
+                                     NULL, 0.0, 0.0, material, theme_bg, shadow);
+}
+
+gboolean
+glass_standalone_draw_drop (GlassStandalone       *self,
+                            GtkWidget             *widget,
+                            GtkSnapshot           *snapshot,
+                            GskRenderNode         *backdrop,
+                            const graphene_rect_t *rect,
+                            const double           radii[4],
+                            const graphene_rect_t *drop,
+                            double                 drop_radius,
+                            double                 merge,
+                            GlassMaterial          material,
+                            const GdkRGBA         *theme_bg,
+                            gboolean               shadow)
+{
   GlassContext *context = glass_context_get_default ();
   GtkNative *native = gtk_widget_get_native (widget);
   graphene_rect_t view_rect = GRAPHENE_RECT_INIT (0, 0, gtk_widget_get_width (widget),
@@ -88,6 +106,7 @@ glass_standalone_draw (GlassStandalone       *self,
   GlassCaptureRequest creq = { 0 };
   GlassRenderRequest req = { 0 };
   GlassRenderResult res;
+  GlassSurfaceSpec surface;
   double params[GLASS_N_PARAMS];
   double scale;
   float dx, dy;
@@ -115,8 +134,24 @@ glass_standalone_draw (GlassStandalone       *self,
   glass_context_resolve_tint (context, material, params[GLASS_PARAM_ID_TINT_STRENGTH], theme_bg, req.tint);
   if (glass_context_get_reduce_transparency (context))
     glass_reduce_transparency (params, req.tint);
+  glass_context_resolve_surface (context, material, FALSE, &surface);
+  glass_surface_apply (&surface, params, &creq.blur, &req.surface);
 
-  if (!glass_capture_rect_for_panel (rect, params[GLASS_PARAM_ID_BLUR_RADIUS], &view_rect, &creq.rect))
+  /* A drop fused to the pane (a menu coming out of its button): the two are
+   * one body, the smooth union of both shapes (design.md §6.8). */
+  req.panel = *rect;
+  if (drop)
+    {
+      req.n_shapes = 2;
+      req.shapes[0] = *drop;
+      req.radii[0] = (float) drop_radius;
+      req.shapes[1] = *rect;
+      req.radii[1] = (float) MAX (MAX (radii[0], radii[1]), MAX (radii[2], radii[3]));
+      req.merge_k = (float) merge;
+      graphene_rect_union (drop, rect, &req.panel);
+    }
+
+  if (!glass_capture_rect_for_panel (&req.panel, glass_blur_spec_reach (&creq.blur), &view_rect, &creq.rect))
     return FALSE;
 
   glass_renderer_make_current (self->renderer);
@@ -125,16 +160,15 @@ glass_standalone_draw (GlassStandalone       *self,
   creq.key_dx = dx;
   creq.key_dy = dy;
   creq.scale = scale;
-  creq.blur_radius = params[GLASS_PARAM_ID_BLUR_RADIUS];
   creq.downscale = (int) params[GLASS_PARAM_ID_BLUR_DOWNSCALE];
   if (!glass_renderer_capture_all (self->renderer, &self->capture, &creq, 1))
     return FALSE;
 
   req.view_rect = view_rect;
-  req.panel = *rect;
   req.scale = scale;
   req.corner_radius = radii[0];
-  req.has_corner_radii = radii[1] != radii[0] || radii[2] != radii[0] || radii[3] != radii[0];
+  req.has_corner_radii = req.n_shapes == 0 &&
+                         (radii[1] != radii[0] || radii[2] != radii[0] || radii[3] != radii[0]);
   memcpy (req.corner_radii, radii, sizeof req.corner_radii);
   req.params = params;
   req.has_shadow = shadow;

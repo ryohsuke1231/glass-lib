@@ -66,6 +66,7 @@ struct _GlassView {
   gint64          hud_last_us;
   char           *hud_text;
   guint           retry_tick;        /* drawing again: a panel's glass was stale */
+  gboolean        drawn_since_map;   /* panels mapped before this came with the view */
 
   /* The adaptive colours under the CSS fallback (design.md §12.1): the
    * backdrop and the panels of the last snapshot, sampled small, at most
@@ -239,6 +240,19 @@ release_renderer (GlassView *self)
 }
 
 static void
+glass_view_map (GtkWidget *widget)
+{
+  GLASS_VIEW (widget)->drawn_since_map = FALSE;
+  GTK_WIDGET_CLASS (glass_view_parent_class)->map (widget);
+}
+
+gboolean
+glass_view_has_drawn_since_map (GlassView *self)
+{
+  return self->drawn_since_map;
+}
+
+static void
 glass_view_realize (GtkWidget *widget)
 {
   GlassView *self = GLASS_VIEW (widget);
@@ -388,6 +402,8 @@ typedef struct {
   graphene_rect_t  C_tree;      /* ... and every panel nested in it (layer 0 only) */
   double           params[GLASS_N_PARAMS];
   float            tint[4];
+  GlassBlurSpec    blur;        /* the capture's (the material's surface) */
+  GlassSurfaceTerms surface;    /* the pass's */
   float            opacity;
   guint            layer;       /* GlassPanel ancestors below this view */
   guint            root;        /* index of its layer-0 ancestor item */
@@ -396,12 +412,17 @@ typedef struct {
   GlassLayerSource output;
   gboolean         has_output;
 
-  /* A GlassGroup's panels: one body of glass (fused shapes). */
+  /* A GlassGroup's panels: one body of glass (fused shapes); or a morph
+   * with its partner's drop still behind it (two shapes of one panel). */
   GtkWidget       *fuse_group;
   guint            n_shapes;
   graphene_rect_t  shapes[GLASS_MAX_SHAPES];
   float            radii[GLASS_MAX_SHAPES];
   PanelEntry      *members[GLASS_MAX_SHAPES];
+  float            merge_k;     /* logical px */
+
+  /* Materializing or dissolving (design.md §6.8): how much glass there is. */
+  double           visibility;
 
   /* Morphing or a ghost (design.md §6.8): its corners this frame. */
   gboolean         shaped;
@@ -410,7 +431,7 @@ typedef struct {
 
 typedef struct {
   graphene_rect_t C;
-  double          blur_radius;
+  GlassBlurSpec   blur;
   int             downscale;
 } Group;
 
@@ -430,7 +451,6 @@ area (const graphene_rect_t *r)
 static guint
 group_for (GArray *groups, const Item *item)
 {
-  double blur = item->params[GLASS_PARAM_ID_BLUR_RADIUS];
   int downscale = (int) item->params[GLASS_PARAM_ID_BLUR_DOWNSCALE];
 
   for (guint g = 0; g < groups->len; g++)
@@ -438,7 +458,7 @@ group_for (GArray *groups, const Item *item)
       Group *group = &g_array_index (groups, Group, g);
       graphene_rect_t u;
 
-      if (group->blur_radius != blur || group->downscale != downscale)
+      if (!glass_blur_spec_equal (&group->blur, &item->blur) || group->downscale != downscale)
         continue;
       graphene_rect_union (&group->C, &item->C_tree, &u);
       if (area (&u) <= GROUP_SLACK * (area (&group->C) + area (&item->C_tree)))
@@ -448,7 +468,7 @@ group_for (GArray *groups, const Item *item)
         }
     }
 
-  g_array_append_val (groups, ((Group) { item->C_tree, blur, downscale }));
+  g_array_append_val (groups, ((Group) { item->C_tree, item->blur, downscale }));
   return groups->len - 1;
 }
 
@@ -541,15 +561,15 @@ draw_item (GlassView             *self,
     .panel = item->P,
     .scale = scale,
     .corner_radius = glass_panel_get_corner_radius (item->entry->panel),
-    .has_corner_radii = !item->fuse_group && glass_panel_has_corner_radii (item->entry->panel),
+    .has_corner_radii = item->n_shapes == 0 && glass_panel_has_corner_radii (item->entry->panel),
     .params = item->params,
     .has_shadow = glass_panel_get_has_shadow (item->entry->panel),
-    .n_shapes = item->fuse_group ? item->n_shapes : 0,
-    .merge_k = item->fuse_group ? (float) glass_group_get_spacing (GLASS_GROUP (item->fuse_group)) : 0.0f,
+    .n_shapes = item->n_shapes,
+    .merge_k = item->merge_k,
   };
   GlassRenderResult res;
 
-  if (item->shaped && !item->fuse_group)
+  if (item->shaped && item->n_shapes == 0)
     {
       req.has_corner_radii = TRUE;
       memcpy (req.corner_radii, item->corners, sizeof req.corner_radii);
@@ -571,6 +591,7 @@ draw_item (GlassView             *self,
     }
 
   memcpy (req.tint, item->tint, sizeof req.tint);
+  req.surface = item->surface;
   memcpy (req.shapes, item->shapes, sizeof req.shapes);
   memcpy (req.radii, item->radii, sizeof req.radii);
   if (!glass_renderer_render_panel (self->renderer, item->entry->render, item->capture, &req, &res))
@@ -631,7 +652,9 @@ plan_panels (GlassView             *self,
         {
           PanelEntry *entry = g_ptr_array_index (self->entries, i);
           GtkWidget *panel = GTK_WIDGET (entry->panel);
-          Item item = { .entry = entry };
+          Item item = { .entry = entry, .visibility = 1.0 };
+          graphene_rect_t anchor;
+          double anchor_radius;
           double radius;
           double vs;
 
@@ -640,12 +663,13 @@ plan_panels (GlassView             *self,
           if (!gtk_widget_get_mapped (panel))
             {
               glass_panel_set_output (entry->panel, NULL, NULL);
-              /* Hidden in a group: its glass, drawn into its neighbour
-               * (design.md §6.8). */
+              /* Hidden: its glass, drawn into its neighbour in a group, or
+               * dissolving where it was (design.md §6.8). */
               if (!glass_panel_get_ghost (entry->panel, self, &item.P, item.corners))
                 continue;
               item.shaped = TRUE;
               item.opacity = opacity_to (panel, widget);
+              item.visibility = glass_panel_get_ghost_visibility (entry->panel);
             }
           else
             {
@@ -659,6 +683,9 @@ plan_panels (GlassView             *self,
               if (item.P.size.width < 1.0f || item.P.size.height < 1.0f)
                 continue;
 
+              /* A knob: its glass hangs from its place on springs. */
+              glass_panel_follow (entry->panel, &item.P);
+
               /* The press bulge: the glass grows around its centre. */
               vs = glass_panel_get_visual_scale (entry->panel);
               if (vs != 1.0)
@@ -668,6 +695,16 @@ plan_panels (GlassView             *self,
               /* A morph: the glass on its way here from its partner's. */
               target = item.P;
               item.shaped = glass_panel_get_morph (entry->panel, &target, &item.P, item.corners);
+
+              /* Materializing: fading up, settling in from a little larger. */
+              {
+                double grow;
+
+                item.visibility = glass_panel_get_visibility (entry->panel, &grow);
+                if (grow != 1.0)
+                  graphene_rect_inset (&item.P, -item.P.size.width * (float) (grow - 1.0) / 2.0f,
+                                       -item.P.size.height * (float) (grow - 1.0) / 2.0f);
+              }
             }
           if (item.opacity <= 0.0f)
             continue;
@@ -701,12 +738,53 @@ plan_panels (GlassView             *self,
               item.shapes[0] = item.P;
               item.radii[0] = (float) radius;
               item.members[0] = entry;
+              item.merge_k = (float) glass_group_get_spacing (GLASS_GROUP (item.fuse_group));
+            }
+          else if (gtk_widget_get_mapped (panel) &&
+                   glass_panel_get_morph_anchor (entry->panel, &anchor, &anchor_radius))
+            {
+              /* A morph-id swap: the partner's glass stays behind as a drop,
+               * and ours is drawn out of it, the two one body while they
+               * part (liquid_glass_widgets' teardrop). The drop comes
+               * first: what the view records as drawn is ours. */
+              item.n_shapes = 2;
+              item.shapes[0] = anchor;
+              item.radii[0] = (float) anchor_radius;
+              item.shapes[1] = item.P;
+              item.radii[1] = (float) radius;
+              item.members[0] = item.members[1] = entry;
+              item.merge_k = (float) glass_panel_get_anchor_merge (entry->panel);
+              graphene_rect_union (&anchor, &item.P, &item.P);
             }
 
           glass_panel_resolve_params (entry->panel, context, item.params);
           glass_panel_get_tint_rgba (entry->panel, item.params, theme_bg, item.tint);
           if (reduce)
             glass_reduce_transparency (item.params, item.tint);
+          {
+            GlassSurfaceSpec surface;
+
+            glass_panel_resolve_surface (entry->panel, context, &surface);
+            glass_surface_apply (&surface, item.params, &item.blur, &item.surface);
+          }
+          /* Part of the glass (materializing, dissolving): every term of it
+           * scales down together, and what is drawn fades with it. The blur
+           * stays (a new blur every frame would rebuild its kernel). */
+          if (item.visibility < 1.0)
+            {
+              double v = MAX (item.visibility, 0.0);
+
+              item.opacity *= (float) v;
+              item.params[GLASS_PARAM_ID_DISPLACEMENT_SCALE] *= v;
+              item.params[GLASS_PARAM_ID_SHADOW_INTENSITY] *= v;
+              item.tint[3] *= (float) v;
+              item.surface.frost_opacity *= (float) v;
+              item.surface.rim_shade *= (float) v;
+              item.surface.rim_light *= (float) v;
+              item.surface.edge_absorption *= (float) v;
+              if (item.opacity <= 0.0f)
+                continue;
+            }
           max_layer = MAX (max_layer, item.layer);
           g_array_append_val (items, item);
         }
@@ -717,7 +795,7 @@ plan_panels (GlassView             *self,
     {
       Item *item = &g_array_index (items, Item, i);
 
-      if (!glass_capture_rect_for_panel (&item->P, item->params[GLASS_PARAM_ID_BLUR_RADIUS],
+      if (!glass_capture_rect_for_panel (&item->P, glass_blur_spec_reach (&item->blur),
                                          view_rect, &item->C))
         {
           g_array_remove_index (items, i--);
@@ -811,7 +889,7 @@ draw_panels (GlassView             *self,
           .key_extra = key_extra,
           .rect = group->C,
           .scale = scale,
-          .blur_radius = group->blur_radius,
+          .blur = group->blur,
           .downscale = group->downscale,
         };
       }
@@ -830,7 +908,7 @@ draw_panels (GlassView             *self,
 
             glass_capture_get_source (raw, &sources[1]);
             if (glass_renderer_compose (self->renderer, composed, &group->C, scale, group->downscale,
-                                        group->blur_radius, sources, 2))
+                                        &group->blur, sources, 2))
               effective[g] = composed;
           }
       }
@@ -875,7 +953,7 @@ draw_panels (GlassView             *self,
           item->capture = composed_capture (self, composed_index++);
           if (!glass_renderer_compose (self->renderer, item->capture, &item->C, scale,
                                        (int) item->params[GLASS_PARAM_ID_BLUR_DOWNSCALE],
-                                       item->params[GLASS_PARAM_ID_BLUR_RADIUS],
+                                       &item->blur,
                                        (GlassLayerSource *) sources->data, sources->len))
             continue;
           draw_item (self, snapshot, item, view_rect, scale);
@@ -1205,6 +1283,7 @@ glass_view_snapshot (GtkWidget   *widget,
     gsk_render_node_unref (nodes[i]);
   g_clear_pointer (&content_node, gsk_render_node_unref);
   gsk_render_node_unref (backdrop);
+  self->drawn_since_map = TRUE;
 }
 
 /* ── Layout ───────────────────────────────────────────────────────────────── */
@@ -1439,6 +1518,7 @@ glass_view_class_init (GlassViewClass *klass)
   widget_class->snapshot = glass_view_snapshot;
   widget_class->measure = glass_view_measure;
   widget_class->size_allocate = glass_view_size_allocate;
+  widget_class->map = glass_view_map;
   widget_class->realize = glass_view_realize;
   widget_class->unrealize = glass_view_unrealize;
   widget_class->css_changed = glass_view_css_changed;

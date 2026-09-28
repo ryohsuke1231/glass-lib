@@ -41,24 +41,28 @@ test_defaults (void)
   g_assert_true (isnan (glass_context_get_param (ctx, "no-such-key")));
 }
 
-/* Materials: the edge measured on macOS 27 (apple-s; apple-l for CLEAR),
- * with the blur, tint and shadow the user chose. */
+/* Materials: the lens measured on macOS 27 (thin; thick for CLEAR), iOS 27's
+ * outline instead of the rim and the inner shadow, and iOS 27's body with
+ * its tint on the panes (design.md §11.2). Without libadwaita the
+ * appearance is light. */
 static void
 test_materials (void)
 {
   GlassContext *ctx = glass_context_get_default ();
   double v[GLASS_N_PARAMS];
 
+  g_assert_false (glass_context_get_dark (ctx));
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 2.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 0.6);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_PROFILE_SHAPE_N], ==, 3.6);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 88.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_RIM_DIRECTIONAL_POWER], ==, 1.9);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.12);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_RIM_INTENSITY], ==, 0.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_AO_INTENSITY], ==, 0.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.53);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_SHEEN_INTENSITY], ==, 0.0);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_SHADOW_INTENSITY], ==, 0.07);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_SHADOW_INTENSITY], ==, 0.015);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_DISPLACEMENT_SCALE], ==, 10.5);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_RIM_WIDTH], ==, 2.3);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_LIGHT_ANGLE_DEG], ==, 90.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_CHROMA_STRENGTH], ==, 0.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_SHADOW_RADIUS], ==, 16.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_IOR], ==, 2.4);               /* not a material key */
@@ -71,7 +75,7 @@ test_materials (void)
   g_assert_cmpfloat (v[GLASS_PARAM_ID_DISPLACEMENT_SCALE], ==, 26.0);
 
   glass_context_resolve (ctx, GLASS_MATERIAL_THICK, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 12.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 0.6);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.55);
   g_assert_true (glass_material_specs[GLASS_MATERIAL_THICK].tint_from_theme);
   g_assert_false (glass_material_specs[GLASS_MATERIAL_THICK].adaptive);
@@ -79,7 +83,7 @@ test_materials (void)
   /* Menus: lighter than THICK, the theme's colours. */
   g_assert_cmpint (GLASS_N_MATERIALS, ==, GLASS_MATERIAL_PROMINENT + 1);
   glass_context_resolve (ctx, GLASS_MATERIAL_MENU, v);
-  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 8.0);
+  g_assert_cmpfloat (v[GLASS_PARAM_ID_BLUR_RADIUS], ==, 0.6);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_MAX_Z], ==, 88.0);
   g_assert_cmpfloat (v[GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.45);
   g_assert_true (glass_material_specs[GLASS_MATERIAL_MENU].tint_from_theme);
@@ -95,6 +99,88 @@ test_materials (void)
   g_assert_false (glass_material_specs[GLASS_MATERIAL_PROMINENT].adaptive);
   for (int m = 0; m < GLASS_MATERIAL_PROMINENT; m++)
     g_assert_false (glass_material_specs[m].tint_from_accent);
+
+  /* The dark appearance's own values (AdwStyleManager:dark). */
+  g_assert_cmpfloat (glass_material_specs[GLASS_MATERIAL_REGULAR].values[1][GLASS_PARAM_ID_TINT_STRENGTH], ==, 0.12);
+  g_assert_cmpfloat (glass_material_specs[GLASS_MATERIAL_REGULAR].values[1][GLASS_PARAM_ID_SHADOW_INTENSITY], ==, 0.0);
+  g_assert_cmpfloat (glass_material_specs[GLASS_MATERIAL_REGULAR].values[1][GLASS_PARAM_ID_BLUR_RADIUS], ==, 0.6);
+  g_assert_cmpfloat (glass_material_specs[GLASS_MATERIAL_REGULAR].tint[1][0], ==, 1.0f);
+  for (int m = 0; m < GLASS_N_MATERIALS; m++)
+    {
+      g_assert_true (glass_material_specs[m].has[1][GLASS_PARAM_ID_LIGHT_ANGLE_DEG]);
+      g_assert_cmpfloat (glass_material_specs[m].values[1][GLASS_PARAM_ID_LIGHT_ANGLE_DEG], ==, 270.0);
+      g_assert_false (glass_material_specs[m].has[0][GLASS_PARAM_ID_LIGHT_ANGLE_DEG]);
+    }
+}
+
+/* The body and the outline (spec/params.json surfaces, outlines): iOS 27's
+ * body on the panes, the plain one on CLEAR and PROMINENT, iOS 27's outline
+ * on all; a part's lens (a knob) takes the plain body. */
+static void
+test_surfaces (void)
+{
+  GlassContext *ctx = glass_context_get_default ();
+  const GlassSurfaceSpec *dark = &glass_material_specs[GLASS_MATERIAL_REGULAR].surface[1];
+  const GlassMaterial plain_ones[] = { GLASS_MATERIAL_CLEAR, GLASS_MATERIAL_PROMINENT };
+  GlassSurfaceSpec s;
+  GlassBlurSpec blur;
+  GlassSurfaceTerms terms;
+  double v[GLASS_N_PARAMS];
+
+  glass_context_resolve_surface (ctx, GLASS_MATERIAL_REGULAR, FALSE, &s);
+  g_assert_true (s.body);
+  g_assert_cmpfloat (s.saturation, ==, 2.1);
+  g_assert_cmpfloat (s.frost, ==, 14.0);
+  g_assert_cmpfloat (s.frost_opacity, ==, 0.73);
+  g_assert_cmpfloat (s.frost_clamp, ==, 0.4);
+  g_assert_cmpfloat (s.frost_weight, ==, 2.0);
+  g_assert_cmpfloat (s.blur_weight, ==, 0.8);
+  g_assert_cmpfloat (s.rim_shade, ==, 1.0);
+  g_assert_cmpfloat (s.rim_shade_ends, ==, 0.2);
+  g_assert_cmpfloat (s.rim_light, ==, 1.0);
+  g_assert_cmpfloat (s.edge_absorption, ==, 0.035);
+
+  glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
+  glass_surface_apply (&s, v, &blur, &terms);
+  g_assert_cmpfloat (blur.radius, ==, 0.6);
+  g_assert_cmpfloat (blur.frost, ==, 14.0);
+  g_assert_cmpfloat (blur.frost_weight, ==, 2.0);
+  g_assert_cmpfloat (blur.weight, ==, 0.8);
+  g_assert_cmpfloat (glass_blur_spec_reach (&blur), ==, 14.0);
+  g_assert_cmpfloat (terms.body, ==, 1.0f);
+  g_assert_cmpfloat (terms.frost_opacity, ==, 0.73f);
+
+  g_assert_true (dark->body);
+  g_assert_cmpfloat (dark->saturation, ==, 1.4);
+  g_assert_cmpfloat (dark->frost_clamp, ==, -0.45);
+  g_assert_cmpfloat (dark->rim_shade, ==, 0.45);
+  g_assert_cmpfloat (dark->rim_shade_ends, ==, 0.0);
+  g_assert_cmpfloat (dark->rim_light, ==, 1.15);
+
+  glass_context_resolve_surface (ctx, GLASS_MATERIAL_THICK, FALSE, &s);
+  g_assert_true (s.body);
+  glass_context_resolve_surface (ctx, GLASS_MATERIAL_MENU, FALSE, &s);
+  g_assert_true (s.body);
+
+  /* CLEAR and PROMINENT: the plain body, iOS 27's outline. */
+  for (guint i = 0; i < G_N_ELEMENTS (plain_ones); i++)
+    {
+      glass_context_resolve_surface (ctx, plain_ones[i], FALSE, &s);
+      g_assert_false (s.body);
+      g_assert_cmpfloat (s.saturation, ==, 1.5);
+      g_assert_cmpfloat (s.frost, ==, 0.0);
+      g_assert_cmpfloat (s.blur_weight, ==, 1.0);
+      g_assert_cmpfloat (s.rim_shade, ==, 1.0);
+      g_assert_cmpfloat (s.rim_light, ==, 1.0);
+    }
+
+  /* A knob: no frost, the outline kept. */
+  glass_context_resolve_surface (ctx, GLASS_MATERIAL_REGULAR, TRUE, &s);
+  g_assert_false (s.body);
+  g_assert_cmpfloat (s.frost, ==, 0.0);
+  g_assert_cmpfloat (s.frost_weight, ==, 1.0);
+  g_assert_cmpfloat (s.saturation, ==, 1.5);
+  g_assert_cmpfloat (s.rim_shade, ==, 1.0);
 }
 
 /* The lenses: the materials' own, and set together on the context. */
@@ -177,8 +263,8 @@ test_tint (void)
 
   glass_context_resolve (ctx, GLASS_MATERIAL_REGULAR, v);
   glass_context_resolve_tint (ctx, GLASS_MATERIAL_REGULAR, v[GLASS_PARAM_ID_TINT_STRENGTH], &theme, t);
-  g_assert_cmpfloat (t[0], ==, 1.0f);
-  g_assert_cmpfloat (t[3], ==, 0.12f);
+  g_assert_cmpfloat (t[0], ==, 0.973f);
+  g_assert_cmpfloat (t[3], ==, 0.53f);
   glass_context_resolve_tint (ctx, GLASS_MATERIAL_THICK, 0.55, &theme, t);
   g_assert_cmpfloat (t[0], ==, 0.2f);
   g_assert_cmpfloat (t[2], ==, 0.4f);
@@ -241,6 +327,7 @@ main (int argc, char **argv)
   g_test_add_func ("/params/list", test_list);
   g_test_add_func ("/params/defaults", test_defaults);
   g_test_add_func ("/params/materials", test_materials);
+  g_test_add_func ("/params/surfaces", test_surfaces);
   g_test_add_func ("/params/lens", test_lens);
   g_test_add_func ("/params/override", test_override);
   g_test_add_func ("/params/tint", test_tint);
