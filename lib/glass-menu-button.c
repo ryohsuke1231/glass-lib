@@ -67,13 +67,21 @@ static void glass_menu_button_actionable_init (GtkActionableInterface *iface);
 G_DEFINE_FINAL_TYPE_WITH_CODE (GlassMenuButton, glass_menu_button, GTK_TYPE_WIDGET,
                                G_IMPLEMENT_INTERFACE (GTK_TYPE_ACTIONABLE, glass_menu_button_actionable_init))
 
+static GtkWidget *lone_capsule (GlassMenuButton *self);
+
 static void
 collapse_value (double value, gpointer data)
 {
   GlassMenuButton *self = data;
+  GtkWidget *capsule = lone_capsule (self);
 
   self->collapse = CLAMP (value, 0.0, 1.0);
   gtk_widget_set_opacity (self->button, 1.0 - self->collapse);
+  /* Alone in it, the capsule is only the button's glass, and goes with it:
+   * else its padding stays behind, a sliver of glass as tall as the
+   * button (the weather's header). */
+  if (capsule)
+    gtk_widget_set_opacity (capsule, 1.0 - self->collapse);
   /* Narrowing out of the capsule cuts the button off rather than squeezing
    * it; at rest nothing is cut (its focus ring reaches outside). */
   gtk_widget_set_overflow (GTK_WIDGET (self), self->collapse > 0.0 ? GTK_OVERFLOW_HIDDEN : GTK_OVERFLOW_VISIBLE);
@@ -105,6 +113,23 @@ in_capsule (GlassMenuButton *self)
   GtkWidget *panel = gtk_widget_get_ancestor (GTK_WIDGET (self), GLASS_TYPE_PANEL);
 
   return panel != NULL && GLASS_IS_BUTTON_GROUP (panel);
+}
+
+/* Our capsule, if nothing else shown is in it. */
+static GtkWidget *
+lone_capsule (GlassMenuButton *self)
+{
+  GtkWidget *capsule = gtk_widget_get_ancestor (GTK_WIDGET (self), GLASS_TYPE_PANEL);
+  GtkWidget *row;
+
+  if (capsule == NULL || !GLASS_IS_BUTTON_GROUP (capsule) ||
+      (row = glass_panel_get_child (GLASS_PANEL (capsule))) == NULL)
+    return NULL;
+  for (GtkWidget *child = gtk_widget_get_first_child (row); child; child = gtk_widget_get_next_sibling (child))
+    if (gtk_widget_get_visible (child) && child != GTK_WIDGET (self) &&
+        !gtk_widget_is_ancestor (GTK_WIDGET (self), child))
+      return NULL;
+  return capsule;
 }
 
 /* While pinned the popover points at where the button was, whatever the

@@ -51,6 +51,7 @@ struct _GlassPopover {
    * nothing changes, so the capture's cache hits). */
   GskRenderNode   *window_node;
   GskRenderNode   *backdrop;
+  gint64           mapped_at;        /* µs: waiting this long for the window's first node */
   graphene_point_t backdrop_offset;
   graphene_rect_t  backdrop_area;
   GdkRGBA          backdrop_fill;
@@ -75,6 +76,13 @@ struct _GlassPopover {
  * engine: 40%, and the smooth union's width at its widest). */
 #define DROP_SPAN 0.4
 #define DROP_MERGE 24.0
+
+/* Just shown, the window may not have drawn yet (docs/memo.md 地雷51): for
+ * this long the popover waits for its node, drawing nothing, before it
+ * gives up on glass and draws its plain look. */
+#define WAIT_FOR_WINDOW_US (250 * 1000)
+
+static gboolean morph_tick (GtkWidget *widget, GdkFrameClock *clock, gpointer data);
 
 G_DEFINE_FINAL_TYPE (GlassPopover, glass_popover, GTK_TYPE_POPOVER)
 
@@ -304,11 +312,27 @@ glass_popover_snapshot (GtkWidget   *widget,
   gtk_widget_get_color (self->bg_node, &bg);
   if (contents == NULL || !gtk_widget_compute_bounds (contents, widget, &box) ||
       !gtk_widget_compute_point (contents, widget, graphene_point_zero (), &origin) ||
-      (window = parent_window (self, &offset)) == NULL ||
-      (backdrop = backdrop_node (self, window, &offset,
-                                 &GRAPHENE_RECT_INIT (0, 0, gtk_widget_get_width (widget), gtk_widget_get_height (widget)),
-                                 &bg)) == NULL)
+      (window = parent_window (self, &offset)) == NULL)
     goto plain;
+  backdrop = backdrop_node (self, window, &offset,
+                            &GRAPHENE_RECT_INIT (0, 0, gtk_widget_get_width (widget), gtk_widget_get_height (widget)),
+                            &bg);
+  if (backdrop == NULL)
+    {
+      /* [docs/memo.md 地雷51] Shown in a frame where the window has not
+       * drawn yet (it redraws every frame: an animated background), there
+       * is no node to make glass of. The plain look (the theme's dark
+       * surface, full size) flashed before the glass grew out of the
+       * button. Draw nothing and try again next frame, for a while. */
+      if (g_get_monotonic_time () - self->mapped_at < WAIT_FOR_WINDOW_US)
+        {
+          g_debug ("popover: waiting for the window's node");
+          if (self->tick == 0)
+            self->tick = gtk_widget_add_tick_callback (widget, morph_tick, NULL, NULL);
+          return;
+        }
+      goto plain;
+    }
 
   rect = box;
   moving = morph_step (self, &offset, &box, &rect, &drop, &drop_radius, &has_drop, &content);
@@ -360,6 +384,7 @@ glass_popover_snapshot (GtkWidget   *widget,
   return;
 
 plain:
+  g_debug ("popover: the plain look (%s)", backdrop == NULL ? "no window node" : "no glass");
   g_clear_pointer (&backdrop, gsk_render_node_unref);
   GTK_WIDGET_CLASS (glass_popover_parent_class)->snapshot (widget, snapshot);
 }
@@ -470,6 +495,7 @@ glass_popover_map (GtkWidget *widget)
 
   GTK_WIDGET_CLASS (glass_popover_parent_class)->map (widget);
 
+  self->mapped_at = g_get_monotonic_time ();
   if (native)
     {
       self->watched = g_object_ref (gtk_native_get_surface (native));

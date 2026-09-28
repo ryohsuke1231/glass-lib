@@ -182,7 +182,7 @@ glass_toggle_group_unmap (GtkWidget *widget)
   GTK_WIDGET_CLASS (glass_toggle_group_parent_class)->unmap (widget);
 }
 
-static void jelly_start (GlassToggleGroup *self);
+static void jelly_start (GlassToggleGroup *self, const GlassJellySpec *spec);
 static void jelly_settle_on (GlassToggleGroup *self, guint index);
 
 static void
@@ -204,9 +204,9 @@ set_active_internal (GlassToggleGroup *self, guint active, gboolean animate)
   if (active >= self->buttons->len || active == self->active)
     return;
 
-  /* A tap (or the app) sends the plate on its springs too, from wherever it
-   * is: it stretches on the way and runs on a little when it arrives. With
-   * animations off it is simply there. */
+  /* A tap (or the app) sends the plate gliding there from wherever it is,
+   * without the drag's stretch and overshoot: the user's hand is not on it.
+   * With animations off it is simply there. */
   animate = animate && gtk_widget_get_mapped (GTK_WIDGET (self)) &&
             glass_animations_enabled (GTK_WIDGET (self)) && self->shown.size.width > 0.0f;
   if (!self->dragging)
@@ -219,7 +219,7 @@ set_active_internal (GlassToggleGroup *self, guint active, gboolean animate)
 
   if (animate)
     {
-      jelly_start (self);
+      jelly_start (self, &glass_jelly_glide);
       jelly_settle_on (self, active);
     }
   gtk_widget_queue_allocate (GTK_WIDGET (self));
@@ -357,15 +357,19 @@ jelly_tick (GtkWidget     *widget,
 }
 
 static void
-jelly_start (GlassToggleGroup *self)
+jelly_start (GlassToggleGroup     *self,
+             const GlassJellySpec *spec)
 {
-  /* From wherever the plate is, a move in progress included. */
+  /* From wherever the plate is, a move in progress included (a drag taking
+   * over a glide keeps its speed, on the drag's springs). */
   if (!self->jelly.active)
     {
-      glass_jelly_start (&self->jelly, &glass_jelly_plate, &self->shown, TRUE, FALSE);
+      glass_jelly_start (&self->jelly, spec, &self->shown, TRUE, FALSE);
       self->mark_x[0] = self->shown.origin.x;
       self->mark_x[1] = self->shown.origin.x + self->shown.size.width;
     }
+  else
+    self->jelly.spec = *spec;
   if (self->tick == 0)
     self->tick = gtk_widget_add_tick_callback (GTK_WIDGET (self), jelly_tick, NULL, NULL);
 }
@@ -447,7 +451,7 @@ drag_update (GtkGestureDrag   *gesture,
       if (!active_rect (self, &self->drag_origin))
         return;
       self->dragging = TRUE;
-      jelly_start (self);
+      jelly_start (self, &glass_jelly_plate);
       /* Less motion: a press's swell, no more. */
       if (self->held && !glass_motion_reduced (GTK_WIDGET (self)))
         glass_panel_set_press_level (GLASS_PANEL (self->plate), DRAG_SWELL);

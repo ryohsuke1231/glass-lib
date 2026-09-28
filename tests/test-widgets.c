@@ -1110,6 +1110,27 @@ test_jelly (void)
   glass_jelly_snap (&jelly);
   glass_jelly_get (&jelly, &r);
   g_assert_true (graphene_rect_equal (&r, &from));
+
+  /* A tap's glide: there quickly, no stretch, no overshoot. */
+  glass_jelly_start (&jelly, &glass_jelly_glide, &from, TRUE, FALSE);
+  glass_jelly_set_mark (&jelly, &to);
+  widest = furthest = 0.0;
+  moving = TRUE;
+  now = 1000000;
+  for (frames = 0; moving && frames < 600; frames++)
+    {
+      now += 16667;
+      moving = glass_jelly_step (&jelly, now);
+      glass_jelly_get (&jelly, &r);
+      widest = MAX (widest, r.size.width);
+      furthest = MAX (furthest, r.origin.x + r.size.width);
+      if (frames == 11)                                /* 0.2 s */
+        g_assert_cmpfloat (glass_jelly_progress (&jelly, &from), >, 0.9);
+    }
+  g_assert_false (moving);
+  g_assert_cmpint (frames, <, 30);                     /* at rest within half a second */
+  g_assert_cmpfloat (widest, <=, 80.01);
+  g_assert_cmpfloat (furthest, <=, 280.01);
 }
 
 /* Motion settings (design.md §13): animations off, or less motion asked

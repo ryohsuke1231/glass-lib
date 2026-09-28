@@ -19,6 +19,12 @@
  * its width. */
 const GlassJellySpec glass_jelly_plate = { 48.0, 0.45, 0.35, 0.6, 1.7 };
 
+/* A tap: what the plate does then is not the user's hand, and a bounce
+ * only draws the eye (the user, 2026-09-28). Critically damped, the edges
+ * together: 90% of the way in 0.15 s, like the slide of v0.9 (280 ms, ease
+ * out), and no further. */
+const GlassJellySpec glass_jelly_glide = { 26.0, 1.0, 0.0, 0.6, 1.8 };
+
 /* Travelling glass: liquid_glass_widgets' morph spring (stiffness 120,
  * damping 16, from its iOS 26 captures: omega 11, 0.73 of critical) is the
  * body's; here it is a little stiffer, as the edges add their own lag. */

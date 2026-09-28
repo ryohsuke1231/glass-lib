@@ -20,8 +20,12 @@ typedef struct {
   double max_stretch;    /* ... times the mark's */
 } GlassJellySpec;
 
-/* The toggle group's plate (design.md §6.6): stiff, lively. */
+/* The toggle group's plate while it is dragged, and the knobs (design.md
+ * §6.6): stiff, lively. */
 extern const GlassJellySpec glass_jelly_plate;
+/* The plate sent to a toggle by a tap or by the app (design.md §6.6): it
+ * glides there, with no stretch and no overshoot. */
+extern const GlassJellySpec glass_jelly_glide;
 /* Glass travelling to its place (morphs, knobs; design.md §6.8, §6.9):
  * softer, so the stretch reads, and less lively. */
 extern const GlassJellySpec glass_jelly_travel;
