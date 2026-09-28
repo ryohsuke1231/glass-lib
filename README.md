@@ -44,9 +44,9 @@ scrolls under them — in the same frame, on any compositor.
   what is under them.
 - **The optics of the [Liquid Glass GNOME Shell extension](https://github.com/ryohsuke1231/liquid-glass)**
   (refraction, shadow), with the lens matched to measurements of macOS's
-  glass, and the frosted body and hairline edge of iOS 27's glass as
+  glass, and the hairline edge of iOS 27's glass as
   [liquid_glass_widgets](https://github.com/sdegenaar/liquid_glass_widgets)
-  measured them, for the light and the dark appearance — and tunable: materials (regular, thick,
+  measured it, for the light and the dark appearance — and tunable: materials (regular, thick,
   clear, menu, and a tinted, frosted *prominent* one for the button that
   confirms), a thin or thick lens, and every parameter and the tint for the
   whole app or for one panel.

@@ -110,6 +110,7 @@ typedef struct {
    * one to go to, dissolving (ghost_into NULL). */
   AdwAnimation       *ghost_anim;
   double              ghost_t;
+  double              ghost_left;       /* into a neighbour: how much of it is not taken in yet */
   gboolean            ghost;
   graphene_rect_t     ghost_from;
   double              ghost_from_radius;
@@ -780,6 +781,8 @@ press_event (GtkEventControllerLegacy *controller,
  * to ours over this width (logical px) while they part. */
 #define ANCHOR_SPAN 0.4
 #define ANCHOR_MERGE 24.0
+/* A ghost going into its neighbour is gone once it is this small. */
+#define GHOST_GONE 0.05
 
 void
 glass_panel_resolve_corners (GlassPanel            *self,
@@ -1122,6 +1125,7 @@ begin_vanish (GlassPanel *self)
   stop_ghost (self);
   priv->ghost = TRUE;
   priv->ghost_t = 0.0;
+  priv->ghost_left = 1.0;
   priv->ghost_from = priv->drawn_rect;
   priv->ghost_from_radius = priv->drawn_radius;
 
@@ -1150,6 +1154,20 @@ lerp_corners (double from, const double to[4], double t, double out[4])
 {
   for (int i = 0; i < 4; i++)
     out[i] = MAX (from + (to[i] - from) * t, 0.0);
+}
+
+/* How much of @a lies over @b, 0..1. (Of @a: a drop stretched by its
+ * springs is longer than where it goes, and its tail is still out.) */
+static double
+overlap_share (const graphene_rect_t *a,
+               const graphene_rect_t *b)
+{
+  graphene_rect_t both;
+  double whole = a->size.width * a->size.height;
+
+  if (whole <= 0.0 || !graphene_rect_intersection (a, b, &both))
+    return 0.0;
+  return CLAMP (both.size.width * both.size.height / whole, 0.0, 1.0);
 }
 
 gboolean
@@ -1291,6 +1309,7 @@ glass_panel_get_ghost (GlassPanel      *self,
   GlassPanelPrivate *priv = PRIV (self);
   graphene_rect_t into;
   double to[4];
+  gboolean moving;
 
   if (!priv->ghost)
     return FALSE;
@@ -1315,20 +1334,28 @@ glass_panel_get_ghost (GlassPanel      *self,
       stop_ghost (self);
       return FALSE;
     }
-  /* Into the neighbour on the springs; gone once it has arrived (the two
-   * are one shape then). */
+  /* Into the neighbour on the springs, taken in as it goes: the drop
+   * shrinks by as much of it as lies over the neighbour, and is gone when
+   * it gets there. Laid over the neighbour whole, the smooth union would
+   * swell the two by a quarter of the group's spacing on every side
+   * (a 44 px button to 56 px, with two drops in it) until the springs came
+   * to rest, and then snap back. */
   glass_jelly_set_mark (&priv->jelly, &into);
-  if (!glass_jelly_step (&priv->jelly, frame_time (self)))
+  moving = glass_jelly_step (&priv->jelly, frame_time (self));
+  glass_jelly_get (&priv->jelly, rect);
+  priv->ghost_left = MIN (priv->ghost_left, 1.0 - overlap_share (rect, &into));
+  if (!moving || priv->ghost_left <= GHOST_GONE)
     {
       stop_ghost (self);
       return FALSE;
     }
-  glass_jelly_get (&priv->jelly, rect);
   priv->ghost_t = MAX (priv->ghost_t, glass_jelly_progress (&priv->jelly, &priv->ghost_from));
   glass_panel_resolve_corners (GLASS_PANEL (priv->ghost_into), &into, to);
   lerp_corners (priv->ghost_from_radius, to, priv->ghost_t, corners);
+  graphene_rect_inset (rect, rect->size.width * (float) (1.0 - priv->ghost_left) / 2.0f,
+                       rect->size.height * (float) (1.0 - priv->ghost_left) / 2.0f);
   for (int i = 0; i < 4; i++)
-    corners[i] = MIN (corners[i], MIN (rect->size.width, rect->size.height) / 2.0);
+    corners[i] = MIN (corners[i] * priv->ghost_left, MIN (rect->size.width, rect->size.height) / 2.0);
   return TRUE;
 }
 

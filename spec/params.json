@@ -88,7 +88,7 @@
       "by 14 pt) laid at frost-opacity over a copy of it blurred by blur-radius, held within frost-clamp of the",
       "cloud on one side (> 0: not darker, < 0: not lighter), each blur weighing white frost-weight / blur-weight",
       "times as much as black; then the tint, then the saturation (which the shader moves by +-20% with the",
-      "luma, as in the measurement)."
+      "luma, as in the measurement). No material uses it: the user preferred the plain body (2026-09-28)."
     ],
     "plain": {
       "light": { "saturation": 1.5 },
@@ -115,12 +115,11 @@
     {
       "name": "regular",
       "edge": "ios27-s",
-      "surface": "ios27",
+      "surface": "plain",
       "outline": "ios27",
-      "values": { "tint-strength": 0.53, "blur-radius": 0.6, "shadow-radius": 16.0, "shadow-intensity": 0.015 },
-      "values_dark": { "tint-strength": 0.12, "shadow-intensity": 0.0, "light-angle-deg": 270.0 },
-      "tint": [0.973, 0.973, 0.973],
-      "tint_dark": [1.0, 1.0, 1.0],
+      "values": { "tint-strength": 0.12, "blur-radius": 2.0, "shadow-radius": 16.0, "shadow-intensity": 0.015 },
+      "values_dark": { "shadow-intensity": 0.0, "light-angle-deg": 270.0 },
+      "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": false,
       "adaptive": true
     },
@@ -138,9 +137,9 @@
     {
       "name": "thick",
       "edge": "ios27-s",
-      "surface": "ios27",
+      "surface": "plain",
       "outline": "ios27",
-      "values": { "tint-strength": 0.55, "blur-radius": 0.6, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
+      "values": { "tint-strength": 0.55, "blur-radius": 12.0, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
       "values_dark": { "light-angle-deg": 270.0 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": true,
@@ -149,9 +148,9 @@
     {
       "name": "menu",
       "edge": "ios27-s",
-      "surface": "ios27",
+      "surface": "plain",
       "outline": "ios27",
-      "values": { "tint-strength": 0.45, "blur-radius": 0.6, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
+      "values": { "tint-strength": 0.45, "blur-radius": 8.0, "shadow-radius": 24.0, "shadow-intensity": 0.07 },
       "values_dark": { "light-angle-deg": 270.0 },
       "tint": [1.0, 1.0, 1.0],
       "tint_from_theme": true,

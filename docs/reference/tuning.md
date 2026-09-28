@@ -7,15 +7,13 @@ Slug: tuning
 
 Each panel has a [enum@Glass.Material], which sets how it looks:
 
-- `REGULAR` (the default): toolbars, buttons, cards. The glass of iOS 27
-  (SwiftUI's `glassEffect(.regular)`): a frost over a faint copy of what is
-  behind, milky white in the light appearance, a light veil in the dark one,
-  colours that follow the backdrop.
-- `CLEAR`: over photos and video. Clear glass: little blur and tint, and a
-  thicker lens (like the desktop widgets of macOS; the others have the Dock's).
-- `THICK`: large panes such as sidebars. The frost of `REGULAR`, tinted with
-  the window colour, the theme's text colours.
-- `MENU`: popovers and menus. Like `THICK`, lighter.
+- `REGULAR` (the default): toolbars, buttons, cards. Light blur, a faint
+  white tint, colours that follow the backdrop.
+- `CLEAR`: over photos and video. Less blur and tint, and a thicker lens
+  (like the desktop widgets of macOS; the others have the Dock's).
+- `THICK`: large panes such as sidebars. Strong blur, tinted with the window
+  colour, the theme's text colours.
+- `MENU`: popovers and menus. Between `REGULAR` and `THICK`.
 - `PROMINENT`: the button that confirms (Done, Send, Close). Strongly tinted
   with the theme's accent colour and frosted, with the accent's text colour.
   Give it a [property@Glass.Panel:tint] for another colour:
@@ -28,8 +26,7 @@ Every material has iOS 27's edge: a half-point line of what is just outside
 the glass, darker across the light, and two highlights where the light
 strikes it (from above in the light appearance, from below in the dark one).
 The materials have values for each appearance (libadwaita's
-`AdwStyleManager:dark`); the body and the edge are part of the material, not
-parameters. See [Parameters and Materials](parameters.html).
+`AdwStyleManager:dark`); the edge is part of the material, not parameters. See [Parameters and Materials](parameters.html).
 
 Set a panel's shape with [property@Glass.Panel:corner-radius] (negative, the
 default: a capsule) or per corner with [method@Glass.Panel.set_corner_radii],

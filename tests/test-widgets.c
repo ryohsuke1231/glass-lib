@@ -953,7 +953,9 @@ test_morph (void)
   gtk_widget_set_visible (b, FALSE);
   if (animated)
     g_assert_true (glass_panel_get_ghost (GLASS_PANEL (b), GLASS_VIEW (view), &rect, corners));
-  spin (800);
+  /* Taken in as it gets there (about 0.2 s), not once the springs have
+   * come to rest (0.7 s): over its neighbour whole, the two swell. */
+  spin (450);
   g_assert_false (glass_panel_get_ghost (GLASS_PANEL (b), GLASS_VIEW (view), &rect, corners));
 
   /* The swap: outside a group, no ghost; the field morphs. */
