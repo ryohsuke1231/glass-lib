@@ -986,6 +986,22 @@ test_morph_id (void)
   g_object_unref (panel);
 }
 
+static GtkWidget *
+find_class (GtkWidget  *widget,
+            const char *css_class)
+{
+  if (gtk_widget_has_css_class (widget, css_class))
+    return widget;
+  for (GtkWidget *child = gtk_widget_get_first_child (widget); child; child = gtk_widget_get_next_sibling (child))
+    {
+      GtkWidget *found = find_class (child, css_class);
+
+      if (found)
+        return found;
+    }
+  return NULL;
+}
+
 /* The tab bar follows the stack's pages and their selection, both ways. */
 static void
 test_tab_bar (void)
@@ -1017,6 +1033,24 @@ test_tab_bar (void)
   /* ... and the bar the stack. */
   glass_toggle_group_set_active (GLASS_TOGGLE_GROUP (group), 0);
   g_assert_cmpstr (adw_view_stack_get_visible_child_name (ADW_VIEW_STACK (stack)), ==, "one");
+
+  /* A page's dot or title changes its item, not the bar: rebuilt, the
+   * plate would stop short of the page being shown (a page losing its dot
+   * as it is shown). */
+  {
+    AdwViewStackPage *first = adw_view_stack_get_page (ADW_VIEW_STACK (stack),
+                                                       adw_view_stack_get_child_by_name (ADW_VIEW_STACK (stack), "one"));
+    GtkWidget *tab = find_class (group, "tab");
+
+    adw_view_stack_page_set_needs_attention (first, TRUE);
+    g_assert_true (find_class (group, "tab") == tab);
+    g_assert_true (gtk_widget_get_visible (find_class (tab, "tab-dot")));
+    adw_view_stack_page_set_title (first, "First");
+    g_assert_true (find_class (group, "tab") == tab);
+    g_assert_cmpstr (gtk_widget_get_tooltip_text (tab), ==, "First");
+    adw_view_stack_page_set_needs_attention (first, FALSE);
+    g_assert_false (gtk_widget_get_visible (find_class (tab, "tab-dot")));
+  }
 
   glass_tab_bar_set_stack (GLASS_TAB_BAR (bar), NULL);
   g_assert_cmpuint (glass_toggle_group_get_n_toggles (GLASS_TOGGLE_GROUP (group)), ==, 0);

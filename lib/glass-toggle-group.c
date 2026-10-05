@@ -65,6 +65,7 @@ struct _GlassToggleGroup {
    * row only. It carries every move of the plate, taps too. */
   GlassJelly      jelly;
   double          mark_x[2];                  /* where its left and right edges head */
+  guint           settle_to;                  /* the toggle it settles on (G_MAXUINT: none) */
   guint           tick;
 
   /* The magic lens (design.md §6.6): the toggles under the plate, again,
@@ -336,6 +337,8 @@ jelly_tick (GtkWidget     *widget,
   GlassToggleGroup *self = GLASS_TOGGLE_GROUP (widget);
   gboolean moving;
 
+  if (!self->dragging)
+    jelly_settle_on (self, self->settle_to);
   jelly_mark (self);
   if (glass_motion_reduced (widget))
     {
@@ -381,6 +384,7 @@ jelly_stop (GlassToggleGroup *self)
     gtk_widget_remove_tick_callback (GTK_WIDGET (self), self->tick);
   self->tick = 0;
   glass_jelly_stop (&self->jelly);
+  self->settle_to = G_MAXUINT;
   self->dragging = FALSE;
   self->drag_armed = FALSE;
 }
@@ -408,14 +412,21 @@ jelly_follow_pointer (GlassToggleGroup *self)
   self->mark_x[1] = centre + width / 2.0;
 }
 
-/* After a drag or a tap: the plate settles on a toggle. */
+/* After a drag or a tap: the plate settles on a toggle. Read again on each
+ * tick, as the toggle may move meanwhile; one not placed yet (just added)
+ * leaves the mark where it was rather than at the group's corner. */
 static void
 jelly_settle_on (GlassToggleGroup *self,
                  guint             index)
 {
   graphene_rect_t b;
 
+  self->settle_to = index;
+  if (index >= self->buttons->len)
+    return;
   button_bounds (self, index, &b);
+  if (b.size.width <= 0.0f)
+    return;
   self->mark_x[0] = b.origin.x;
   self->mark_x[1] = b.origin.x + b.size.width;
 }
@@ -451,6 +462,7 @@ drag_update (GtkGestureDrag   *gesture,
       if (!active_rect (self, &self->drag_origin))
         return;
       self->dragging = TRUE;
+      self->settle_to = G_MAXUINT;
       jelly_start (self, &glass_jelly_plate);
       /* Less motion: a press's swell, no more. */
       if (self->held && !glass_motion_reduced (GTK_WIDGET (self)))
@@ -790,6 +802,7 @@ glass_toggle_group_init (GlassToggleGroup *self)
   GtkEventController *press;
 
   self->buttons = g_ptr_array_new ();
+  self->settle_to = G_MAXUINT;
   self->names = g_ptr_array_new_with_free_func (g_free);
 
   /* Each toggle is drawn inside a pill, like the plate under it. */

@@ -34,6 +34,7 @@ struct _GlassTabBar {
   AdwViewStack      *stack;
   GtkSelectionModel *pages;
   GArray            *positions;    /* guint: the page of each item */
+  GPtrArray         *items;        /* GtkButton*, the group's: each item's button */
   GPtrArray         *watched;      /* AdwViewStackPage*, refs */
   gboolean           syncing;
 };
@@ -49,6 +50,29 @@ static GParamSpec *props[N_PROPS];
 G_DEFINE_FINAL_TYPE (GlassTabBar, glass_tab_bar, GTK_TYPE_WIDGET)
 
 static void rebuild (GlassTabBar *self);
+static GtkWidget *make_item (AdwViewStackPage *page);
+
+/* A page's item made again in its button. Not the whole bar: rebuilding
+ * would stop the plate where it is headed (a page losing its dot as it is
+ * shown, while the plate settles on it). */
+static void
+update_item (GlassTabBar      *self,
+             AdwViewStackPage *page)
+{
+  guint position;
+
+  if (!g_ptr_array_find (self->watched, page, &position))
+    return;
+  for (guint k = 0; k < self->positions->len; k++)
+    if (g_array_index (self->positions, guint, k) == position)
+      {
+        GtkWidget *button = g_ptr_array_index (self->items, k);
+
+        gtk_button_set_child (GTK_BUTTON (button), make_item (page));
+        gtk_widget_set_tooltip_text (button, adw_view_stack_page_get_title (page));
+        return;
+      }
+}
 
 static void
 page_notify (AdwViewStackPage *page,
@@ -57,10 +81,11 @@ page_notify (AdwViewStackPage *page,
 {
   const char *name = g_param_spec_get_name (pspec);
 
-  if (g_str_equal (name, "title") || g_str_equal (name, "icon-name") ||
-      g_str_equal (name, "visible") || g_str_equal (name, "needs-attention") ||
-      g_str_equal (name, "use-underline"))
+  if (g_str_equal (name, "visible"))
     rebuild (self);
+  else if (g_str_equal (name, "title") || g_str_equal (name, "icon-name") ||
+           g_str_equal (name, "needs-attention") || g_str_equal (name, "use-underline"))
+    update_item (self, page);
 }
 
 static void
@@ -132,6 +157,7 @@ rebuild (GlassTabBar *self)
   /* Positions first: removing the toggles notifies :active, which
    * active_changed() must not map to a page. */
   g_array_set_size (self->positions, 0);
+  g_ptr_array_set_size (self->items, 0);
   glass_toggle_group_remove_all (GLASS_TOGGLE_GROUP (self->group));
   if (self->pages == NULL)
     return;
@@ -152,6 +178,7 @@ rebuild (GlassTabBar *self)
       gtk_widget_add_css_class (button, "tab");
       gtk_widget_set_tooltip_text (button, adw_view_stack_page_get_title (page));
       g_array_append_val (self->positions, i);
+      g_ptr_array_add (self->items, button);
     }
   sync_selection (self);
 }
@@ -205,6 +232,7 @@ glass_tab_bar_finalize (GObject *object)
   GlassTabBar *self = GLASS_TAB_BAR (object);
 
   g_array_unref (self->positions);
+  g_ptr_array_unref (self->items);
   g_ptr_array_unref (self->watched);
 
   G_OBJECT_CLASS (glass_tab_bar_parent_class)->finalize (object);
@@ -266,6 +294,7 @@ static void
 glass_tab_bar_init (GlassTabBar *self)
 {
   self->positions = g_array_new (FALSE, FALSE, sizeof (guint));
+  self->items = g_ptr_array_new ();
   self->watched = g_ptr_array_new_with_free_func (g_object_unref);
 
   self->group = glass_toggle_group_new ();
