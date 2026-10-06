@@ -15,9 +15,10 @@ vec4 glass_shade(vec2 uv) {
     vec2 local_pos = pixel_coord - box_center;
     vec2 box_size = max(vec2(glass_rect.z, glass_rect.w) * 0.5, vec2(1.0));
 
-    // corner_radius itself with glass_corner_mode 0 (the reference).
-    float outline_radius = outlineRadius(local_pos);
-    float d = sdRoundRect(local_pos, box_size, outline_radius);
+    // corner_radius itself with glass_corner_mode 0 (the reference), as a
+    // continuous corner (cornerShape()).
+    vec2 outline_corner = cornerShape(box_size, outlineRadius(local_pos));
+    float d = sdRoundRect(local_pos, box_size, outline_corner);
 
     // Fused shapes (glass-lib's GlassGroup): the smooth union of several
     // rounded rectangles instead of glass_rect. Off (0) in the reference.
@@ -88,15 +89,18 @@ vec4 glass_shade(vec2 uv) {
         float facing = max(lightDirFlat.z, 0.0);
         float specFlat = pow(facing, max(shininess, 1.0)) * specular_intensity * 0.65;
         float sheenFlat = pow(facing, 1.65) * sheen_intensity;
-        vec3 addedFlat = vec3(specFlat + sheenFlat) * surface_light_enabled;
+        float lightFlat = (specFlat + sheenFlat) * surface_light_enabled;
 
-        // Screen blend, then the same overflow normalisation as the full path.
-        vec3 litFlat = flatRgb + addedFlat - (flatRgb * addedFlat);
+        // Screen blend, then the same overflow normalisation and highlight
+        // colour as the full path.
+        vec3 litFlat = flatRgb + lightFlat - (flatRgb * lightFlat);
         float maxChannelFlat = max(litFlat.r, max(litFlat.g, litFlat.b));
         if (maxChannelFlat > 1.0) {
             litFlat /= maxChannelFlat;
         }
         litFlat = max(litFlat, 0.0);
+        if (highlight_backdrop_color > 0.5 && lightFlat > 0.0)
+            litFlat = backdropHighlight(flatRgb, litFlat, lightFlat);
 
         litFlat = max(litFlat + ditherLSB(pixel_coord), 0.0);
 
@@ -104,8 +108,8 @@ vec4 glass_shade(vec2 uv) {
     }
 
     // ── Drop shadow ──────────────────────────────────────────────────────
-    // A tight dark umbra at the edge, a wider soft penumbra, slightly longer
-    // on the side away from the light, tinted cool rather than black.
+    // Dark at the edge and fading smoothly outwards, slightly longer on the
+    // side away from the light, tinted cool rather than black.
 
     float lightAngleRad = radians(light_angle_deg);
     vec2 lightDir2D = vec2(cos(lightAngleRad), -sin(lightAngleRad));
@@ -121,40 +125,34 @@ vec4 glass_shade(vec2 uv) {
     float maxRadius = max(shadow_max_radius, 5.0);
     float effectiveRadius    = min(shadow_radius * dirRadius, maxRadius);
 
-    // shadow_radius = 0 really means off: the umbra's divisor below is
-    // floored, which would otherwise keep a thin dark band at the edge.
+    // shadow_radius = 0 really means off: the radius floor below would
+    // otherwise keep a thin dark band at the edge.
     float radiusEnable = smoothstep(0.0, 0.75, shadow_radius);
     float effectiveIntensity = shadow_intensity * dirIntensity * radiusEnable;
 
     // Avoids 0/0 (NaN on the boundary itself) when the radius collapses.
     float safeRadius = max(effectiveRadius, 0.001);
 
-    // Umbra: linear over 0.4 * radius.
-    float umbra_t = clamp(d / max(safeRadius * 0.40, 0.5), 0.0, 1.0);
-    float umbra  = (1.0 - umbra_t) * 0.80;
-
-    // Penumbra: quintic smootherstep, so value, slope and curvature all reach
-    // 0 at the outer radius - no visible ring where it meets "no shadow".
-    float penumbra_t = clamp(d / safeRadius, 0.0, 1.0);
-    float penumbraFade = 1.0 - penumbra_t;
-    float penumbraEase = penumbraFade * penumbraFade * penumbraFade *
-        (penumbraFade * (penumbraFade * 6.0 - 15.0) + 10.0);
-    float penumbra = penumbraEase * 0.55;
+    // The shadow of a soft edge: a tight and a broad Gaussian-blurred edge,
+    // faded out by (1 - t^2)^3, which reaches zero at the radius (never past
+    // maxRadius) with zero slope and curvature. A profile built from pieces
+    // creases where they meet, and the eye reads the crease as the shadow's
+    // border.
+    float shadow_t = clamp(d / safeRadius, 0.0, 1.0);
+    float edgeShadow = 0.18 * erfcPositive(shadow_t * 2.619) +
+        1.17 * erfcPositive(shadow_t * 0.895);
+    float shadowWindow = 1.0 - shadow_t * shadow_t;
+    shadowWindow = shadowWindow * shadowWindow * shadowWindow;
 
     float shadowAlpha = clamp(
-        (umbra + penumbra) * outsideMask * effectiveIntensity,
+        edgeShadow * shadowWindow * outsideMask * effectiveIntensity,
         0.0, 1.0
     );
 
-    // Only engages in the last 15% before maxRadius, so it cannot bend the
-    // penumbra; guarantees no hard clip at the edge of the shadow's room.
-    float boundsFade = 1.0 - smoothstep(maxRadius * 0.85, maxRadius, d);
-    float boundsMask = boundsFade * boundsFade * boundsFade *
-        (boundsFade * (boundsFade * 6.0 - 15.0) + 10.0);
-    shadowAlpha *= boundsMask;
-
-    // Hard cutoff independent of any smoothstep() implementation.
-    shadowAlpha *= 1.0 - step(maxRadius, d);
+    // The output keeps 8 bits, so the faint tail ends in a visible 1/255
+    // step. Noise of half a step rounds it stochastically instead.
+    if (shadowAlpha > 0.0)
+        shadowAlpha = max(shadowAlpha + ditherLSB(pixel_coord + vec2(37.0, 17.0)), 0.0);
 
     // [DEBUG] Masks, fully opaque: RED = shadow, GREEN = shape. Mode 1 lifts
     // faint values with a gamma so "no shadow at all" stays unambiguous.
@@ -177,7 +175,7 @@ vec4 glass_shade(vec2 uv) {
     }
 
     vec2 gradH = fused ? heightGradientFused(pixel_coord, max_z)
-                       : heightGradient2(local_pos, box_size, outline_radius, lensBand, max_z * lensScale);
+                       : heightGradient2(local_pos, box_size, outline_corner, lensBand, max_z * lensScale);
     vec3 normal = getNormal(gradH);
 
     vec2 disp = getDisplacement(d, normal, resolution);
@@ -255,7 +253,7 @@ vec4 glass_shade(vec2 uv) {
     // pixel here it is under a pixel across the whole footprint.
     if (fh > 0.0 && edge_taps_enabled > 0.5 && d < fh - 0.01 &&
         (dispLenPx > 0.5 || d > -fh)) {
-        vec2 dirOut = fused ? fusedDir(pixel_coord) : sdRoundRectDir(local_pos, box_size, outline_radius);
+        vec2 dirOut = fused ? fusedDir(pixel_coord) : sdRoundRectDir(local_pos, box_size, outline_corner);
         // The inside part, as offsets along dirOut: from the inner end of
         // the footprint to its outer end or to just short of the edge.
         float tA = -fh;
@@ -284,10 +282,10 @@ vec4 glass_shade(vec2 uv) {
 
     vec2 refractedUv = stabilizedUV(uv + disp, uv);
 
-    vec2 chromaDir = length(disp) > 0.00001 ? normalize(disp) : vec2(0.0);
-
-    // Chromatic aberration, chroma_strength px, scaled with the lens.
-    vec2 chromaVec = chromaDir * (chroma_strength / resolution) * lensShape;
+    // Chromatic aberration as dispersion: blue bends more than red, by a
+    // fraction of the refraction, so the colours part only where the glass
+    // bends the backdrop and most where it bends it most.
+    vec2 chromaVec = disp * clamp(chroma_strength, 0.0, 1.0);
     vec2 uvG = refractedUv;
 
     // Below a hundredth of a pixel the three channels resolve to the same
@@ -303,8 +301,8 @@ vec4 glass_shade(vec2 uv) {
     vec3 refractedRgb;
     if (usePath) {
         if (chromaActive) {
-            vec2 uvR = stabilizedUV(refractedUv + chromaVec, refractedUv);
-            vec2 uvB = stabilizedUV(refractedUv - chromaVec, refractedUv);
+            vec2 uvR = stabilizedUV(refractedUv - chromaVec, refractedUv);
+            vec2 uvB = stabilizedUV(refractedUv + chromaVec, refractedUv);
 
             refractedRgb = sampleBackdropPathRGB(uvR, uvG, uvB, path0, path1, path2, path3, path4,
                                                  texel, resolution, texelPx);
@@ -316,8 +314,8 @@ vec4 glass_shade(vec2 uv) {
                                refractedRgb, pathInside);
         }
     } else if (chromaActive) {
-        vec2 uvR = stabilizedUV(refractedUv + chromaVec, refractedUv);
-        vec2 uvB = stabilizedUV(refractedUv - chromaVec, refractedUv);
+        vec2 uvR = stabilizedUV(refractedUv - chromaVec, refractedUv);
+        vec2 uvB = stabilizedUV(refractedUv + chromaVec, refractedUv);
 
         refractedRgb = vec3(
             sampleBackdrop(uvR, tapExt, texel, resolution).r,
@@ -331,7 +329,7 @@ vec4 glass_shade(vec2 uv) {
     // glass-lib's iOS 27 outline (glass_material.glsl): the half-point line
     // shows the content just outside, untinted. All 0 in the reference.
     bool outline = ios27Outline();
-    vec2 rimDir = outline ? (fused ? fusedDir(pixel_coord) : sdRoundRectDir(local_pos, box_size, outline_radius))
+    vec2 rimDir = outline ? (fused ? fusedDir(pixel_coord) : sdRoundRectDir(local_pos, box_size, outline_corner))
                           : vec2(0.0);
     float rimAlong = dot(rimDir, ios27LightTravel());
     float hairline = ios27Hairline(depthPx);
@@ -398,12 +396,12 @@ vec4 glass_shade(vec2 uv) {
     float sheenFacing = max(dot(normal, lightDir), 0.0);
     float surfaceSheen = pow(sheenFacing, 1.65);
     surfaceSheen *= mix(1.0, 0.55, edgeBand);
-    vec3 sheenColor = vec3(1.0) * surfaceSheen * sheen_intensity;
+    float sheenLight = surfaceSheen * sheen_intensity;
 
     float alpha = insideMask;
 
     // All additive light, gated as one group.
-    vec3 addedLight = (vec3(specularLight + finalRimLight + idleRim) + sheenColor) * surface_light_enabled;
+    float addedLight = (specularLight + finalRimLight + idleRim + sheenLight) * surface_light_enabled;
 
     // Screen blend (A + B - AB): saturates smoothly instead of blowing out.
     vec3 litColor = baseColor + addedLight - (baseColor * addedLight);
@@ -414,6 +412,11 @@ vec4 glass_shade(vec2 uv) {
         litColor /= maxChannel;
     }
     litColor = max(litColor, 0.0);
+
+    // The backdrop's hue back in the highlight (glass_surface.glsl). Pixels
+    // outside the glass are not drawn, so they skip the conversion.
+    if (highlight_backdrop_color > 0.5 && addedLight > 0.0 && alpha > 0.0)
+        litColor = backdropHighlight(baseColor, litColor, addedLight);
 
     // The iOS 27 lobes and line, last: they are what the eye reads as the
     // edge, over everything else.

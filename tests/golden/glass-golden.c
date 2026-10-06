@@ -58,19 +58,22 @@ typedef struct {
   double supersample;
   double canvas_w, canvas_h;
   gboolean near_edge;       /* place the output at the canvas corner (edge damping) */
+  double corner_smoothing;  /* 0 = circular corners */
+  double highlights;        /* 1 = highlights in the backdrop's hue */
 } Variant;
 
 static const Variant variants[] = {
-  { "extension",    1, 30, 0.55, 1.5, 0.0, 0, 1, 1, 1, 1920, 1080, FALSE },
-  { "in-app",       1, 16, 0.20, 1.5, 0.4, 0, 1, 1, 1, 1920, 1080, FALSE },
-  { "no-chroma",    1, 30, 0.55, 0.0, 0.0, 0, 1, 0, 1, 1920, 1080, FALSE },
-  { "no-exits",     1, 30, 0.55, 1.5, 0.4, 0, 0, 1, 1, 1920, 1080, FALSE },
-  { "debug-1",      1, 30, 0.55, 1.5, 0.0, 1, 1, 1, 1, 1920, 1080, FALSE },
-  { "debug-2",      1, 30, 0.55, 1.5, 0.0, 2, 1, 1, 1, 1920, 1080, FALSE },
-  { "supersample",  1, 16, 0.20, 1.5, 0.0, 0, 1, 1, 4, 1920, 1080, FALSE },
-  { "scale-2",      2, 16, 0.20, 1.5, 0.0, 0, 1, 1, 1, 3840, 2160, FALSE },
-  { "small-canvas", 1, 16, 0.20, 1.5, 0.0, 0, 1, 1, 1, 0, 0, FALSE },   /* canvas = output: gradientStep < 1.2 */
-  { "near-edge",    1, 30, 0.55, 1.5, 0.0, 0, 1, 1, 1, 1920, 1080, TRUE },
+  { "extension",    1, 30, 0.55, 0.15, 0.0, 0, 1, 1, 1, 1920, 1080, FALSE, 0.6, 1 },
+  { "in-app",       1, 16, 0.20, 0.15, 0.4, 0, 1, 1, 1, 1920, 1080, FALSE, 0.6, 1 },
+  { "no-chroma",    1, 30, 0.55, 0.0, 0.0, 0, 1, 0, 1, 1920, 1080, FALSE, 0.6, 1 },
+  { "no-exits",     1, 30, 0.55, 0.15, 0.4, 0, 0, 1, 1, 1920, 1080, FALSE, 0.6, 1 },
+  { "debug-1",      1, 30, 0.55, 0.15, 0.0, 1, 1, 1, 1, 1920, 1080, FALSE, 0.6, 1 },
+  { "debug-2",      1, 30, 0.55, 0.15, 0.0, 2, 1, 1, 1, 1920, 1080, FALSE, 0.6, 1 },
+  { "supersample",  1, 16, 0.20, 0.15, 0.0, 0, 1, 1, 4, 1920, 1080, FALSE, 0.6, 1 },
+  { "scale-2",      2, 16, 0.20, 0.15, 0.0, 0, 1, 1, 1, 3840, 2160, FALSE, 0.6, 1 },
+  { "small-canvas", 1, 16, 0.20, 0.15, 0.0, 0, 1, 1, 1, 0, 0, FALSE, 0.6, 1 },   /* canvas = output: gradientStep < 1.2 */
+  { "circular",     1, 30, 0.55, 0.15, 0.4, 0, 1, 1, 1, 1920, 1080, FALSE, 0.0, 0 },
+  { "near-edge",    1, 30, 0.55, 0.15, 0.0, 0, 1, 1, 1, 1920, 1080, TRUE,  0.6, 1 },
 };
 
 typedef void (*FillFunc) (guint8 *px, int w, int h);
@@ -350,7 +353,8 @@ set_uniforms (GLuint program, gboolean reference, const Layout *l, const Variant
 
   for (guint i = 0; i < G_N_ELEMENTS (optics); i++)
     u1f (program, optics[i].name, optics[i].value * (optics[i].px ? s : 1.0));
-  u1f (program, "chroma_strength", v->chroma * s);
+  u1f (program, "chroma_strength", v->chroma);   /* a fraction of the displacement */
+  u1f (program, "highlight_backdrop_color", v->highlights);
   u1f (program, "specular_intensity", v->specular);
   u1f (program, "shadow_radius", v->shadow_radius * s);
   u1f (program, "shadow_intensity", v->shadow_intensity);
@@ -372,8 +376,8 @@ set_uniforms (GLuint program, gboolean reference, const Layout *l, const Variant
       u1f (program, "multi_region_mode", 0.0);
       u1f (program, "region_count", 0.0);
       u1f (program, "panel_bg_a", 0.0);
-      u1f (program, "pointer_x", -100.0);
-      u1f (program, "pointer_y", -100.0);
+      u1f (program, "corner_smoothing", v->corner_smoothing);
+      u1f (program, "corner_smoothing_enabled", 1.0);
     }
   else
     {
@@ -401,6 +405,7 @@ set_uniforms (GLuint program, gboolean reference, const Layout *l, const Variant
           u1f (program, "ao_intensity", 0.0);
           u1f (program, "sheen_intensity", 0.0);
         }
+      u1f (program, "corner_smoothing", v->corner_smoothing);
       glUniform4f (glGetUniformLocation (program, "glass_rect"),
                    (float) l->glass_x, (float) l->glass_y, (float) l->glass_w, (float) l->glass_h);
       /* What the reference derived from its canvas (design.md §10.2). */
@@ -510,7 +515,7 @@ luma8 (const guint8 *p)
 static int
 check_ios27 (GLuint core, GLuint vao)
 {
-  const Variant v = { "ios27", 1, 16, 0.015, 0.0, 0.0, 0, 1, 1, 4, 1920, 1080, FALSE };
+  const Variant v = { "ios27", 1, 16, 0.015, 0.0, 0.0, 0, 1, 1, 4, 1920, 1080, FALSE, 0.6, 1 };
   const double flat[2] = { 0.0, 1.0 };
   int failures = 0;
 

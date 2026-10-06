@@ -136,7 +136,9 @@ float ios27Absorption(float depthPx, float along) {
 // The two highlight lobes at the ends of the light axis, the far (lit) one
 // a little stronger: a sharp core just inside the line and a soft tail a
 // few points into the body, added in sRGB and easing off as the body
-// brightens (+50/255 over black, about +27/255 over near white).
+// brightens (+50/255 over black, about +27/255 over near white). With
+// highlight_backdrop_color the lobes keep their lightness but take the
+// body's hue (backdropHighlight()), like the reference's rim light.
 vec3 ios27RimLight(vec3 c, float depthPx, float along, float hairline) {
     float s3 = lens_px_scale / 3.0;
     if (rim_light <= 0.0 || depthPx >= 30.0 * s3)
@@ -149,7 +151,10 @@ vec3 ios27RimLight(vec3 c, float depthPx, float along, float hairline) {
     float tail = exp(-inset / 8.0);
     float ease = pow(1.0 - clamp(dot(c, GLASS_LUMA_709), 0.0, 1.0), 0.3);
     float light = rim_light * lobe * ease * (0.175 * core + 0.035 * tail) * (1.0 - hairline);
-    return clamp(c + vec3(light), 0.0, 1.0);
+    vec3 lifted = clamp(c + vec3(light), 0.0, 1.0);
+    if (highlight_backdrop_color > 0.5 && light > 0.0)
+        lifted = backdropHighlight(c, lifted, light);
+    return lifted;
 }
 
 // The line itself: a fixed step below whatever is under it (subtracted, not

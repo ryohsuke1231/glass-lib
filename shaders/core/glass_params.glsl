@@ -21,6 +21,11 @@ uniform float resolution_y;
 // extension's `padding` / `isDock` adjustments are the caller's business).
 uniform vec4 glass_rect;
 uniform float corner_radius;
+// Continuous corners (glass_shape.glsl cornerShape()), 0 = circular arcs.
+// The curve starts up to (1 + corner_smoothing) times the corner radius from
+// the corner, like Figma's corner smoothing. The reference multiplies it by
+// its corner_smoothing_enabled; the caller passes the product.
+uniform float corner_smoothing;
 
 // Optics
 uniform float max_z;
@@ -50,6 +55,9 @@ uniform float rim_power;
 uniform float rim_light_color_intensity;
 uniform float sheen_intensity;
 uniform float surface_light_enabled;
+// 1 = the highlights keep the backdrop's hue instead of washing out to white
+// (glass_surface.glsl backdropHighlight()).
+uniform float highlight_backdrop_color;
 uniform float light_angle_deg;
 uniform float ao_intensity;   // 0 = no inner darkening, 1 = black at the edge
 uniform float ao_radius;      // px inward over which the AO band fades out

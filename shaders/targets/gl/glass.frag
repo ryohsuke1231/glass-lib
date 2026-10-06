@@ -42,7 +42,7 @@ void main()
     vec2 p = v_tex_coord.st * resolution;
     vec2 half_size = max(glass_rect.zw * 0.5, vec2(1.0));
     vec2 local = p - (glass_rect.xy + half_size);
-    float d = sdRoundRect(local, half_size, outlineRadius(local));
+    float d = sdRoundRect(local, half_size, cornerShape(half_size, outlineRadius(local)));
     float band = min(lensBandFor(min(half_size.x, half_size.y)), 8.0 * lens_px_scale);
     bool in_lens = d < max(edge_smoothing, 0.75) + 1.0 && -d < band;
 

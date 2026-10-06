@@ -2,10 +2,60 @@
 // and its surface (a superellipse dome), and the normal of that surface.
 
 // Signed distance to a rounded rectangle centred at the origin with half-size
-// b and corner radius r: negative inside, positive outside, 0 on the edge.
-float sdRoundRect(vec2 p, vec2 b, float r) {
+// b and circular corners of radius r: negative inside, positive outside, 0 on
+// the edge.
+float sdCircleRoundRect(vec2 p, vec2 b, float r) {
     vec2 d = abs(p) - b + vec2(r);
     return min(max(d.x, d.y), 0.0) + length(max(d, 0.0)) - r;
+}
+
+// The corner of a box with half-extents b and corner radius r, as (radius,
+// exponent) of a superellipse: continuous corners, corner_smoothing of them
+// (0 = circular arcs; the reference's cornerShape()). Above 2 the corner
+// meets the sides with zero curvature, so the rim and the refraction do not
+// crease there. The radius grows with the exponent so the corner's midpoint
+// stays where the circular one's is; a corner with no room to grow, such as
+// a pill's end, gets a smaller exponent, down to a plain circle.
+vec2 cornerShape(vec2 b, float r) {
+    float s = clamp(corner_smoothing, 0.0, 1.0);
+    float k = min(1.0 + s, max(min(b.x, b.y) / max(r, 1.0e-3), 1.0));
+    // A circle: n = 2 exactly, without the log2() (every pill, every fused
+    // member that is one).
+    if (k <= 1.0)
+        return vec2(r, 2.0);
+    // From the midpoint condition sqrt(2) * k * (1 - 2^(-1/n)) = sqrt(2) - 1.
+    float n = -1.0 / log2(1.0 - 0.29289322 / k);
+    return vec2(r * k, n);
+}
+
+// Superellipse norm (|x|^n + |y|^n)^(1/n) of q >= 0, scaled to stay in range.
+float superLength(vec2 q, float n) {
+    float m = max(q.x, q.y);
+    if (m <= 0.0)
+        return 0.0;
+    vec2 u = q / m;
+    return m * pow(pow(u.x, n) + pow(u.y, n), 1.0 / n);
+}
+
+// Signed distance to a rounded rectangle whose corners are superellipses
+// (corner = cornerShape()): negative inside, 0 on the edge. The superellipse
+// norm is not a distance, so it is divided by its gradient's length, which
+// keeps the rim, the bevel and the antialiasing the same width all round.
+// The division fades in from the corner's centre, where the gradient is
+// undefined, so the field stays continuous inside.
+float sdRoundRect(vec2 p, vec2 b, vec2 corner) {
+    float r = corner.x;
+    float n = corner.y;
+    if (n <= 2.0)
+        return sdCircleRoundRect(p, b, r);
+    vec2 d = abs(p) - b + vec2(r);
+    vec2 q = max(d, 0.0);
+    float len = superLength(q, n);
+    if (len <= 0.0)
+        return max(d.x, d.y) - r;
+    vec2 g = pow(q / len, vec2(n - 1.0));
+    float gradLen = mix(1.0, length(g), clamp(len / max(r, 1.0e-3), 0.0, 1.0));
+    return (len - r) / max(gradLen, 0.5);
 }
 
 // Depth below the edge, normalised over the corner radius: the height builds
@@ -30,10 +80,10 @@ float profileHeight(float t, float zScale) {
 // difference in heightGradient() spike right at the boundary, which shows as
 // jagged displacement against busy backgrounds.
 //
-// rOut is the outline's corner radius, rBand the width the height builds up
-// over; the reference has one radius for both (getHeight()).
-float getHeight2(vec2 p, vec2 b, float rOut, float rBand, float zScale) {
-    float d = sdRoundRect(p, b, rOut);
+// cornerOut is the outline's corner (cornerShape()), rBand the width the
+// height builds up over (lensBandFor()).
+float getHeight2(vec2 p, vec2 b, vec2 cornerOut, float rBand, float zScale) {
+    float d = sdRoundRect(p, b, cornerOut);
 
     float smoothZone = max(edge_smoothing, 1.0);
     if (d > smoothZone)
@@ -46,10 +96,6 @@ float getHeight2(vec2 p, vec2 b, float rOut, float rBand, float zScale) {
     // complement instead of swapped edges.
     float fade = 1.0 - smoothstep(-smoothZone, smoothZone, d);
     return h * fade;
-}
-
-float getHeight(vec2 p, vec2 b, float r, float zScale) {
-    return getHeight2(p, b, r, r, zScale);
 }
 
 // The bevel's width for a glass whose smaller half-extent is halfMin, px:
@@ -66,14 +112,18 @@ float lensScaleFor(float band) {
 }
 
 // Unit gradient of sdRoundRect() at p ("straight out of the shape"), in
-// closed form: along the nearest side inside the cross, radially from the
-// corner circle's centre in the corner quadrant.
-vec2 sdRoundRectDir(vec2 p, vec2 b, float r) {
-    vec2 q = abs(p) - b + vec2(r);
+// closed form: along the nearest side inside the cross, along the
+// superellipse's normal in the corner quadrant (for a circle, radially from
+// its centre).
+vec2 sdRoundRectDir(vec2 p, vec2 b, vec2 corner) {
+    vec2 q = abs(p) - b + vec2(corner.x);
     if (max(q.x, q.y) < 0.0) {
         return (q.x > q.y) ? vec2(sign(p.x), 0.0) : vec2(0.0, sign(p.y));
     }
-    return sign(p) * normalize(max(q, 0.0) + vec2(1e-6));
+    if (corner.y <= 2.0)
+        return sign(p) * normalize(max(q, 0.0) + vec2(1e-6));
+    vec2 u = max(q, 0.0) / max(max(q.x, q.y), 1.0e-6);
+    return sign(p) * normalize(pow(u, vec2(corner.y - 1.0)) + vec2(1e-6));
 }
 
 // Height gradient at p. The height is a function of the signed distance
@@ -84,18 +134,14 @@ vec2 sdRoundRectDir(vec2 p, vec2 b, float r) {
 // infinite slope at the edge (t = 0), and the finite difference over
 // gradient_step px is what keeps it bounded - the smoothing the look depends
 // on. That is also why gradient_step must not follow the surface size.
-vec2 heightGradient2(vec2 p, vec2 b, float rOut, float rBand, float zScale) {
-    vec2 dir = sdRoundRectDir(p, b, rOut);
+vec2 heightGradient2(vec2 p, vec2 b, vec2 cornerOut, float rBand, float zScale) {
+    vec2 dir = sdRoundRectDir(p, b, cornerOut);
     float e = gradient_step;
 
-    float hOut = getHeight2(p + dir * e, b, rOut, rBand, zScale);
-    float hIn  = getHeight2(p - dir * e, b, rOut, rBand, zScale);
+    float hOut = getHeight2(p + dir * e, b, cornerOut, rBand, zScale);
+    float hIn  = getHeight2(p - dir * e, b, cornerOut, rBand, zScale);
 
     return dir * ((hOut - hIn) / (2.0 * e));
-}
-
-vec2 heightGradient(vec2 p, vec2 b, float r, float zScale) {
-    return heightGradient2(p, b, r, r, zScale);
 }
 
 // ── Per-corner radii (glass-lib; glass_corner_mode 1) ───────────────────
@@ -158,7 +204,8 @@ float fusedSD(vec2 p, out float radius) {
         if (float(i) >= glass_shape_count)
             break;
         vec2 half_size = max(glass_shapes[i].zw * 0.5, vec2(1.0));
-        float di = sdRoundRect(p - (glass_shapes[i].xy + half_size), half_size, glass_shape_radii[i]);
+        float di = sdRoundRect(p - (glass_shapes[i].xy + half_size), half_size,
+                               cornerShape(half_size, glass_shape_radii[i]));
         ds[i] = di;
         d = (i == 0) ? di : sminPoly(d, di, glass_merge_k);
         dmin = min(dmin, di);
@@ -179,8 +226,9 @@ float fusedSD(vec2 p, out float radius) {
         vec2 ca = glass_shapes[a].xy + ha;
         vec2 ab = glass_shapes[b].xy + hb - ca;
         float t = clamp(dot(p - ca, ab) / max(dot(ab, ab), 1.0e-4), 0.0, 1.0);
-        float db = sdRoundRect(p - (ca + ab * t), mix(ha, hb, t),
-                               mix(glass_shape_radii[a], glass_shape_radii[b], t)) + br.z;
+        vec2 hab = mix(ha, hb, t);
+        float db = sdRoundRect(p - (ca + ab * t), hab,
+                               cornerShape(hab, mix(glass_shape_radii[a], glass_shape_radii[b], t))) + br.z;
         d = sminPoly(d, db, br.w);
     }
     for (int i = 0; i < GLASS_MAX_SHAPES; i++) {

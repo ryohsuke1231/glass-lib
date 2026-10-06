@@ -53,10 +53,10 @@ vec2 lensDisplacementPx(vec2 local_pos, vec2 box_size, vec2 box_center, vec2 res
         normal = getNormal(heightGradientFused(p, max_z));
         bevelPx = lensBandFor(r);
     } else {
-        float rOut = outlineRadius(local_pos);
-        d = sdRoundRect(local_pos, box_size, rOut);
+        vec2 cornerOut = cornerShape(box_size, outlineRadius(local_pos));
+        d = sdRoundRect(local_pos, box_size, cornerOut);
         bevelPx = lensBandFor(min(box_size.x, box_size.y));
-        normal = getNormal(heightGradient2(local_pos, box_size, rOut, bevelPx,
+        normal = getNormal(heightGradient2(local_pos, box_size, cornerOut, bevelPx,
                                            max_z * lensScaleFor(bevelPx)));
     }
     vec2 disp = getDisplacement(d, normal, resolution);

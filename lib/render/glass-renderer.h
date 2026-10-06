@@ -133,6 +133,7 @@ GlassRenderStats *glass_renderer_get_stats     (GlassRenderer *self);
  * none of it is. */
 gboolean          glass_capture_rect_for_panel (const graphene_rect_t *panel,
                                                 double                 blur_reach,
+                                                double                 chroma,
                                                 const graphene_rect_t *view_rect,
                                                 graphene_rect_t       *out);
 

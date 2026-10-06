@@ -796,6 +796,7 @@ plan_panels (GlassView             *self,
       Item *item = &g_array_index (items, Item, i);
 
       if (!glass_capture_rect_for_panel (&item->P, glass_blur_spec_reach (&item->blur),
+                                         item->params[GLASS_PARAM_ID_CHROMA_STRENGTH],
                                          view_rect, &item->C))
         {
           g_array_remove_index (items, i--);

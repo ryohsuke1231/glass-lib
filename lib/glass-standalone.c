@@ -151,7 +151,8 @@ glass_standalone_draw_drop (GlassStandalone       *self,
       graphene_rect_union (drop, rect, &req.panel);
     }
 
-  if (!glass_capture_rect_for_panel (&req.panel, glass_blur_spec_reach (&creq.blur), &view_rect, &creq.rect))
+  if (!glass_capture_rect_for_panel (&req.panel, glass_blur_spec_reach (&creq.blur),
+                                     params[GLASS_PARAM_ID_CHROMA_STRENGTH], &view_rect, &creq.rect))
     return FALSE;
 
   glass_renderer_make_current (self->renderer);

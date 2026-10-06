@@ -31,9 +31,10 @@
 
 #define OUTPUT_POOL_SIZE 4
 
-/* Room kept around the panel for the drop shadow, on top of shadow_radius:
- * the shader's boundsMask starts fading at 85% of shadow_max_radius; with this
- * margin that point lies past the penumbra, so the room never clips it. */
+/* Room kept around the panel for the drop shadow, on top of shadow_radius.
+ * The shader's shadow ends at its radius, capped at shadow_max_radius; the
+ * margin keeps that cap clear of the radius on the side away from the light,
+ * so the room never cuts the fade short. */
 #define SHADOW_ROOM_EXTRA 8.0
 
 /* Room for the antialiased silhouette when there is no shadow. */
@@ -43,6 +44,11 @@
  * this far inwards from the rim, which on a panel thinner than that lands
  * past its far side (docs/memo.md 地雷10). */
 #define LENS_REACH 96.0
+
+/* Continuous corners (glass_shape.glsl cornerShape()): the curve starts up to
+ * 1.6 times the corner radius from the corner. The extension's default
+ * glass-corner-smoothing; not a setting here (design.md §10.3.3). */
+#define CORNER_SMOOTHING 0.6
 
 /* ── Output textures ───────────────────────────────────────────────────────
  * GTK holds the texture of the last frame (and possibly the one before)
@@ -862,11 +868,15 @@ run_blur_pass (GlassRenderer *self, const BlurPass *pass, double kernel_scale,
 gboolean
 glass_capture_rect_for_panel (const graphene_rect_t *panel,
                               double                 blur_reach,
+                              double                 chroma,
                               const graphene_rect_t *view_rect,
                               graphene_rect_t       *out)
 {
   double blur_margin = ceil (3.0 * blur_reach) + 2.0;
-  double lens_room = MAX (0.0, LENS_REACH - MIN (panel->size.width, panel->size.height));
+  /* The colour separation moves blue further along the refraction, by up to
+   * chroma of it. */
+  double reach = LENS_REACH * (1.0 + CLAMP (chroma, 0.0, 1.0));
+  double lens_room = MAX (0.0, reach - MIN (panel->size.width, panel->size.height));
 
   *out = *panel;
   graphene_rect_inset (out, -(blur_margin + lens_room), -(blur_margin + lens_room));
@@ -1550,6 +1560,10 @@ run_glass_pass (GlassRenderer            *self,
    * glass by 1.5 to 1.9 on every surface measured (docs/memo.md 追記16). */
   u1f (self, "saturation", key->surface.saturation);
   u1f (self, "surface_light_enabled", 1.0);
+  /* The extension's continuous corners and backdrop-coloured highlights
+   * (design.md §10.3.3), always on. */
+  u1f (self, "corner_smoothing", CORNER_SMOOTHING);
+  u1f (self, "highlight_backdrop_color", 1.0);
 
   /* iOS 27's body and outline (glass_material.glsl). No cloud, no frost. */
   u1f (self, "glass_body_mode", key->surface.body);
